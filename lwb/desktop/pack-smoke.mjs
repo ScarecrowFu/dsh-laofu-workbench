@@ -4,17 +4,35 @@ import { execFile, fork } from 'node:child_process'
 import { once } from 'node:events'
 import { cp, mkdtemp, readFile, readdir, realpath, rm } from 'node:fs/promises'
 import { createServer } from 'node:net'
+import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 
+export function requestPackagedHost(address, { method = 'GET', headers, body, timeout = 30_000 } = {}) {
+  const url = new URL(address)
+  assert.equal(url.protocol, 'http:')
+  assert.ok(['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname), 'Acceptance requests must stay on loopback')
+  return new Promise((resolve, reject) => {
+    // Build download proxies must never intercept the local acceptance host.
+    const req = request(url, { method, headers, agent: false, signal: AbortSignal.timeout(timeout) }, response => {
+      const chunks = []
+      response.on('data', chunk => chunks.push(chunk))
+      response.on('error', reject)
+      response.on('end', () => resolve({ status: response.statusCode, headers: response.headers, text: Buffer.concat(chunks).toString('utf8') }))
+    })
+    req.on('error', reject)
+    req.end(body)
+  })
+}
+
 export async function verifyPackagedPacks({ executable, resources }) {
   const home = await realpath(await mkdtemp(join(tmpdir(), 'lwb-packaged-packs-')))
   const runtime = join(home, 'runtime')
   const dsh = join(resources, 'app.asar', 'dsh')
-  let child, output = ''
+  let child, output = '', starts = 0
   const env = { ...process.env }
   for (const name of Object.keys(env)) {
     if (/^(?:LWB_|DSH_|NODE_OPTIONS$|NODE_PATH$|ELECTRON_)/u.test(name)) delete env[name]
@@ -41,6 +59,7 @@ export async function verifyPackagedPacks({ executable, resources }) {
     try { await done } finally { clearTimeout(timer) }
   }
   async function start() {
+    const generation = ++starts
     const reservation = createServer()
     reservation.listen(0, '127.0.0.1')
     await once(reservation, 'listening')
@@ -64,18 +83,32 @@ export async function verifyPackagedPacks({ executable, resources }) {
       child.on('message', onMessage); child.on('exit', onExit); child.on('error', onError)
     })
     const origin = new URL(address).origin
-    const auth = await fetch(address, { redirect: 'manual', signal: AbortSignal.timeout(10_000) })
-    const cookie = auth.headers.get('set-cookie')?.split(';')[0]
+    let auth
+    try { auth = await requestPackagedHost(address, { timeout: 10_000 }) }
+    catch (error) { throw new Error(`Packaged acceptance host ${generation} authentication failed: ${error.message}`, { cause: error }) }
+    const cookie = auth.headers['set-cookie']?.[0]?.split(';')[0]
     assert.ok(cookie, 'packaged host must issue its native authentication cookie')
+    console.log(`Packaged acceptance host ${generation}: authenticated`)
+    let first = true
     return async (method, args = {}) => {
-      const response = await fetch(`${origin}/api/${method}`, {
-        method: 'POST', signal: AbortSignal.timeout(30_000),
-        headers: { 'content-type': 'application/json', cookie, origin },
-        body: JSON.stringify({ type: 'client-request', rpcId: 'packaged-smoke', method, payload: { args } }),
-      })
+      // Host readiness precedes enabled-pack restoration. The first list waits
+      // for that cold startup using the same deadline as host readiness.
+      const timeout = first && method === 'lwbPacks/list' ? 120_000 : 30_000
+      first = false
+      const started = performance.now()
+      console.log(`Packaged acceptance host ${generation}: ${method} started`)
+      let response
+      try {
+        response = await requestPackagedHost(`${origin}/api/${method}`, {
+          method: 'POST', timeout,
+          headers: { 'content-type': 'application/json', cookie, origin },
+          body: JSON.stringify({ type: 'client-request', rpcId: 'packaged-smoke', method, payload: { args } }),
+        })
+      } catch (error) { throw new Error(`Packaged acceptance host ${generation} ${method} failed after ${Math.round(performance.now() - started)}ms: ${error.message}`, { cause: error }) }
       assert.equal(response.status, 200, method)
-      const { result } = await response.json()
+      const { result } = JSON.parse(response.text)
       assert.equal(result.ok, true, `${method}: ${result.error?.message}`)
+      console.log(`Packaged acceptance host ${generation}: ${method} passed (${Math.round(performance.now() - started)}ms)`)
       return result.value
     }
   }
