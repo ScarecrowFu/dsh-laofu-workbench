@@ -15,6 +15,7 @@ export function adaptUnsignedBuilder(source) {
     ["if (unsigned && resolvedPlatform !== 'win32')", "if (unsigned && !['win32', 'darwin'].includes(resolvedPlatform))"],
     ['const policy = resolveDesktopPolicyEnvironment(env)', 'const policy = unsignedPolicyDisabled(env)'],
     ["if (resolvedPlatform === 'win32') installWindowsDirectoryInstaller()", "if (resolvedPlatform === 'win32' && env.LWB_DESKTOP_PORTABLE !== '1') installWindowsDirectoryInstaller()"],
+    ["if (resolvedPlatform !== 'win32') return true", "if (resolvedPlatform !== 'win32' || env.LWB_DESKTOP_PORTABLE === '1') return true"],
     ['packagesMacOS ? resolveMacOSSigningEnvironment(env)', 'packagesMacOS && !unsigned ? resolveMacOSSigningEnvironment(env)'],
     ['if (packagesMacOS) resolveMacOSNotarizationEnvironment(env)', 'if (packagesMacOS && !unsigned) resolveMacOSNotarizationEnvironment(env)'],
     ['forceCodeSigning: true,', 'forceCodeSigning: !unsigned,'],

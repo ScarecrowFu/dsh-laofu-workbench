@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { DSH_ROOT } from '../upstream.mjs'
 import { desktopPnpmInvocation } from './toolchain.mjs'
 import { adaptUnsignedBuilder, adaptUnsignedPreparation } from './unsigned-policy.mjs'
@@ -31,6 +32,25 @@ test('preparation keeps official runtime checks and uses verified ad-hoc signatu
     assert.doesNotMatch(adapted, /'sign:dsh-native'/u)
   }
   assert.throws(() => adaptUnsignedPreparation(source.replace('sign:dsh-native', 'changed')), /no longer matches/u)
+})
+
+test('the portable Windows builder skips NSIS preparation and keeps production dependencies', () => {
+  const module = pathToFileURL(join(DSH_ROOT, 'apps/desktop/scripts/electron-builder-config.mjs')).href
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', `
+    const { createElectronBuilderConfig } = await import(${JSON.stringify(module)})
+    const config = createElectronBuilderConfig()
+    if (await config.beforeBuild() !== true) throw new Error('Production dependencies must still be collected')
+  `], {
+    encoding: 'utf8', timeout: 30_000,
+    env: {
+      ...process.env, LWB_DESKTOP_UNSIGNED: '1', LWB_DESKTOP_PORTABLE: '1',
+      LWB_DESKTOP_UNSIGNED_DSH_ROOT: DSH_ROOT, DSH_DESKTOP_UNSIGNED: '1',
+      DSH_DESKTOP_APP_ID: 'com.scitiger.laofu.workbench',
+      DSH_DESKTOP_TARGET_PLATFORM: 'win32', DSH_DESKTOP_TARGET_ARCH: 'x64',
+      NODE_OPTIONS: `--import=${new URL('./unsigned-register.mjs', import.meta.url).href}`,
+    },
+  })
+  assert.equal(result.status, 0, result.stderr)
 })
 
 test('the loader preserves native errors for pnpm optional config discovery', () => {
