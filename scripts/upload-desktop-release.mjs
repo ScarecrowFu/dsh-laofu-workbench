@@ -23,16 +23,20 @@ async function request(path, options = {}) {
   if (!response.ok) throw new Error(`GitHub release request failed (${response.status}): ${await response.text()}`)
   return response.status === 204 ? undefined : response.json()
 }
-const response = await fetch(`${endpoint}/releases/tags/${encodeURIComponent(tag)}`, { headers, signal: AbortSignal.timeout(60_000) })
-let release
-if (response.status === 404) {
+// The tag endpoint can omit unpublished drafts; enumerate authenticated releases.
+const matches = []
+for (let page = 1; ; page++) {
+  const rows = await request(`/releases?per_page=100&page=${page}`)
+  matches.push(...rows.filter(row => row.tag_name === tag))
+  if (rows.length < 100) break
+}
+if (matches.length > 1) throw new Error(`Multiple releases use ${tag}; consolidate the drafts before uploading`)
+let release = matches[0]
+if (!release) {
   release = await request('/releases', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
     tag_name: tag, target_commitish: process.env.GITHUB_SHA, name: `Laofu Workbench ${report.version}`,
     draft: true, prerelease: true, body: 'Portable preview artifacts. Publication waits for both Windows and local macOS acceptance.',
   }) })
-} else {
-  if (!response.ok) throw new Error(`Cannot inspect release (${response.status})`)
-  release = await response.json()
 }
 if (!release.draft) throw new Error('Build uploads may only modify draft releases')
 const assets = await request(`/releases/${release.id}/assets?per_page=100`)
