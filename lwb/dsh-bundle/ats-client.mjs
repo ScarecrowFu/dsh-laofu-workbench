@@ -27,8 +27,13 @@ function normalizePublicPackage(value) {
   }
 }
 
+function purchasableMembershipPlan(plan) {
+  const code = text(plan?.code)?.toLowerCase()
+  return Boolean(code) && code !== 'free' && code !== 'trial' && Number(plan.monthlyPriceCents) > 0
+}
+
 function normalizePublicPlan(value) {
-  if (!value || typeof value !== 'object') return null
+  if (!value || typeof value !== 'object' || !purchasableMembershipPlan(value)) return null
   const plan = value
   const code = text(plan.code)
   if (!code) return null

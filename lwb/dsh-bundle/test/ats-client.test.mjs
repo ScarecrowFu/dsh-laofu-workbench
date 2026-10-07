@@ -146,7 +146,12 @@ test('purchase catalogs use authenticated requests and normalize public DTOs', a
     calls.push([url, options])
     if (url.endsWith('/auth/login')) return response(200, { accessToken: 'access', refreshToken: 'refresh', user: { id: '1', email: 'user@example.com' } })
     if (url.endsWith('/api/recharge-packages')) return response(200, [{ code: 'starter', name: '入门包', amountCents: 1200, pointsAmount: 100000, bonusPoints: 10000, totalPoints: 110000 }])
-    if (url.endsWith('/api/membership/plans')) return response(200, [{ code: 'pro', name: '专业版', monthlyPriceCents: 3900, monthlyPointsGrant: 500000, priceDiscount: 0.8, maxApiKeys: 5, rpmLimit: 120 }])
+    if (url.endsWith('/api/membership/plans')) return response(200, [
+      { code: 'free', name: 'Free', monthlyPriceCents: 0, monthlyPointsGrant: 0, priceDiscount: 1, maxApiKeys: 2, rpmLimit: 50 },
+      { code: 'trial', name: '试用', monthlyPriceCents: 100, monthlyPointsGrant: 0, priceDiscount: 1, maxApiKeys: 2, rpmLimit: 50 },
+      { code: 'comp', name: '赠送', monthlyPriceCents: 0, monthlyPointsGrant: 0, priceDiscount: 1, maxApiKeys: 2, rpmLimit: 50 },
+      { code: 'pro', name: '专业版', monthlyPriceCents: 3900, monthlyPointsGrant: 500000, priceDiscount: 0.8, maxApiKeys: 5, rpmLimit: 120 },
+    ])
     throw new Error(`unexpected request: ${url}`)
   })
   await client.login({ account: 'user', password: 'password123' })
