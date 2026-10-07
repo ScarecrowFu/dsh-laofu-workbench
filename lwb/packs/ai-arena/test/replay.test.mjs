@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url'
 import { boardSvg } from '../presentation.mjs'
 import { replayData } from '../replay/data.mjs'
 import { isKeyMove, stageHtml } from '../replay/markup.mjs'
-import { FINALE_SECONDS, frameToStep, totalFrames } from '../replay/timeline.mjs'
+import { AUDIO_TAIL_SECONDS, FINALE_SECONDS, frameToStep, totalFrames } from '../replay/timeline.mjs'
+import { assignVoices, matchVoiceKey } from '../voices.mjs'
 import { SCENE_CSS } from '../replay/styles.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -35,7 +36,13 @@ test('视频时间轴：每手 secondsPerMove 秒 + 终局卡 4 秒', () => {
   /* 终局卡从最后一步之后开始，时长独立 */
   const finaleStart = (moves + 1) * 3 * fps
   assert.deepEqual(frameToStep(finaleStart, fps, moves, 3), { index: moves + 1, t: 0 })
-  assert.equal(frameToStep(finaleStart + FINALE_SECONDS * fps - 1, fps, moves, 3).t, (FINALE_SECONDS * fps - 1) / fps)
+  assert.ok(Math.abs(frameToStep(finaleStart + FINALE_SECONDS * fps - 1, fps, moves, 3).t - (FINALE_SECONDS * fps - 1) / fps) < 1e-9)
+  /* 有配音的手按音频拉长，无配音的手仍是每手秒数 */
+  const durations = [0, 5, 0]
+  const voiced = totalFrames(3, fps, 3, durations)
+  assert.equal(voiced, Math.round((3 + (5 + AUDIO_TAIL_SECONDS) + 3 + 3 + FINALE_SECONDS) * fps))
+  assert.deepEqual(frameToStep(3 * fps, fps, 3, 3, durations), { index: 1, t: 0 })
+  assert.equal(frameToStep(Math.round((3 + 5 + AUDIO_TAIL_SECONDS) * fps), fps, 3, 3, durations).index, 2)
 })
 
 test('关键手档位只筛推近与刻度，与离线 HTML 的 isKey 口径一致', () => {
@@ -83,6 +90,7 @@ test('帧驱动 markup 覆盖逐手与终局，且关键手特效按档位生效
   assert.match(finale, /class="winband"/u)
   assert.equal((finale.match(/class="winring"/gu) || []).length, 5)
   assert.equal((finale.match(/class="pcard"/gu) || []).length, 2)
+  assert.match(finale, /class="logo"/u)
 })
 
 test('markup 的棋子坐标常量与 presentation.mjs 的绘制一致', () => {
@@ -122,6 +130,26 @@ test('象棋画面显示红黑身份、楚河汉界与起止坐标', () => {
     assert.match(html, /楚河/u)
     assert.match(html, /汉界/u)
   }
+})
+
+test('音色按模型匹配，未收录的两名选手各用一条通用音色', () => {
+  assert.equal(matchVoiceKey({ model: 'qwen3.8-max', provider: 'lwb' }), 'qwen')
+  assert.equal(matchVoiceKey({ model: 'glm-5.3', provider: 'custom', name: '选手' }), 'zhipu')
+  assert.equal(matchVoiceKey({ model: 'kimi-k3' }), 'kimi')
+  assert.equal(matchVoiceKey({ model: 'MiniMax/MiniMax-M3' }), 'minimax')
+  assert.equal(matchVoiceKey({ model: 'deepseek-v4.1-flash' }), 'deepseek')
+  assert.equal(matchVoiceKey({ model: 'claude-opus' }), 'claude')
+  assert.equal(matchVoiceKey({ model: 'gpt-5', provider: 'openai' }), 'gpt')
+  assert.equal(matchVoiceKey({ model: 'doubao-pro', name: '豆包' }), 'doubao')
+  assert.equal(matchVoiceKey({ model: 'mimo-v2' }), 'mimo')
+  assert.equal(matchVoiceKey({ model: 'local-llama', provider: 'ollama', name: '自建' }), null)
+  assert.deepEqual(assignVoices([{ model: 'qwen3.8-max' }, { model: 'local-llama' }]), ['qwen', 'generic-1'])
+  assert.deepEqual(assignVoices([{ model: 'alpha' }, { model: 'beta' }]), ['generic-1', 'generic-2'])
+  assert.deepEqual(assignVoices([{ model: 'qwen3.8-max', name: '甲' }, { model: 'qwen3.8-flash', name: '乙' }]), ['qwen', 'qwen'])
+  const data = replayData(gomoku)
+  assert.equal(data.players[0].voice, 'generic-1')
+  assert.equal(data.players[1].voice, 'generic-2')
+  assert.match(data.players[0].logo, /^data:image\/png;base64,/u)
 })
 
 test('模型文本在 markup 里被 HTML 转义，不会注入标签', () => {

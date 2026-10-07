@@ -106,6 +106,7 @@ export class LwbPackServices {
       }),
       account: Object.freeze({
         status: (service) => this.account?.serviceStatus(service) || Promise.resolve({ configured: false, authenticated: false, reason: 'LWB 账号服务不可用。' }),
+        points: () => this.account?.status?.().then(value => value.points).catch(() => null) || Promise.resolve(null),
         open: (service, options = {}) => {
           tasks.signal.throwIfAborted()
           if (!manifest.requiredServices?.includes(service)) throw new Error('能力包未声明此 LWB 服务。')

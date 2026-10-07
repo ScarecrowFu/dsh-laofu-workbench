@@ -13,6 +13,7 @@ export class ArenaGateway extends TypertRemoteService {
   start(request) { return this.within(() => this.ctx.arenaHost.start(request)) }
   control(request) { return this.within(() => this.ctx.arenaHost.control(request)) }
   exportVideo(request) { return this.within(() => this.ctx.arenaExport.start(request)) }
+  exportReplay(request) { return this.within(() => this.ctx.arenaExport.startReplay(request)) }
   videoChunk(request) { return this.within(() => this.ctx.arenaExport.chunk(request)) }
   exportRecord(request) {
     return this.within(async () => {
@@ -24,4 +25,4 @@ export class ArenaGateway extends TypertRemoteService {
     })
   }
 }
-for (const name of ['games', 'models', 'matches', 'match', 'start', 'control', 'exportVideo', 'videoChunk', 'exportRecord']) Remote(name)(ArenaGateway.prototype[name], { kind: 'method', name, static: false, private: false, addInitializer(fn) { initializers.push(fn) } })
+for (const name of ['games', 'models', 'matches', 'match', 'start', 'control', 'exportVideo', 'exportReplay', 'videoChunk', 'exportRecord']) Remote(name)(ArenaGateway.prototype[name], { kind: 'method', name, static: false, private: false, addInitializer(fn) { initializers.push(fn) } })

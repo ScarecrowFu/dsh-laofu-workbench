@@ -202,6 +202,7 @@ function scoreHtml(data, active, isFinale, winner, isDraw) {
   return data.players.map((player, i) => {
     const badge = isFinale ? (winner === i ? '胜' : isDraw ? '和' : '') : ''
     return `<div class="pcard" data-i="${i}" data-active="${i === active}">` +
+      `<img class="logo" src="${player.logo || ''}" alt="">` +
       `<i class="stone ${stone(i)}"></i>` +
       `<span class="nm">${esc(player.name)}</span>` +
       `<span class="sd">${playerSide(data.game, i)} · ${i === 0 ? '先手' : '后手'}</span>` +
@@ -262,7 +263,9 @@ export function stageHtml(data, index, options = {}) {
             entries.map(m => `<div class="rentry"><b>${m.n} · ${esc(data.players[m.p].name)}</b><span>${esc(m.s)}</span></div>`).join('') +
             `</div></div>`
           : ''
-        const who = last ? `${esc(data.players[last.p].name)} · 本手发言` : '开局'
+        const who = last
+          ? `<img class="logo" src="${data.players[last.p].logo || ''}" alt="">${esc(data.players[last.p].name)} · 本手发言`
+          : '开局'
         const coord = last ? `<em class="coord">${esc(actionLabel(last.a, data.game))}</em>` : ''
         const body = last ? last.s : '比赛开始'
         return `<div class="speech" style="opacity:${round(speechOpacity)};transform:translateY(${round(speechShift)}px)">` +

@@ -7,6 +7,7 @@
  */
 import { movesOf, gameName } from '../presentation.mjs'
 import { xiangqi } from '../xiangqi.mjs'
+import { assignVoices, playerLogo } from '../voices.mjs'
 
 /** 象棋：用现有规则离线重放，取回落盘时被丢弃的 check / captured 标记。
     规则版本不一致时直接跳过，不按新规则解释历史落子。 */
@@ -63,17 +64,35 @@ function keyMoves(match) {
   return moves.filter(move => marked.has(move.moveNumber)).map(move => ({ n: move.moveNumber, ...marked.get(move.moveNumber) }))
 }
 
-export function replayData(match) {
+/**
+ * @param {object} match
+ * @param {{ audio?: Map<number, { seconds: number, src?: string }> } | null} [audio]
+ *   句序号（从 1 计）到配音。src 只放离线 HTML 需要内联的 data URL；视频用文件路径，不进画面 JSON。
+ */
+export function replayData(match, audio = null) {
   const moves = movesOf(match)
   const result = match.result || null
+  const voices = assignVoices(match.players || [])
   return {
     id: match.id,
     title: match.title ?? '',
     game: { id: match.game?.id ?? '', name: gameName(match.game), version: match.game?.version ?? '' },
-    players: (match.players || []).map(player => ({ name: player.name ?? '', provider: player.providerName || player.provider || '', model: player.model ?? '' })),
+    players: (match.players || []).map((player, index) => ({
+      name: player.name ?? '',
+      provider: player.providerName || player.provider || '',
+      model: player.model ?? '',
+      voice: voices[index] || '',
+      logo: playerLogo(player),
+    })),
     result: result ? { kind: result.kind ?? '', winner: typeof result.winner === 'number' ? result.winner : null, message: result.message ?? '' } : null,
     keys: keyMoves(match),
     winRun: winningRun(match),
-    moves: moves.map(move => ({ n: move.moveNumber, p: move.player, a: move.action, s: move.speech || '' })),
+    moves: moves.map(move => {
+      const clip = audio?.get(move.moveNumber)
+      return {
+        n: move.moveNumber, p: move.player, a: move.action, s: move.speech || '',
+        ...(clip ? { audioSec: clip.seconds, ...(clip.src ? { audio: clip.src } : {}) } : {}),
+      }
+    }),
   }
 }

@@ -95,6 +95,7 @@
 .pcard .sd{margin-left:auto;flex:none;font-size:12px;color:var(--ink3)}
 .pcard .bd{flex:none;padding:1px 8px;border-radius:999px;background:var(--gold);color:#fff;font-size:11px;font-weight:800;font-style:normal}
 .pcard .bd:empty{display:none}
+.logo{display:block;width:22px;height:22px;border-radius:50%;object-fit:cover;flex:none;background:#eef2f0}
 .stone{display:block;width:14px;height:14px;border-radius:50%;border:1px solid #a9b5ac;flex:none}
 .black{background:#252b28;border-color:#0f1512}
 .white{background:#fff}
@@ -103,6 +104,7 @@
 .stage[data-layout="portrait"] .score{flex-direction:row;gap:8px}
 .stage[data-layout="portrait"] .pcard{flex:1;min-width:0;height:26px;padding:0 8px}
 .stage[data-layout="portrait"] .pcard .nm{font-size:12px}
+.stage[data-layout="portrait"] .pcard .logo{width:18px;height:18px}
 .stage[data-layout="portrait"] .pcard .sd{display:none}
 
 /* --------------------------------------------------------------- 叙事（降调为字幕） */
@@ -116,7 +118,8 @@
 .stage[data-layout="portrait"] .speech{justify-content:center}
 .sinner{align-self:flex-start;max-width:100%;display:flex;flex-direction:column;gap:8px;border-left:3px solid var(--brand);padding-left:16px}
 .shead{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;color:var(--ink3)}
-.shead span{overflow-wrap:anywhere}
+.shead span{display:flex;align-items:center;gap:6px;min-width:0;overflow-wrap:anywhere}
+.shead .logo{width:18px;height:18px}
 .coord{flex:none;padding:2px 9px;border-radius:999px;background:#F1F4F2;color:var(--ink2);font-size:11px;font-style:normal;font-weight:700;white-space:nowrap}
 .coord[hidden]{display:none}
 #text{margin-top:2px;font-size:24px;font-weight:700;line-height:1.5;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:5;overflow:hidden}

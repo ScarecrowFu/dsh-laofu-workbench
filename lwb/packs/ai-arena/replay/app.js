@@ -6,6 +6,7 @@
   const FINALE = M + 1
   const STEP_MS = 3000
   const FINALE_MS = 4000
+  const AUDIO_TAIL_MS = 350
   const MAJOR = new Set(['chariot', 'cannon', 'horse'])
   const PIECE_CN = { chariot: '车', cannon: '炮', horse: '马', soldier: '兵', elephant: '相', adviser: '士' }
   const SVGNS = 'http://www.w3.org/2000/svg'
@@ -51,7 +52,11 @@
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
   const side = i => S.playerSide(D.game, i)
   const visibleMoves = index => D.moves.slice(0, index)
-  const duration = i => (i === FINALE ? FINALE_MS : STEP_MS)
+  const duration = i => {
+    if (i === FINALE) return FINALE_MS
+    const spoken = i >= 1 ? Number(D.moves[i - 1]?.audioSec) : 0
+    return Number.isFinite(spoken) && spoken > 0 ? Math.max(STEP_MS, spoken * 1000 + AUDIO_TAIL_MS) : STEP_MS
+  }
   const isPortrait = () => stage.dataset.layout === 'portrait'
 
   /* ---------------- 记分板（常驻，只切状态） ---------------- */
@@ -61,6 +66,7 @@
   }
   score.innerHTML = D.players.map((p, i) => `
     <div class="pcard" data-i="${i}">
+      <img class="logo" src="${p.logo || ''}" alt="">
       <i class="stone ${stoneClass(i)}"></i>
       <span class="nm">${esc(p.name)}</span>
       <span class="sd">${side(i)} · ${i === 0 ? '先手' : '后手'}</span>
@@ -249,7 +255,7 @@
       fmessage.textContent = (D.result && D.result.message) || '比赛已结束。'
       finale.dataset.kind = isDraw ? 'draw' : 'win'
     } else if (last) {
-      who.textContent = `${D.players[last.p].name} · 本手发言`
+      who.innerHTML = `<img class="logo" src="${D.players[last.p].logo || ''}" alt="">${esc(D.players[last.p].name)} · 本手发言`
       coord.textContent = S.actionLabel(last.a, D.game)
       coord.hidden = false
       text.textContent = last.s
@@ -294,7 +300,21 @@
     for (let i = 0; i < index; i++) sum += duration(i)
     return sum + t
   }
-  const total = () => (M + 1) * STEP_MS + FINALE_MS
+  const total = () => {
+    let sum = 0
+    for (let i = 0; i <= FINALE; i++) sum += duration(i)
+    return sum
+  }
+  const voice = document.createElement('audio')
+  voice.preload = 'auto'
+  function speak(step) {
+    voice.pause()
+    const clip = step >= 1 && step <= M ? D.moves[step - 1]?.audio : ''
+    if (!clip) { voice.removeAttribute('src'); return }
+    voice.src = clip
+    voice.currentTime = 0
+    if (playing) voice.play().catch(() => {})
+  }
   const fmt = ms => {
     const s = Math.max(0, Math.round(ms / 1000))
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
@@ -320,6 +340,7 @@
       t = 0
       index += 1
       render(index, true)
+      speak(index)
     }
     tickClock()
     requestAnimationFrame(loop)
@@ -328,12 +349,14 @@
     if (index >= FINALE && t >= duration(FINALE)) { index = 0; t = 0; render(0, false) }
     playing = true
     stage.classList.remove('paused')
+    speak(index)
     last = performance.now()
     syncPlayButton()
     requestAnimationFrame(loop)
   }
   function pause() {
     playing = false
+    voice.pause()
     stage.classList.add('paused')
     syncPlayButton()
   }
@@ -342,6 +365,7 @@
     t = 0
     stage.classList.remove('paused')
     render(index, !!animate)
+    speak(index)
     tickClock()
   }
   const playBtn = $('play')

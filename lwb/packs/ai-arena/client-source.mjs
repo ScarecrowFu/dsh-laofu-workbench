@@ -116,12 +116,25 @@ function Conversation({ match, turnId, renderConversation, focusSession }) {
     current?.sessionId && renderConversation ? renderConversation({ sessionId: current.sessionId, readOnly: true }) : h('div', { className: 'ar-empty' }, current ? '正在准备会话，或该历史记录没有会话编号。' : '首个决策开始后显示官方对话。'),
     h('details', { className: 'ar-raw' }, h('summary', null, '实际请求参数与原始结果'), h('pre', null, JSON.stringify(current || {}, null, 2))))
 }
-function MatchView({ id, initial, onChange, renderConversation, focusSession, activeCount = 0 }) {
+function speechGate(account) {
+  if (!account || account.phase === 'loading') return { enabled: false, reason: '正在读取 LWB 账号…' }
+  if (account.phase !== 'authenticated' || !account.user) return { enabled: false, reason: '登录 LWB 后可生成发言语音', login: true }
+  const service = account.catalog?.services?.tts
+  if (account.serviceError) return { enabled: false, reason: account.serviceError }
+  if (!service?.available) return { enabled: false, reason: service?.reason || 'LWB 语音服务暂不可用。' }
+  const points = Number(account.points?.availablePoints)
+  const minimum = Number(service.minimumPoints || 0)
+  if (Number.isFinite(points) && points < minimum) return { enabled: false, reason: '积分不足，请购买积分后重试。', login: true }
+  return { enabled: true, reason: '按每手发言调用语音服务，以实际扣费为准。积分在合成过程中耗尽会中止。' }
+}
+function MatchView({ id, initial, onChange, renderConversation, focusSession, activeCount = 0, lwbAccount }) {
   const [confirm, confirmation] = useConfirmation()
   const data = useQuery('match', { id }, id), match = data.value || initial
   const [step, setStep] = React.useState(null), [playing, setPlaying] = React.useState(false), [speed, setSpeed] = React.useState('1')
   const [busy, setBusy] = React.useState(''), [error, setError] = React.useState(''), [notice, setNotice] = React.useState('')
-  const [orientation, setOrientation] = React.useState('landscape'), [videoUrl, setVideoUrl] = React.useState(null)
+  const [orientation, setOrientation] = React.useState('landscape'), [videoUrl, setVideoUrl] = React.useState(null), [withAudio, setWithAudio] = React.useState(false)
+  const account = lwbAccount?.useAccount?.() || null
+  const gate = speechGate(account)
   const [clock, setClock] = React.useState(Date.now())
   const moves = match ? movesOf(match) : [], currentStep = Math.min(step ?? moves.length, moves.length)
   const frame = match ? frameAt(match, currentStep) : null
@@ -150,7 +163,7 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
     saveBlob(new Blob([result.text], { type: `${result.type};charset=utf-8` }), `ai-arena-${id.slice(0, 8)}.${result.extension}`)
     setNotice('比赛记录已导出。')
   }
-  async function video(preview) {
+  async function downloadExport(preview) {
     const chunks = []; let offset = 0
     while (true) {
       const part = await api('videoChunk', { id, exportId: match.export.id, offset })
@@ -159,9 +172,12 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
       if (part.nextOffset <= offset) throw new Error('视频下载中断。')
       offset = part.nextOffset; setNotice(`正在读取视频 ${Math.floor(offset / part.bytes * 100)}%`)
     }
-    const blob = new Blob(chunks, { type: 'video/mp4' })
-    if (preview) setVideoUrl(URL.createObjectURL(blob)); else saveBlob(blob, `ai-arena-${id.slice(0, 8)}-${match.export.orientation}.mp4`)
-    setNotice('')
+    const html = match.export.kind === 'html'
+    const blob = new Blob(chunks, { type: html ? 'text/html' : 'video/mp4' })
+    if (preview && !html) setVideoUrl(URL.createObjectURL(blob))
+    else saveBlob(blob, html ? `ai-arena-${id.slice(0, 8)}-replay.html` : `ai-arena-${id.slice(0, 8)}-${match.export.orientation}.mp4`)
+    const size = html ? `，约 ${Math.max(1, Math.round(part.bytes / 1024))} KB` : ''
+    setNotice(html ? `离线回放已导出，含选手发言语音${size}。` : '')
   }
   const seek = value => { setPlaying(false); setStep(value) }
   if (!match) return h('div', { className: 'ar-empty' }, data.error || '正在读取比赛…')
@@ -187,8 +203,9 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
     h(StatBar, { items: [{ label: '已完成走子', value: moves.length, tone: 'brand' }, { label: '决策回合', value: match.calls, detail: '含违规重试与未完成回合' }, { label: '累计 Token', value: match.tokens.toLocaleString(), detail: match.usageUnknown ? '用量不完整' : '服务商上报用量' }, { label: '比赛状态', value: statusLabel[match.status] || match.status, tone: match.status === 'finished' ? 'green' : undefined }] }),
     (error || data.error) && h('p', { className: 'ar-error', role: 'alert' }, error || data.error),
     lastError && h('p', { className: 'ar-error', role: 'alert' }, lastError.error),
-    h('div', { className: 'ar-export' }, h('div', { className: 'ar-actions' }, h(Button, { icon: FileText, disabled: !!busy, onClick: () => run('report', () => downloadRecord('markdown')) }, '战报'), h(Button, { icon: Download, disabled: !!busy, onClick: () => run('json', () => downloadRecord('json')) }, '完整记录'), h(Button, { icon: Play, disabled: !!busy, onClick: () => run('html', () => downloadRecord('html')) }, '离线回放')),
-      h('div', { className: 'ar-actions' }, h('label', null, '视频', h('select', { className: 'ar-select', value: orientation, 'aria-label': '视频画幅', onChange: event => setOrientation(event.target.value) }, h('option', { value: 'landscape' }, '横屏 16:9'), h('option', { value: 'portrait' }, '竖屏 9:16'))), h(Button, { icon: Film, disabled: !!busy || match.export?.status === 'running' || !['finished', 'cancelled'].includes(match.status) || !moves.length, onClick: () => run('render', () => api('exportVideo', { id, orientation })) }, match.export?.status === 'running' ? '渲染中…' : '导出 MP4'), match.export?.status === 'succeeded' && h(React.Fragment, null, h(IconButton, { icon: Eye, title: '预览成片', disabled: !!busy, onClick: () => run('preview', () => video(true)) }), h(IconButton, { icon: Download, title: '下载 MP4', disabled: !!busy, onClick: () => run('video', () => video(false)) })))),
+    h('div', { className: 'ar-export' }, h('div', { className: 'ar-actions' }, h(Button, { icon: FileText, disabled: !!busy, onClick: () => run('report', () => downloadRecord('markdown')) }, '战报'), h(Button, { icon: Download, disabled: !!busy, onClick: () => run('json', () => downloadRecord('json')) }, '完整记录'), h(Button, { icon: Play, disabled: !!busy || match.export?.status === 'running', onClick: () => run('html', () => withAudio ? api('exportReplay', { id }) : downloadRecord('html')) }, match.export?.kind === 'html' && match.export?.status === 'running' ? `合成语音 ${match.export.speechDone || 0}/${match.export.speechTotal || '…'}…` : (withAudio ? '离线回放（有声）' : '离线回放')), match.export?.kind === 'html' && match.export?.status === 'succeeded' && h(IconButton, { icon: Download, title: '下载有声回放', disabled: !!busy, onClick: () => run('replay', () => downloadExport(false)) })),
+      h('div', { className: 'ar-actions' }, h('label', null, '视频', h('select', { className: 'ar-select', value: orientation, 'aria-label': '视频画幅', onChange: event => setOrientation(event.target.value) }, h('option', { value: 'landscape' }, '横屏 16:9'), h('option', { value: 'portrait' }, '竖屏 9:16'))), h('label', { className: 'ar-audio' }, h('input', { type: 'checkbox', checked: withAudio && gate.enabled, disabled: !gate.enabled || !!busy, onChange: event => setWithAudio(event.target.checked) }), `生成声音${moves.filter(event => String(event.speech || '').trim()).length ? `（${moves.filter(event => String(event.speech || '').trim()).length} 句）` : ''}`), gate.login && h('button', { type: 'button', className: 'ar-button', onClick: () => lwbAccount?.openSettings?.() }, '登录 LWB'), h(Button, { icon: Film, disabled: !!busy || match.export?.status === 'running' || !['finished', 'cancelled'].includes(match.status) || !moves.length, onClick: () => run('render', () => api('exportVideo', { id, orientation, withAudio: withAudio && gate.enabled })) }, match.export?.status === 'running' ? (match.export.phase === 'speech' ? `合成语音 ${match.export.speechDone || 0}/${match.export.speechTotal || '…'}…` : '渲染中…') : (withAudio && gate.enabled ? '导出有声 MP4' : '导出 MP4')), match.export?.status === 'succeeded' && h(React.Fragment, null, h(IconButton, { icon: Eye, title: '预览成片', disabled: !!busy, onClick: () => run('preview', () => downloadExport(true)) }), h(IconButton, { icon: Download, title: '下载 MP4', disabled: !!busy, onClick: () => run('video', () => downloadExport(false)) })))),
+    h('p', { className: gate.enabled ? 'ar-muted' : 'ar-notice', role: 'status' }, lwbAccount ? gate.reason : '生成声音需要在比赛记录中导出。'),
     match.export?.status === 'failed' && h('p', { className: 'ar-error' }, match.export.error), notice && h('p', { className: 'ar-notice', role: 'status' }, notice), videoUrl && h('video', { className: 'ar-video', src: videoUrl, controls: true }),
     h(Conversation, { match, turnId: step === null ? match.events.findLast(event => event.type === 'request')?.turnId : frame.current?.turnId, renderConversation, focusSession }), confirmation)
 }
@@ -205,11 +222,11 @@ function Arena({ renderConversation, focusSession }) {
   return h(Frame, { tone: 'orange', kicker: '模型对战', title: 'AI竞技台', subtitle: '五子棋 / 中国象棋 · 模型自主决策 · 逐手回放', actions: h(Button, { primary: true, className: 'ar-config-button', icon: Settings2, onClick: () => setSetup(previous => !previous) }, '参赛配置') }, h(Setup, { gameId: selectedGame, onGameChange: setSelectedGame, open: setup, onOpenChange: setSetup, activeCount, onStarted: match => { setInitial(match); setId(match.id); rememberedId = match.id; setSetup(false); matchesData.refresh() } }),
     id ? h(MatchView, { key: id, id, initial, activeCount: displayedActiveCount, renderConversation, focusSession }) : h('div', { className: 'ar-match', 'data-game': selectedGame }, h('div', { className: 'ar-board-col' }, h('div', { className: 'ar-scoreboard' }, h(Player, { index: 0, gameId: selectedGame, player: { name: '待选模型', providerName: '未参赛' } }), h('span', { className: 'ar-vs' }, 'VS'), h(Player, { index: 1, gameId: selectedGame, player: { name: '待选模型', providerName: '未参赛' } })), h('div', { className: 'ar-board', dangerouslySetInnerHTML: { __html: boardSvg([], { gameId: selectedGame }) } })), h('aside', { className: 'ar-commentary' }, h('div', { className: 'ar-commentary-head' }, h('h2', { className: 'ar-section-title' }, '选手发言'), h('span', { className: 'ar-chip' }, '未开始')), h('div', { className: 'ar-speaking', 'data-thinking': true }, h('div', { className: 'ar-speaking-name' }, h(MessageCircle), '等待参赛选手'), h('p', null, '比赛尚未开始')), h('div', { className: 'ar-transcript-title' }, '回合记录'), h('div', { className: 'ar-empty' }, activeCount ? `已有 ${activeCount} 场比赛进行中，可在比赛记录中查看。` : '暂无回合记录'))))
 }
-function History({ renderConversation, focusSession }) {
+function History({ renderConversation, focusSession, lwbAccount }) {
   const list = useQuery('matches'), [id, setId] = React.useState(null), [search, setSearch] = React.useState(''), [status, setStatus] = React.useState('')
   React.useEffect(() => { const timer = setInterval(list.refresh, 2000); return () => clearInterval(timer) }, [list.refresh])
   const matches = list.value || [], filtered = matches.filter(match => (!status || match.status === status) && `${match.title} ${gameName(match.game)} ${match.id}`.toLowerCase().includes(search.trim().toLowerCase()))
-  if (id) return h(Frame, { tone: 'cyan', kicker: '比赛记录', title: '比赛回放', subtitle: matches.find(match => match.id === id)?.title, actions: h(Button, { primary: true, className: 'ar-back-button', icon: ArrowLeft, onClick: () => setId(null) }, '返回记录') }, h(MatchView, { key: id, id, activeCount: activeMatchCount(matches), onChange: list.refresh, renderConversation, focusSession }))
+  if (id) return h(Frame, { tone: 'cyan', kicker: '比赛记录', title: '比赛回放', subtitle: matches.find(match => match.id === id)?.title, actions: h(Button, { primary: true, className: 'ar-back-button', icon: ArrowLeft, onClick: () => setId(null) }, '返回记录') }, h(MatchView, { key: id, id, activeCount: activeMatchCount(matches), onChange: list.refresh, renderConversation, focusSession, lwbAccount }))
   return h(Frame, { tone: 'cyan', kicker: '对战档案', title: '比赛记录', subtitle: '五子棋 / 中国象棋', actions: h(IconButton, { icon: RefreshCw, title: '刷新比赛记录', onClick: list.refresh }) }, list.error && h('p', { className: 'ar-error' }, list.error),
     h(StatBar, { items: [{ label: '全部比赛', value: matches.length, tone: 'brand' }, { label: '正在比赛', value: activeMatchCount(matches) }, { label: '已结束', value: matches.filter(match => match.status === 'finished').length, tone: 'green' }, { label: '累计落子', value: matches.reduce((total, match) => total + match.moves, 0) }] }),
     h('div', { className: 'ar-history-toolbar' }, h('h2', { className: 'ar-section-title' }, '对战记录'), h('div', { className: 'ar-actions' }, h('input', { className: 'ar-search', type: 'search', placeholder: '搜索模型或比赛编号', 'aria-label': '搜索比赛', value: search, onChange: event => setSearch(event.target.value) }), h('select', { className: 'ar-select', 'aria-label': '比赛状态筛选', value: status, onChange: event => setStatus(event.target.value) }, h('option', { value: '' }, '全部状态'), Object.entries(statusLabel).map(([value, label]) => h('option', { key: value, value }, label))))),

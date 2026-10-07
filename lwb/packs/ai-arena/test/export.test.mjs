@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ArenaStore } from '../store.mjs'
 import { ArenaExport, replayHtml, reportMarkdown } from '../export.mjs'
+import { clipDataUrl } from '../speech.mjs'
 import { boardSvg, frameAt } from '../presentation.mjs'
 
 const fixture = { id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', title: '</script><img onerror=alert(1)>', game: { description: 'Rules', version: '1' }, players: [{ name: '<b>Black</b>', provider: 'test', model: 'black' }, { name: 'White', provider: 'test', model: 'white' }], calls: 1, tokens: 20, state: { moves: [{ row: 8, col: 8, player: 0 }] }, events: [{ type: 'move', turnId: 'turn', moveNumber: 1, player: 0, action: { row: 8, col: 8 }, speech: '</script><img onerror=alert(1)>', elapsedMs: 100 }], result: { message: 'Done', winner: null }, status: 'finished' }
@@ -29,6 +32,10 @@ test('replay shares game state and safely encodes model text offline', () => {
   /* 没有 game.id 的历史记录按 gomoku 命名，且投影只保留画面需要的字段 */
   assert.deepEqual(embedded.game, { id: '', name: '五子棋', version: '1' })
   assert.deepEqual(Object.keys(embedded).sort(), ['game', 'id', 'keys', 'moves', 'players', 'result', 'title', 'winRun'])
+  assert.equal(embedded.moves[0].audio, undefined)
+  assert.match(embedded.players[0].logo, /^data:image\/png;base64,/u)
+  assert.equal(embedded.players[0].voice, 'generic-1')
+  assert.equal(embedded.players[1].voice, 'generic-2')
   assert.ok(boardSvg(fixture.state.moves).includes('棋盘，1 手'))
   assert.ok(boardSvg(fixture.state.moves).includes('ar-board-wood'))
   assert.ok(reportMarkdown(fixture).includes('第 1 手'))
@@ -64,4 +71,57 @@ test('export runs once, snapshots config and downloads in bounded chunks', async
   await assert.rejects(exporter.chunk({ id: match.id, offset: -1 }))
   await assert.rejects(exporter.chunk({ id: match.id, offset: 600001 }))
   await assert.rejects(exporter.chunk({ id: match.id, exportId: 'previous-export' }), /版本已变化/)
+})
+
+test('voiced replay is refused without an LWB login and reuses a cached clip', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'arena-speech-')); t.after(() => rm(root, { recursive: true, force: true }))
+  const store = await new ArenaStore(root).init()
+  const match = await store.create({ ...fixture, id: undefined, players: [{ name: '千问', provider: 'lwb', model: 'qwen3.8-max' }, { name: '自建', provider: 'ollama', model: 'local' }] })
+  await store.update(match.id, value => { value.status = 'finished'; value.events = fixture.events; value.result = fixture.result })
+  const saved = await store.get(match.id)
+  const exec = promisify(execFile)
+  const anonymous = { account: { status: async () => ({ authenticated: false, configured: false, reason: '请先登录 LWB 账号。' }), points: async () => null, open: async () => { throw new Error('不应打开服务') } }, signal: new AbortController().signal, settings: async () => ({ get: () => ({}), update: async () => {} }) }
+  const jobs = []
+  const exporter = new ArenaExport({ store, scope: { ...anonymous, background: promise => jobs.push(promise) } })
+  await exporter.startReplay({ id: saved.id })
+  await jobs[0]
+  assert.match((await store.get(saved.id)).export.error, /请先登录 LWB 账号/)
+  const directory = store.directory(saved.id)
+  let posts = 0
+  const settings = { voiceAssets: {} }
+  const scope = {
+    signal: new AbortController().signal,
+    settings: async () => ({ get: () => settings, update: async patch => Object.assign(settings, patch) }),
+    account: {
+      status: async () => ({ authenticated: true, configured: true, minimumPoints: 10 }),
+      points: async () => ({ availablePoints: 9 }),
+      open: async () => { throw new Error('积分不足时不应打开服务') },
+    },
+  }
+  const poorJobs = []
+  await new ArenaExport({ store, scope: { ...scope, background: promise => poorJobs.push(promise) } }).startReplay({ id: saved.id })
+  await poorJobs[0]
+  assert.match((await store.get(saved.id)).export.error, /积分不足/)
+  const sample = join(root, 'sample.mp3')
+  await exec('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1.2:sample_rate=44100', '-af', 'volume=-30dB', '-q:a', '4', sample])
+  const clip = await readFile(sample)
+  scope.account.points = async () => ({ availablePoints: 100 })
+  scope.account.open = async () => ({ request: async (path, init) => {
+    if (path.endsWith('/audio-uploads')) return { success: true, data: { asset_id: 'asset-1' } }
+    if (init.method === 'POST') { posts += 1; return { success: true, data: { job_id: 'job-1', status: 'succeeded', audio_url: 'https://audio.example.test/a.mp3' } } }
+    return { success: true, data: { status: 'succeeded', audio_url: 'https://audio.example.test/a.mp3' } }
+  } })
+  const fetch = async () => ({ ok: true, arrayBuffer: async () => clip })
+  const { synthesizeSpeech } = await import('../speech.mjs')
+  const first = await synthesizeSpeech(saved, directory, { scope, fetch, signal: scope.signal })
+  assert.equal(posts, 1)
+  assert.equal(settings.voiceAssets && Object.values(settings.voiceAssets)[0], 'asset-1')
+  const again = await synthesizeSpeech(saved, directory, { scope, fetch, signal: scope.signal })
+  assert.equal(posts, 1)
+  assert.equal(again.get(1).file, first.get(1).file)
+  assert.match(first.get(1).file, /v1-/u)
+  const leveled = await readFile(first.get(1).file)
+  assert.notEqual(leveled.equals(clip), true)
+  const html = replayHtml(saved, new Map([[1, { seconds: 1.2, src: await clipDataUrl(first.get(1).file) }]]))
+  assert.match(html, /data:audio\/mpeg;base64,/u)
 })

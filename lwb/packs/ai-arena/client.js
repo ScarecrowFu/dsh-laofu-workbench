@@ -462,7 +462,7 @@ body[data-ds-dark-theme] .ar-page{
 .ar-stat span{color:var(--lwb-muted);font-size:12px}.ar-stat strong{font-size:20px;line-height:1.3;font-weight:650;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .ar-stat strong[data-tone=brand]{color:var(--ar-brand)}.ar-stat strong[data-tone=green]{color:var(--ar-green)}.ar-stat small{font-size:11px;color:var(--lwb-muted);font-weight:400}
 .ar-export{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-top:1px solid var(--lwb-line);padding-top:16px}
-.ar-export label{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--lwb-muted)}.ar-export select{width:auto;height:34px}
+.ar-export label{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--lwb-muted)}.ar-export select{width:auto;height:34px}.ar-audio input{width:16px;height:16px}
 .ar-raw{border-top:1px solid var(--lwb-line);padding-top:12px}.ar-raw summary{cursor:pointer;font-size:12px;color:var(--lwb-muted)}
 .ar-raw pre{font:12px/1.7 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto;margin:12px 0 0;padding:16px;background:var(--lwb-surface);border:1px solid var(--lwb-line);border-radius:8px}
 .ar-empty{display:grid;justify-items:center;align-content:center;gap:10px;min-height:180px;padding:28px;color:var(--lwb-muted);font-size:13px;text-align:center}
@@ -752,12 +752,25 @@ function Conversation({ match, turnId, renderConversation, focusSession }) {
     h2("details", { className: "ar-raw" }, h2("summary", null, "\u5B9E\u9645\u8BF7\u6C42\u53C2\u6570\u4E0E\u539F\u59CB\u7ED3\u679C"), h2("pre", null, JSON.stringify(current || {}, null, 2)))
   );
 }
-function MatchView({ id, initial, onChange, renderConversation, focusSession, activeCount = 0 }) {
+function speechGate(account) {
+  if (!account || account.phase === "loading") return { enabled: false, reason: "\u6B63\u5728\u8BFB\u53D6 LWB \u8D26\u53F7\u2026" };
+  if (account.phase !== "authenticated" || !account.user) return { enabled: false, reason: "\u767B\u5F55 LWB \u540E\u53EF\u751F\u6210\u53D1\u8A00\u8BED\u97F3", login: true };
+  const service = account.catalog?.services?.tts;
+  if (account.serviceError) return { enabled: false, reason: account.serviceError };
+  if (!service?.available) return { enabled: false, reason: service?.reason || "LWB \u8BED\u97F3\u670D\u52A1\u6682\u4E0D\u53EF\u7528\u3002" };
+  const points = Number(account.points?.availablePoints);
+  const minimum = Number(service.minimumPoints || 0);
+  if (Number.isFinite(points) && points < minimum) return { enabled: false, reason: "\u79EF\u5206\u4E0D\u8DB3\uFF0C\u8BF7\u8D2D\u4E70\u79EF\u5206\u540E\u91CD\u8BD5\u3002", login: true };
+  return { enabled: true, reason: "\u6309\u6BCF\u624B\u53D1\u8A00\u8C03\u7528\u8BED\u97F3\u670D\u52A1\uFF0C\u4EE5\u5B9E\u9645\u6263\u8D39\u4E3A\u51C6\u3002\u79EF\u5206\u5728\u5408\u6210\u8FC7\u7A0B\u4E2D\u8017\u5C3D\u4F1A\u4E2D\u6B62\u3002" };
+}
+function MatchView({ id, initial, onChange, renderConversation, focusSession, activeCount = 0, lwbAccount }) {
   const [confirm, confirmation] = useConfirmation();
   const data = useQuery("match", { id }, id), match = data.value || initial;
   const [step, setStep] = import_react4.default.useState(null), [playing, setPlaying] = import_react4.default.useState(false), [speed, setSpeed] = import_react4.default.useState("1");
   const [busy, setBusy] = import_react4.default.useState(""), [error, setError] = import_react4.default.useState(""), [notice, setNotice] = import_react4.default.useState("");
-  const [orientation, setOrientation] = import_react4.default.useState("landscape"), [videoUrl, setVideoUrl] = import_react4.default.useState(null);
+  const [orientation, setOrientation] = import_react4.default.useState("landscape"), [videoUrl, setVideoUrl] = import_react4.default.useState(null), [withAudio, setWithAudio] = import_react4.default.useState(false);
+  const account = lwbAccount?.useAccount?.() || null;
+  const gate = speechGate(account);
   const [clock, setClock] = import_react4.default.useState(Date.now());
   const moves = match ? movesOf(match) : [], currentStep = Math.min(step ?? moves.length, moves.length);
   const frame = match ? frameAt(match, currentStep) : null;
@@ -811,21 +824,23 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
     saveBlob(new Blob([result.text], { type: `${result.type};charset=utf-8` }), `ai-arena-${id.slice(0, 8)}.${result.extension}`);
     setNotice("\u6BD4\u8D5B\u8BB0\u5F55\u5DF2\u5BFC\u51FA\u3002");
   }
-  async function video(preview) {
+  async function downloadExport(preview) {
     const chunks = [];
     let offset = 0;
     while (true) {
-      const part = await api("videoChunk", { id, exportId: match.export.id, offset });
-      chunks.push(Uint8Array.from(atob(part.data), (char) => char.charCodeAt(0)));
-      if (part.done) break;
-      if (part.nextOffset <= offset) throw new Error("\u89C6\u9891\u4E0B\u8F7D\u4E2D\u65AD\u3002");
-      offset = part.nextOffset;
-      setNotice(`\u6B63\u5728\u8BFB\u53D6\u89C6\u9891 ${Math.floor(offset / part.bytes * 100)}%`);
+      const part2 = await api("videoChunk", { id, exportId: match.export.id, offset });
+      chunks.push(Uint8Array.from(atob(part2.data), (char) => char.charCodeAt(0)));
+      if (part2.done) break;
+      if (part2.nextOffset <= offset) throw new Error("\u89C6\u9891\u4E0B\u8F7D\u4E2D\u65AD\u3002");
+      offset = part2.nextOffset;
+      setNotice(`\u6B63\u5728\u8BFB\u53D6\u89C6\u9891 ${Math.floor(offset / part2.bytes * 100)}%`);
     }
-    const blob = new Blob(chunks, { type: "video/mp4" });
-    if (preview) setVideoUrl(URL.createObjectURL(blob));
-    else saveBlob(blob, `ai-arena-${id.slice(0, 8)}-${match.export.orientation}.mp4`);
-    setNotice("");
+    const html = match.export.kind === "html";
+    const blob = new Blob(chunks, { type: html ? "text/html" : "video/mp4" });
+    if (preview && !html) setVideoUrl(URL.createObjectURL(blob));
+    else saveBlob(blob, html ? `ai-arena-${id.slice(0, 8)}-replay.html` : `ai-arena-${id.slice(0, 8)}-${match.export.orientation}.mp4`);
+    const size = html ? `\uFF0C\u7EA6 ${Math.max(1, Math.round(part.bytes / 1024))} KB` : "";
+    setNotice(html ? `\u79BB\u7EBF\u56DE\u653E\u5DF2\u5BFC\u51FA\uFF0C\u542B\u9009\u624B\u53D1\u8A00\u8BED\u97F3${size}\u3002` : "");
   }
   const seek = (value) => {
     setPlaying(false);
@@ -896,9 +911,10 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
     h2(
       "div",
       { className: "ar-export" },
-      h2("div", { className: "ar-actions" }, h2(Button, { icon: FileText, disabled: !!busy, onClick: () => run("report", () => downloadRecord("markdown")) }, "\u6218\u62A5"), h2(Button, { icon: Download, disabled: !!busy, onClick: () => run("json", () => downloadRecord("json")) }, "\u5B8C\u6574\u8BB0\u5F55"), h2(Button, { icon: Play, disabled: !!busy, onClick: () => run("html", () => downloadRecord("html")) }, "\u79BB\u7EBF\u56DE\u653E")),
-      h2("div", { className: "ar-actions" }, h2("label", null, "\u89C6\u9891", h2("select", { className: "ar-select", value: orientation, "aria-label": "\u89C6\u9891\u753B\u5E45", onChange: (event) => setOrientation(event.target.value) }, h2("option", { value: "landscape" }, "\u6A2A\u5C4F 16:9"), h2("option", { value: "portrait" }, "\u7AD6\u5C4F 9:16"))), h2(Button, { icon: Film, disabled: !!busy || match.export?.status === "running" || !["finished", "cancelled"].includes(match.status) || !moves.length, onClick: () => run("render", () => api("exportVideo", { id, orientation })) }, match.export?.status === "running" ? "\u6E32\u67D3\u4E2D\u2026" : "\u5BFC\u51FA MP4"), match.export?.status === "succeeded" && h2(import_react4.default.Fragment, null, h2(IconButton, { icon: Eye, title: "\u9884\u89C8\u6210\u7247", disabled: !!busy, onClick: () => run("preview", () => video(true)) }), h2(IconButton, { icon: Download, title: "\u4E0B\u8F7D MP4", disabled: !!busy, onClick: () => run("video", () => video(false)) })))
+      h2("div", { className: "ar-actions" }, h2(Button, { icon: FileText, disabled: !!busy, onClick: () => run("report", () => downloadRecord("markdown")) }, "\u6218\u62A5"), h2(Button, { icon: Download, disabled: !!busy, onClick: () => run("json", () => downloadRecord("json")) }, "\u5B8C\u6574\u8BB0\u5F55"), h2(Button, { icon: Play, disabled: !!busy || match.export?.status === "running", onClick: () => run("html", () => withAudio ? api("exportReplay", { id }) : downloadRecord("html")) }, match.export?.kind === "html" && match.export?.status === "running" ? `\u5408\u6210\u8BED\u97F3 ${match.export.speechDone || 0}/${match.export.speechTotal || "\u2026"}\u2026` : withAudio ? "\u79BB\u7EBF\u56DE\u653E\uFF08\u6709\u58F0\uFF09" : "\u79BB\u7EBF\u56DE\u653E"), match.export?.kind === "html" && match.export?.status === "succeeded" && h2(IconButton, { icon: Download, title: "\u4E0B\u8F7D\u6709\u58F0\u56DE\u653E", disabled: !!busy, onClick: () => run("replay", () => downloadExport(false)) })),
+      h2("div", { className: "ar-actions" }, h2("label", null, "\u89C6\u9891", h2("select", { className: "ar-select", value: orientation, "aria-label": "\u89C6\u9891\u753B\u5E45", onChange: (event) => setOrientation(event.target.value) }, h2("option", { value: "landscape" }, "\u6A2A\u5C4F 16:9"), h2("option", { value: "portrait" }, "\u7AD6\u5C4F 9:16"))), h2("label", { className: "ar-audio" }, h2("input", { type: "checkbox", checked: withAudio && gate.enabled, disabled: !gate.enabled || !!busy, onChange: (event) => setWithAudio(event.target.checked) }), `\u751F\u6210\u58F0\u97F3${moves.filter((event) => String(event.speech || "").trim()).length ? `\uFF08${moves.filter((event) => String(event.speech || "").trim()).length} \u53E5\uFF09` : ""}`), gate.login && h2("button", { type: "button", className: "ar-button", onClick: () => lwbAccount?.openSettings?.() }, "\u767B\u5F55 LWB"), h2(Button, { icon: Film, disabled: !!busy || match.export?.status === "running" || !["finished", "cancelled"].includes(match.status) || !moves.length, onClick: () => run("render", () => api("exportVideo", { id, orientation, withAudio: withAudio && gate.enabled })) }, match.export?.status === "running" ? match.export.phase === "speech" ? `\u5408\u6210\u8BED\u97F3 ${match.export.speechDone || 0}/${match.export.speechTotal || "\u2026"}\u2026` : "\u6E32\u67D3\u4E2D\u2026" : withAudio && gate.enabled ? "\u5BFC\u51FA\u6709\u58F0 MP4" : "\u5BFC\u51FA MP4"), match.export?.status === "succeeded" && h2(import_react4.default.Fragment, null, h2(IconButton, { icon: Eye, title: "\u9884\u89C8\u6210\u7247", disabled: !!busy, onClick: () => run("preview", () => downloadExport(true)) }), h2(IconButton, { icon: Download, title: "\u4E0B\u8F7D MP4", disabled: !!busy, onClick: () => run("video", () => downloadExport(false)) })))
     ),
+    h2("p", { className: gate.enabled ? "ar-muted" : "ar-notice", role: "status" }, lwbAccount ? gate.reason : "\u751F\u6210\u58F0\u97F3\u9700\u8981\u5728\u6BD4\u8D5B\u8BB0\u5F55\u4E2D\u5BFC\u51FA\u3002"),
     match.export?.status === "failed" && h2("p", { className: "ar-error" }, match.export.error),
     notice && h2("p", { className: "ar-notice", role: "status" }, notice),
     videoUrl && h2("video", { className: "ar-video", src: videoUrl, controls: true }),
@@ -946,14 +962,14 @@ function Arena({ renderConversation, focusSession }) {
     id ? h2(MatchView, { key: id, id, initial, activeCount: displayedActiveCount, renderConversation, focusSession }) : h2("div", { className: "ar-match", "data-game": selectedGame }, h2("div", { className: "ar-board-col" }, h2("div", { className: "ar-scoreboard" }, h2(Player, { index: 0, gameId: selectedGame, player: { name: "\u5F85\u9009\u6A21\u578B", providerName: "\u672A\u53C2\u8D5B" } }), h2("span", { className: "ar-vs" }, "VS"), h2(Player, { index: 1, gameId: selectedGame, player: { name: "\u5F85\u9009\u6A21\u578B", providerName: "\u672A\u53C2\u8D5B" } })), h2("div", { className: "ar-board", dangerouslySetInnerHTML: { __html: boardSvg([], { gameId: selectedGame }) } })), h2("aside", { className: "ar-commentary" }, h2("div", { className: "ar-commentary-head" }, h2("h2", { className: "ar-section-title" }, "\u9009\u624B\u53D1\u8A00"), h2("span", { className: "ar-chip" }, "\u672A\u5F00\u59CB")), h2("div", { className: "ar-speaking", "data-thinking": true }, h2("div", { className: "ar-speaking-name" }, h2(MessageCircle), "\u7B49\u5F85\u53C2\u8D5B\u9009\u624B"), h2("p", null, "\u6BD4\u8D5B\u5C1A\u672A\u5F00\u59CB")), h2("div", { className: "ar-transcript-title" }, "\u56DE\u5408\u8BB0\u5F55"), h2("div", { className: "ar-empty" }, activeCount ? `\u5DF2\u6709 ${activeCount} \u573A\u6BD4\u8D5B\u8FDB\u884C\u4E2D\uFF0C\u53EF\u5728\u6BD4\u8D5B\u8BB0\u5F55\u4E2D\u67E5\u770B\u3002` : "\u6682\u65E0\u56DE\u5408\u8BB0\u5F55")))
   );
 }
-function History({ renderConversation, focusSession }) {
+function History({ renderConversation, focusSession, lwbAccount }) {
   const list = useQuery("matches"), [id, setId] = import_react4.default.useState(null), [search, setSearch] = import_react4.default.useState(""), [status, setStatus] = import_react4.default.useState("");
   import_react4.default.useEffect(() => {
     const timer = setInterval(list.refresh, 2e3);
     return () => clearInterval(timer);
   }, [list.refresh]);
   const matches = list.value || [], filtered = matches.filter((match) => (!status || match.status === status) && `${match.title} ${gameName(match.game)} ${match.id}`.toLowerCase().includes(search.trim().toLowerCase()));
-  if (id) return h2(Frame, { tone: "cyan", kicker: "\u6BD4\u8D5B\u8BB0\u5F55", title: "\u6BD4\u8D5B\u56DE\u653E", subtitle: matches.find((match) => match.id === id)?.title, actions: h2(Button, { primary: true, className: "ar-back-button", icon: ArrowLeft, onClick: () => setId(null) }, "\u8FD4\u56DE\u8BB0\u5F55") }, h2(MatchView, { key: id, id, activeCount: activeMatchCount(matches), onChange: list.refresh, renderConversation, focusSession }));
+  if (id) return h2(Frame, { tone: "cyan", kicker: "\u6BD4\u8D5B\u8BB0\u5F55", title: "\u6BD4\u8D5B\u56DE\u653E", subtitle: matches.find((match) => match.id === id)?.title, actions: h2(Button, { primary: true, className: "ar-back-button", icon: ArrowLeft, onClick: () => setId(null) }, "\u8FD4\u56DE\u8BB0\u5F55") }, h2(MatchView, { key: id, id, activeCount: activeMatchCount(matches), onChange: list.refresh, renderConversation, focusSession, lwbAccount }));
   return h2(
     Frame,
     { tone: "cyan", kicker: "\u5BF9\u6218\u6863\u6848", title: "\u6BD4\u8D5B\u8BB0\u5F55", subtitle: "\u4E94\u5B50\u68CB / \u4E2D\u56FD\u8C61\u68CB", actions: h2(IconButton, { icon: RefreshCw, title: "\u5237\u65B0\u6BD4\u8D5B\u8BB0\u5F55", onClick: list.refresh }) },

@@ -6,10 +6,10 @@ import { VIDEO_KEY_MODE, frameToStep } from './replay/timeline.mjs'
 
 const h = React.createElement
 
-function ArenaVideo({ data, layout, secondsPerMove }) {
+function ArenaVideo({ data, layout, secondsPerMove, durations = null }) {
   const frame = useCurrentFrame()
   const { fps } = useVideoConfig()
-  const { index, t } = frameToStep(frame, fps, data.moves.length, secondsPerMove)
+  const { index, t } = frameToStep(frame, fps, data.moves.length, secondsPerMove, durations)
   const html = stageHtml(data, index, { layout, t, keyMode: VIDEO_KEY_MODE })
   return h(React.Fragment, null,
     /* Remotion 逐帧截图，浏览器时钟不随帧号推进：所有 CSS 动画/过渡都必须关掉，

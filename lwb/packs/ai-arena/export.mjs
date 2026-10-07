@@ -7,7 +7,8 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { movesOf, escapeHtml, actionLabel, playerSide } from './presentation.mjs'
 import { replayData } from './replay/data.mjs'
-import { totalFrames } from './replay/timeline.mjs'
+import { stepStarts, totalFrames } from './replay/timeline.mjs'
+import { clipDataUrl, synthesizeSpeech } from './speech.mjs'
 
 const exec = promisify(execFile)
 const ROOT = dirname(fileURLToPath(import.meta.url))
@@ -29,9 +30,9 @@ function replayAssets() {
 /** 用 {{KEY}} 占位符渲染骨架；替换值按字面插入，不做 $ 转义。 */
 const fillTemplate = (template, vars) => template.replace(/\{\{(\w+)\}\}/gu, (match, key) => (key in vars ? vars[key] : match))
 
-export function replayHtml(match) {
+export function replayHtml(match, audio = null) {
   const assets = replayAssets()
-  const data = replayData(match)
+  const data = replayData(match, audio)
   const title = escapeHtml(match.title)
   return fillTemplate(assets['page.html'], {
     TITLE: `${title} · AI竞技台 · 离线回放`,
@@ -59,33 +60,72 @@ export function reportMarkdown(match) {
 }
 export class ArenaExport {
   constructor({ store, scope, render = renderVideo }) { Object.assign(this, { store, scope, render }); this.running = new Set() }
-  async start({ id, orientation = 'landscape', secondsPerMove = 3 }) {
+  async start({ id, orientation = 'landscape', secondsPerMove = 3, withAudio = false }) {
     if (!['landscape', 'portrait'].includes(orientation) || !Number.isInteger(secondsPerMove) || secondsPerMove < 2 || secondsPerMove > 8) throw new Error('视频导出设置无效。')
+    if (typeof withAudio !== 'boolean') throw new Error('视频导出设置无效。')
     if (this.running.has(id)) throw new Error('比赛视频正在导出。')
     this.running.add(id)
     let snapshot
     try {
       snapshot = await this.store.update(id, match => {
         if (!['finished', 'cancelled'].includes(match.status) || !movesOf(match).length) throw new Error('请先完成比赛，再导出视频。')
-        match.export = { id: randomUUID(), status: 'running', orientation, secondsPerMove, startedAt: new Date().toISOString(), sourceRevision: match.revision }
+        match.export = { id: randomUUID(), status: 'running', orientation, secondsPerMove, withAudio, phase: withAudio ? 'speech' : 'render', startedAt: new Date().toISOString(), sourceRevision: match.revision }
       })
     } catch (error) { this.running.delete(id); throw error }
     this.scope.background((async () => {
       try {
-        await this.render(snapshot, this.store.directory(id), { orientation, secondsPerMove, signal: this.scope.signal })
-        await this.store.update(id, match => { match.export = { ...match.export, status: 'succeeded', completedAt: new Date().toISOString() } })
+        let audio = null
+        if (withAudio) {
+          audio = await synthesizeSpeech(snapshot, this.store.directory(id), {
+            scope: this.scope, signal: this.scope.signal,
+            onProgress: ({ done, total }) => this.store.update(id, match => { if (match.export?.status === 'running') match.export = { ...match.export, phase: 'speech', speechDone: done, speechTotal: total } }),
+          })
+          await this.store.update(id, match => { if (match.export?.status === 'running') match.export = { ...match.export, phase: 'render' } })
+        }
+        await this.render(snapshot, this.store.directory(id), { orientation, secondsPerMove, audio, signal: this.scope.signal })
+        await this.store.update(id, match => { match.export = { ...match.export, status: 'succeeded', phase: 'done', completedAt: new Date().toISOString() } })
       } catch (error) {
         await this.store.update(id, match => { match.export = { ...match.export, status: 'failed', error: error.message } })
       } finally { this.running.delete(id) }
     })())
     return snapshot
   }
+  async startReplay({ id }) {
+    if (this.running.has(id)) throw new Error('这场比赛正在导出。')
+    this.running.add(id)
+    let snapshot
+    try {
+      snapshot = await this.store.update(id, match => {
+        if (!['finished', 'cancelled'].includes(match.status) || !movesOf(match).length) throw new Error('请先完成比赛，再导出回放。')
+        match.export = { id: randomUUID(), kind: 'html', status: 'running', withAudio: true, phase: 'speech', speechDone: 0, speechTotal: movesOf(match).filter(move => String(move.speech || '').trim()).length, startedAt: new Date().toISOString(), sourceRevision: match.revision }
+      })
+    } catch (error) { this.running.delete(id); throw error }
+    this.scope.background((async () => {
+      try {
+        const audio = await synthesizeSpeech(snapshot, this.store.directory(id), {
+          scope: this.scope, signal: this.scope.signal,
+          onProgress: ({ done, total }) => this.store.update(id, match => { if (match.export?.status === 'running') match.export = { ...match.export, phase: 'speech', speechDone: done, speechTotal: total } }),
+        })
+        const inline = new Map()
+        for (const [moveNumber, clip] of audio) inline.set(moveNumber, { seconds: clip.seconds, src: await clipDataUrl(clip.file) })
+        const text = replayHtml(snapshot, inline)
+        await writeFile(join(this.store.directory(id), 'replay.html'), text, { mode: 0o600 })
+        await this.store.update(id, match => { match.export = { ...match.export, status: 'succeeded', phase: 'done', bytes: Buffer.byteLength(text), completedAt: new Date().toISOString() } })
+      } catch (error) {
+        await this.store.update(id, match => { match.export = { ...match.export, status: 'failed', error: error.message } })
+      } finally { this.running.delete(id) }
+    })())
+    return snapshot
+  }
+  async record(match) {
+    return { text: replayHtml(match), type: 'text/html', extension: 'html' }
+  }
   async chunk({ id, exportId, offset = 0 }) {
     const match = await this.store.get(id)
     if (match.export?.status !== 'succeeded') throw new Error('视频尚未导出成功。')
     if (exportId && exportId !== match.export.id) throw new Error('导出版本已变化，请重新下载。')
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('下载偏移无效。')
-    const file = join(this.store.directory(id), `${match.export.orientation}.mp4`)
+    const file = join(this.store.directory(id), match.export.kind === 'html' ? 'replay.html' : `${match.export.orientation}.mp4`)
     const info = await lstat(file)
     if (!info.isFile() || info.isSymbolicLink()) throw new Error('视频文件无效。')
     if (offset > info.size) throw new Error('下载偏移越界。')
@@ -97,7 +137,7 @@ export class ArenaExport {
     } finally { await handle.close() }
   }
 }
-export async function renderVideo(match, directory, { orientation, secondsPerMove, signal }) {
+export async function renderVideo(match, directory, { orientation, secondsPerMove, audio = null, signal }) {
   signal.throwIfAborted()
   await exec('ffmpeg', ['-version'], { signal })
   const { bundle } = await import('@remotion/bundler')
@@ -107,8 +147,10 @@ export async function renderVideo(match, directory, { orientation, secondsPerMov
   const serveUrl = await bundle({ entryPoint: join(ROOT, 'video.mjs'), outDir: join(dir, 'bundle'), webpackOverride: config => config })
   signal.throwIfAborted()
   const width = orientation === 'landscape' ? 1280 : 720, height = orientation === 'landscape' ? 720 : 1280, fps = 30
-  const data = replayData(match)
-  const frames = totalFrames(data.moves.length, fps, secondsPerMove)
+  const data = replayData(match, audio ? new Map([...audio].map(([moveNumber, clip]) => [moveNumber, { seconds: clip.seconds }])) : null)
+  const durations = data.moves.map(move => move.audioSec || 0)
+  const frames = totalFrames(data.moves.length, fps, secondsPerMove, audio ? durations : null)
+  const spoken = audio ? [...audio].filter(([, clip]) => clip.seconds > 0) : []
   const temporary = join(directory, `${orientation}.partial.mp4`)
   const { cancelSignal, cancel } = makeCancelSignal()
   const abort = () => cancel()
@@ -116,17 +158,34 @@ export async function renderVideo(match, directory, { orientation, secondsPerMov
   const browserExecutable = process.env.LWB_REMOTION_BROWSER_EXECUTABLE || (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined)
   try {
     /* 视频与离线 HTML 共用同一份投影：同一组手数、关键手、连子和终局文案。 */
-    const props = { data, layout: orientation, secondsPerMove }
-    await renderMedia({ serveUrl, composition: { id: 'Arena', width, height, fps, durationInFrames: frames, defaultProps: {}, props, defaultCodec: null, defaultOutName: null, defaultVideoImageFormat: null, defaultPixelFormat: null }, inputProps: props, outputLocation: temporary, codec: 'h264', crf: 23, pixelFormat: 'yuv420p', browserExecutable, cancelSignal, concurrency: 2, chromiumOptions: { gl: 'swiftshader' } })
+    const props = { data, layout: orientation, secondsPerMove, durations: audio ? durations : null }
+    const silent = join(directory, `${orientation}.silent.mp4`)
+    await renderMedia({ serveUrl, composition: { id: 'Arena', width, height, fps, durationInFrames: frames, defaultProps: {}, props, defaultCodec: null, defaultOutName: null, defaultVideoImageFormat: null, defaultPixelFormat: null }, inputProps: props, outputLocation: audio?.size ? silent : temporary, codec: 'h264', crf: 23, pixelFormat: 'yuv420p', browserExecutable, cancelSignal, concurrency: 2, chromiumOptions: { gl: 'swiftshader' } })
     signal.throwIfAborted()
-    const { stdout } = await exec('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height:format=duration', '-of', 'json', temporary], { signal })
+    if (spoken.length) await mixSpeech(silent, temporary, spoken, data.moves.length, secondsPerMove, signal)
+    const { stdout } = await exec('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height,codec_type:format=duration', '-of', 'json', temporary], { signal })
     const probe = JSON.parse(stdout)
-    if (!probe.streams.some(stream => stream.width === width && stream.height === height) || Math.abs(Number(probe.format.duration) - frames / fps) > 1) throw new Error('导出视频未通过尺寸或时长检查。')
+    const hasAudio = probe.streams.some(stream => stream.codec_type === 'audio')
+    if (!probe.streams.some(stream => stream.width === width && stream.height === height) || Math.abs(Number(probe.format.duration) - frames / fps) > 1 || hasAudio !== spoken.length > 0) throw new Error('导出视频未通过尺寸或时长检查。')
     await rename(temporary, join(directory, `${orientation}.mp4`))
     await writeFile(join(directory, 'video-report.json'), `${JSON.stringify(probe, null, 2)}\n`, { mode: 0o600 })
   } finally {
     signal.removeEventListener('abort', abort)
     await rm(dir, { recursive: true, force: true })
     await rm(temporary, { force: true })
+    await rm(join(directory, `${orientation}.silent.mp4`), { force: true })
   }
+}
+
+/** 把每句配音按该手的起始时间铺到一条音轨上，再贴进无声成片。画面时长保持不变。 */
+async function mixSpeech(silent, output, spoken, moveCount, secondsPerMove, signal) {
+  const durations = []
+  for (const [moveNumber, clip] of spoken) durations[moveNumber - 1] = clip.seconds
+  const starts = stepStarts(moveCount, secondsPerMove, durations)
+  const args = ['-y', '-i', silent]
+  for (const [, clip] of spoken) args.push('-i', clip.file)
+  const delayed = spoken.map(([moveNumber], index) => `[${index + 1}:a]adelay=${Math.round(starts[moveNumber] * 1000)}|${Math.round(starts[moveNumber] * 1000)}[a${index}]`)
+  const mix = spoken.map((_, index) => `[a${index}]`).join('')
+  args.push('-filter_complex', `${delayed.join(';')};${mix}amix=inputs=${spoken.length}:normalize=0:duration=longest[aout]`, '-map', '0:v:0', '-map', '[aout]', '-c:v', 'copy', '-c:a', 'aac', output)
+  await exec('ffmpeg', args, { signal })
 }
