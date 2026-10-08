@@ -7,7 +7,8 @@
  *
  * 只在浏览器/打包环境使用（不依赖 node:fs，不依赖 xiangui 规则）。
  */
-import { boardSvg, actionLabel, playerSide } from '../presentation.mjs'
+import { boardSvg, actionLabel, playerSide, ROLE_MARK, ROLE_NAME, werewolfPhaseLabel, werewolfSideName } from '../presentation.mjs'
+import { WEREWOLF_ART } from '../werewolf-art.mjs'
 
 const esc = v => String(v ?? '').replace(/[&<>"']/gu, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 const PIECE_CN = { chariot: '车', cannon: '炮', horse: '马', soldier: '兵', elephant: '象', adviser: '士', general: '将' }
@@ -94,7 +95,7 @@ function findGlyphCentre(svg, glyph) {
 /* ---------------------------------------------------------------- 关键手 */
 export function isKeyMove(key, mode = 'major') {
   if (!key || mode === 'off') return false
-  if (key.kind === 'win' || key.kind === 'check') return true
+  if (key.kind === 'win' || key.kind === 'check' || key.kind === 'death') return true
   if (key.kind !== 'capture') return false
   return mode === 'all' || (mode === 'major' && MAJOR.has(key.piece))
 }
@@ -210,20 +211,163 @@ function scoreHtml(data, active, isFinale, winner, isDraw) {
   }).join('')
 }
 
-function progressHtml(data, index, keyMode) {
+function progressHtml(data, index, keyMode, label = '关键手') {
   const M = data.moves.length
   const FINALE = M + 1
   const den = M || 1
   const pct = (index / FINALE) * 100
   const ticks = data.keys.filter(k => isKeyMove(k, keyMode)).map(k => {
-    const cls = k.kind === 'check' ? 'chk' : k.kind === 'win' ? 'win' : 'cap'
+    const cls = ({ check: 'chk', win: 'win', death: 'death' })[k.kind] || 'cap'
     return `<i class="tick ${cls}" style="left:${round((k.n / den) * 100)}%"></i>`
   }).join('')
   const count = index > M ? `共 <b>${M}</b> 手 · 终局` : `第 <b>${index}</b> / ${M} 手`
   const hits = data.keys.filter(k => isKeyMove(k, keyMode)).length
-  return `<div class="prow"><span class="pcount">${count}</span><span class="ptime">关键手 <b>${hits}</b> 处</span></div>` +
+  return `<div class="prow"><span class="pcount">${count}</span><span class="ptime">${label} <b>${hits}</b> 处</span></div>` +
     `<div class="track"><div class="fill" style="width:${round(pct)}%"></div>${ticks}` +
     `<span class="cur" style="left:calc(${round(pct)}% - ${round(pct * 0.065)}px)"></span></div>`
+}
+
+/* ---------------------------------------------------------------- 狼人杀六席舞台
+   隐藏身份游戏没有棋盘：主画面是一块满幅昼夜场景 + 六张立绘席卡。
+   逐帧渲染时所有随时间变化的量都在这里算成内联样式，离线 HTML 用 scene.css 里的同名关键帧。 */
+const WOLF_SIDE = role => role === 'werewolf' ? 'wolf' : 'village'
+const artPortrait = key => WEREWOLF_ART.portraits[key] || WEREWOLF_ART.portraits.generic || ''
+const seatFace = seat => seat.alive ? artPortrait(seat.portrait) : (WEREWOLF_ART.portraits[`${seat.portrait}-dead`] || artPortrait(seat.portrait))
+const wwSeatIn = (t, order) => track([[0, [0, 18, .96]], [1, [1, 0, 1]]], Math.max(0, t - order * .05), .34, EASE_OUT)
+const wwLift = t => track([[0, [0]], [1, [1]]], t, .26, EASE_OUT)[0]
+const wwStrike = t => track([[0, [1.7, 1]], [.62, [1, .95]], [1, [1, .72]]], t, .5, EASE_SHATTER)
+const wwTagIn = t => track([[0, [0, 12]], [1, [1, 0]]], t, .44, EASE_OUT)
+const wwSceneFade = t => track([[0, [0]], [.18, [1]], [1, [1]]], t, .5, LINEAR)[0]
+const wwHeadIn = t => track([[0, [0, 14]], [1, [1, 0]]], t, .38, EASE_OUT)
+const wwVictory = t => track([[0, [0, .82]], [1, [1, 1]]], t, .55, EASE_OUT)
+
+/** 当前这一手该看到哪一面：开局、逐手、终局统一在这里取。 */
+function werewolfFrame(data, index) {
+  const wolf = data.werewolf || { seats: [], steps: null }
+  const M = data.moves.length
+  const FINALE = M + 1
+  const isFinale = index >= FINALE
+  const steps = wolf.steps || []
+  const step = index >= 1 && index <= M ? steps[index - 1] || null : null
+  const last = index >= 1 && index <= M ? data.moves[index - 1] : null
+  const seatTotal = wolf.seats.length || 6
+  const finalStep = steps.at(-1) || null
+  const phase = step?.phase || last?.phase || 'night-wolf'
+  const initial = Array.from({ length: seatTotal }, (_, i) => i + 1)
+  return {
+    isFinale, step, last,
+    /* 开局六人俱在；终局沿用最后一手的存活名单，否则出局的人会在终局画面里「复活」。 */
+    alive: new Set(isFinale ? (finalStep?.alive || initial) : (step ? step.alive : initial)),
+    deaths: step ? step.deaths : [],
+    activeSeat: step ? step.seat : null,
+    scene: isFinale ? (data.result?.side === 'wolf' ? 'night' : 'day') : (step?.scene || (phase.startsWith('day') ? 'day' : 'night')),
+    day: isFinale ? (finalStep?.day || 1) : (step?.day || 1),
+    label: isFinale ? '终局' : (step?.label || (index >= 1 ? werewolfPhaseLabel(phase, null) : '天黑请闭眼')),
+    winnerSide: data.result?.side || null,
+  }
+}
+
+function werewolfSeatHtml(seat, index_, frame, options, order) {
+  const { t, animate } = options
+  const alive = frame.alive.has(seat.seat)
+  const active = !frame.isFinale && seat.seat === frame.activeSeat
+  const dying = frame.deaths.includes(seat.seat)
+  const [enterOpacity, enterShift, enterScale] = animate && order >= 0 ? wwSeatIn(t, order) : [1, 0, 1]
+  const lift = animate && active ? wwLift(t) : 0
+  const winning = frame.isFinale && frame.winnerSide && seat.role && WOLF_SIDE(seat.role) === frame.winnerSide
+  const style = `opacity:${round(enterOpacity)};transform:translateY(${round(enterShift - lift * 12)}px) scale(${round(enterScale + lift * .045)})`
+  const strike = animate && dying ? (() => { const [scale, opacity] = wwStrike(t); return `<span class="ww-strike" style="opacity:${round(opacity)};transform:translate(-50%,-50%) scale(${round(scale)})"></span>` })() : ''
+  const [tagOpacity, tagShift] = animate && dying ? wwTagIn(t) : [1, 0]
+  const out = !alive ? `<span class="ww-out" style="opacity:${round(tagOpacity)};transform:translateX(-50%) translateY(${round(tagShift)}px)">出局</span>` : ''
+  return `<figure class="ww-seat" data-i="${index_}" data-seat="${seat.seat}" data-alive="${alive}" data-active="${active}" data-role="${esc(seat.role)}"${winning ? ' data-win="true"' : ''} style="${style}">` +
+    `<span class="ww-no">${seat.seat}</span>` +
+    `<span class="ww-face"><img src="${seatFace({ ...seat, alive })}" alt=""><i class="ww-veil"></i>${strike}${out}</span>` +
+    `<figcaption><b class="ww-name">${esc(seat.name)}</b><em class="ww-role" data-role="${esc(seat.role)}">${ROLE_MARK[seat.role] || '·'}</em></figcaption>` +
+    `</figure>`
+}
+
+function werewolfScoreHtml(data, frame) {
+  return (data.werewolf?.seats || []).map((seat, i) => {
+    const alive = frame.alive.has(seat.seat)
+    const active = !frame.isFinale && seat.seat === frame.activeSeat
+    const badge = frame.isFinale
+      ? (frame.winnerSide && seat.role && WOLF_SIDE(seat.role) === frame.winnerSide ? '胜' : data.result ? '负' : '')
+      : (alive ? '' : '出局')
+    return `<div class="pcard" data-i="${i}" data-active="${active}" data-alive="${alive}" data-role="${esc(seat.role)}">` +
+      `<img class="logo" src="${seat.logo || ''}" alt="">` +
+      `<i class="stone ww-chip" data-role="${esc(seat.role)}">${ROLE_MARK[seat.role] || '·'}</i>` +
+      `<span class="nm">${esc(seat.name)}</span>` +
+      `<span class="sd">${esc(ROLE_NAME[seat.role] || seat.role || '')}</span>` +
+      `<em class="bd">${badge}</em></div>`
+  }).join('')
+}
+
+function werewolfPill(data, index, frame) {
+  if (frame.isFinale) return `<span class="pill win">${frame.winnerSide === 'wolf' ? '狼人获胜' : '好人获胜'}</span>`
+  const key = index >= 1 ? data.keys.find(k => k.n === index) : null
+  if (key?.kind === 'death') return `<span class="pill cap">出局 ${key.seats.map(s => `${s} 号`).join('、')}</span>`
+  if (frame.step) return `<span class="pill chk">${esc(frame.step.label)}</span>`
+  return ''
+}
+
+function werewolfStageHtml(data, index, options = {}) {
+  const { layout = 'landscape', t = 0, animate = true } = options
+  const frame = werewolfFrame(data, index)
+  const M = data.moves.length
+  const seats = data.werewolf?.seats || []
+  const order = index > 1 ? -1 : 0
+  const sceneFade = animate ? wwSceneFade(t) : 1
+  const [headOpacity, headShift] = animate ? wwHeadIn(t) : [1, 0]
+  const [winOpacity, winScale] = animate ? wwVictory(t) : [1, 1]
+  const [speechOpacity, speechShift] = fadeUp(t, .2)
+  const [finaleOpacity, finaleShift] = fadeUp(t, .28)
+  const body = frame.last ? frame.last.s : (index === 0 ? '天黑请闭眼。' : '')
+  const narrator = frame.last
+    ? `<img class="logo" src="${seats[frame.last.p]?.logo || ''}" alt="">${esc(data.players[frame.last.p]?.name || '')} · 本手发言`
+    : '开局'
+  const coord = frame.last ? esc(actionLabel(frame.last.a, data.game)) : ''
+  /* 侧栏比棋类窄，且身份榜占掉六行：回合记录收到最近 3 手，不跟本手发言抢高度。 */
+  const entries = data.moves.slice(0, index).slice(-4, -1).reverse()
+  const cast = seats.map((seat, i) => werewolfSeatHtml(seat, i, frame, { t, animate }, order >= 0 ? i : -1)).join('')
+  const backgrounds = ['night', 'day'].map(scene => {
+    const on = scene === frame.scene
+    return `<img class="ww-bg" data-scene="${scene}" src="${WEREWOLF_ART.scenes[scene] || ''}" alt="" style="opacity:${on ? round(sceneFade) : 0}">`
+  }).join('')
+  const deathTag = frame.deaths.length
+    ? (() => { const [opacity, shift] = animate ? wwTagIn(t) : [1, 0]; return `<p class="ww-deaths" style="opacity:${round(opacity)};transform:translateX(-50%) translateY(${round(shift)}px)">${frame.deaths.map(s => `${s} 号出局`).join('、')}</p>` })()
+    : ''
+  const narrative = frame.isFinale
+    ? `<div class="finale" data-kind="${frame.winnerSide ? 'win' : 'draw'}" style="opacity:${round(finaleOpacity)};transform:translateY(${round(finaleShift)}px)">` +
+      `<small>终局 · ${werewolfSideName(frame.winnerSide)}</small><p>${esc(data.result?.message || '比赛已结束。')}</p></div>`
+    : `<div class="speech" style="opacity:${round(speechOpacity)};transform:translateY(${round(speechShift)}px)">` +
+      `<div class="sinner"><div class="shead"><span>${narrator}</span>${coord ? `<em class="coord">${coord}</em>` : ''}</div>` +
+      `<p style="font-size:${stepSize(body.length, layout === 'portrait')}px">${esc(body || '等待行动')}</p></div></div>`
+  const recent = frame.isFinale || !entries.length ? '' :
+    `<div class="recent"><div class="rtitle">回合记录</div><div class="rlist">` +
+    entries.map(m => `<div class="rentry"><b>${m.n} · ${esc(data.players[m.p]?.name || '')}</b><span>${esc(m.s)}</span></div>`).join('') +
+    `</div></div>`
+
+  return `<div class="stage ww" data-layout="${layout}" data-phase="${frame.isFinale ? 'finale' : 'move'}" data-game="werewolf" data-scene="${frame.scene}" data-act="${frame.isFinale ? 'finale' : (frame.deaths.length ? 'death' : 'move')}">` +
+    `<section class="board-card" style="transform:scale(${round(frame.isFinale ? finaleScale(t) : 1)})">` +
+    `<div class="ww-scene">${backgrounds}<div class="ww-mask"></div>` +
+    `<header class="ww-head" style="opacity:${round(headOpacity)};transform:translateY(${round(headShift)}px)">` +
+    `<span class="ww-day">第 ${frame.day} 天 · ${frame.scene === 'day' ? '白天' : '夜间'}</span>` +
+    `<b class="ww-phase">${esc(frame.label)}</b></header>` +
+    deathTag +
+    `<div class="ww-cast">${cast}</div>` +
+    (frame.isFinale ? `<div class="ww-win" data-side="${frame.winnerSide || 'draw'}" style="opacity:${round(winOpacity)};transform:translate(-50%,-50%) scale(${round(winScale)})">` +
+      `<b>${frame.winnerSide === 'wolf' ? '狼人获胜' : frame.winnerSide ? '好人获胜' : '比赛结束'}</b>` +
+      `<span>${esc(data.result?.message || '')}</span></div>` : '') +
+    `</div></section>` +
+    `<aside class="side">` +
+    `<header class="top"><div class="brand"><b>AI竞技台</b><span class="game">${esc(data.game.name)} · 规则 ${esc(data.game.version)}</span></div></header>` +
+    `<div class="hero"><em class="hlbl">${frame.isFinale ? '终局' : `第 ${frame.day} 天`}</em>` +
+    `<b class="n">${esc(frame.label)}</b><span class="t">${frame.isFinale ? `共 ${M} 手` : `${index} / ${M} 手`}</span>` +
+    `<div class="heroTag">${werewolfPill(data, index, frame)}</div></div>` +
+    `<div class="score">${werewolfScoreHtml(data, frame)}</div>` +
+    `<div class="narrative">${narrative}${recent}</div>` +
+    `<footer class="progress">${progressHtml(data, index, options.keyMode || 'major', '出局 / 终局')}</footer>` +
+    `<div class="safe-bottom"></div></aside></div>`
 }
 
 /* ---------------------------------------------------------------- 入口 */
@@ -234,12 +378,14 @@ function progressHtml(data, index, keyMode) {
  */
 export function stageHtml(data, index, options = {}) {
   const { layout = 'landscape', t = 0, keyMode = 'major', animate = true } = options
+  if (data.game.id === 'werewolf') return werewolfStageHtml(data, index, options)
   const portrait = layout === 'portrait'
   const M = data.moves.length
   const FINALE = M + 1
   const isFinale = index >= FINALE
   const winner = typeof data.result?.winner === 'number' ? data.result.winner : null
-  const isDraw = Boolean(data.result) && winner === null
+  /* 隐藏身份游戏的终局由 result.side 表示阵营，不能因为 winner 不是数字就当成和棋。 */
+  const isDraw = Boolean(data.result) && winner === null && !data.result.side
   const key = !isFinale && index >= 1 ? data.keys.find(k => k.n === index) : null
   /* 与离线 HTML 保持一致：吃子/将军/胜局的「效果」只看本手是不是关键手，
      档位只筛「推近幅度」与进度条刻度（药丸标签也照原样显示）。 */

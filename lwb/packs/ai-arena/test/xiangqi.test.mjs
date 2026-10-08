@@ -179,5 +179,5 @@ test('registers alongside gomoku without changing the gomoku definition', () => 
   const games = new ArenaGames()
   assert.equal(games.get('xiangqi'), xiangqi)
   assert.equal(games.get('gomoku').id, 'gomoku')
-  assert.equal(games.list().length, 2)
+  assert.equal(games.list().length, 3)
 })

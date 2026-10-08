@@ -1,6 +1,7 @@
 import React from 'react'
 import { Trophy, Settings2, Play, Pause, Square, SkipBack, ChevronDown, ChevronLeft, ChevronRight, ArrowLeft, Download, FileText, Film, RefreshCw, MessageCircle, Radio, Eye } from 'lucide-react'
-import { boardSvg, frameAt, movesOf, gameName, playerSide, actionLabel } from './presentation.mjs'
+import { boardSvg, frameAt, movesOf, gameName, playerSide, actionLabel, werewolfStage } from './presentation.mjs'
+import { WEREWOLF_ART } from './werewolf-art.mjs'
 import { CSS } from './styles.mjs'
 import { activeMatchCount, useConfirmation } from './confirmation.mjs'
 import { turnRecords, turnUsage } from './turn-records.mjs'
@@ -8,11 +9,15 @@ import { turnRecords, turnUsage } from './turn-records.mjs'
 const h = React.createElement
 let connection, rememberedId = null, rememberedGameId = 'gomoku', arenaEntryMode = 'resume'
 const statusLabel = { running: '比赛中', pausing: '回合结算后暂停', paused: '已暂停', finished: '已结束', cancelled: '已取消' }
-const gameLabel = id => id === 'xiangqi' ? '中国象棋' : '五子棋'
+const gameLabel = id => id === 'xiangqi' ? '中国象棋' : id === 'werewolf' ? '狼人杀' : '五子棋'
 const gameMeta = id => id === 'xiangqi'
   ? { board: '9 × 10', facts: '九路十线 · 楚河汉界 · 红方先手', shortRule: '九路十线中国象棋 · 红方先手 · 将死或困毙获胜' }
-  : { board: '15 × 15', facts: '15 × 15 · 黑方先手', shortRule: '15 × 15 自由五子棋 · 黑方先手 · 连五及以上获胜' }
-const sideLabel = (gameId, index) => `${playerSide({ id: gameId }, index)} · ${index ? '后手' : '先手'}`
+  : id === 'werewolf'
+    ? { board: '6 人', facts: '夜村 · 白天同一机位', shortRule: '2 狼、预言家、女巫、猎人、村民' }
+    : { board: '15 × 15', facts: '15 × 15 · 黑方先手', shortRule: '15 × 15 自由五子棋 · 黑方先手 · 连五及以上获胜' }
+const seatCount = gameId => gameId === 'werewolf' ? 6 : 2
+/* 狼人杀没有先后手：六个座位只是席位编号。 */
+const sideLabel = (gameId, index) => gameId === 'werewolf' ? `${playerSide({ id: gameId }, index)}位` : `${playerSide({ id: gameId }, index)} · ${index ? '后手' : '先手'}`
 const api = async (method, request) => {
   const result = await connection.rpc.call('/api', `aiArena/${method}`, { args: request === undefined ? {} : { request } })
   if (!result?.ok) throw new Error(result?.error?.message || '竞技台服务请求失败。')
@@ -46,9 +51,9 @@ function saveBlob(blob, filename) {
 function Field({ label, children }) { return h('label', { className: 'ar-field' }, h('span', null, label), children) }
 function Setup({ onStarted, open, onOpenChange, activeCount = 0, gameId = rememberedGameId, onGameChange }) {
   const [confirm, confirmation] = useConfirmation()
-  const catalog = useQuery('models'), gamesData = useQuery('games'), [selected, setSelected] = React.useState(['', ''])
+  const catalog = useQuery('models'), gamesData = useQuery('games'), [selected, setSelected] = React.useState(['', '', '', '', '', ''])
   const [selectedGame, setSelectedGame] = React.useState(gameId || 'gomoku')
-  const [effort, setEffort] = React.useState(['', '']), [busy, setBusy] = React.useState(false), [error, setError] = React.useState('')
+  const [effort, setEffort] = React.useState(['', '', '', '', '', '']), [busy, setBusy] = React.useState(false), [error, setError] = React.useState('')
   const routes = catalog.value || []
   // The model service returns unavailable routes with their advertised model
   // list so settings can explain what needs configuration. The arena picker
@@ -73,25 +78,26 @@ function Setup({ onStarted, open, onOpenChange, activeCount = 0, gameId = rememb
     event.preventDefault()
     if (busy) return
     const game = gamesData.value?.find(item => item.id === selectedGame), label = game?.name || gameLabel(selectedGame)
-    if (!await confirm({ title: `开始新的${label}比赛？`, description: '确认后将调用参赛模型并记录用量。竞技台展示这场新比赛，其他比赛可在比赛记录中查看。', notice: activeCount > 0 ? `已有 ${activeCount} 场比赛进行中。继续开始将并行运行一场新比赛。` : null, playerLabels: [0, 1].map(index => sideLabel(selectedGame, index)), players: selected.map(key => { const model = models.find(item => item.key === key); return model?.name || model?.id }), confirmLabel: '确认开始' })) return
+    const seats = Array.from({ length: seatCount(selectedGame) }, (_, index) => index)
+    if (!await confirm({ title: `开始新的${label}比赛？`, description: '确认后将调用参赛模型并记录用量。竞技台展示这场新比赛，其他比赛可在比赛记录中查看。', notice: activeCount > 0 ? `已有 ${activeCount} 场比赛进行中。继续开始将并行运行一场新比赛。` : null, playerLabels: seats.map(index => sideLabel(selectedGame, index)), players: seats.map(index => { const model = models.find(item => item.key === selected[index]); return model?.name || model?.id }), confirmLabel: '确认开始' })) return
     setBusy(true); setError('')
     try {
-      const players = selected.map((key, i) => { const model = models.find(item => item.key === key); return { provider: model.provider, model: model.id, ...(effort[i] ? { reasoningEffort: effort[i] } : {}) } })
+      const players = seats.map(i => { const model = models.find(item => item.key === selected[i]); return { provider: model.provider, model: model.id, ...(effort[i] ? { reasoningEffort: effort[i] } : {}) } })
       rememberedGameId = selectedGame
       onStarted(await api('start', { gameId: selectedGame, players }))
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
   return h('details', { className: 'ar-setup', open, onToggle: event => onOpenChange(event.currentTarget.open) }, h('summary', null, h('span', { className: 'ar-setup-title' }, h(Settings2), '参赛配置'), h(ChevronDown, { className: 'ar-setup-chevron' })), h('form', { className: 'ar-form', onSubmit: start },
     gamesData.value?.length ? h(Field, { label: '竞技游戏' }, h('select', { value: selectedGame, onChange: event => { setSelectedGame(event.target.value); rememberedGameId = event.target.value; onGameChange?.(event.target.value) }, 'aria-label': '竞技游戏' }, gamesData.value.map(game => h('option', { key: game.id, value: game.id }, game.name)))) : null,
-    h('div', { className: 'ar-participants' }, [0, 1].map(index => {
+    h('div', { className: 'ar-participants', 'data-game': selectedGame }, Array.from({ length: seatCount(selectedGame) }, (_, index) => index).map(index => {
       const model = models.find(item => item.key === selected[index])
       const groups = availableRoutes.map(route => h('optgroup', { key: route.id, label: route.name || route.id }, route.models.map(item => h('option', { key: item.id, value: JSON.stringify([route.id, item.id]) }, item.name || item.id))))
       return h('div', { key: index, className: 'ar-participant', 'data-game': selectedGame },
-        h('div', { className: 'ar-participant-head' }, h('i', { className: 'ar-stone', 'data-player': index }), `${playerSide({ id: selectedGame }, index)}选手`, h('small', null, index ? '后手' : '先手')),
+        h('div', { className: 'ar-participant-head' }, h('i', { className: 'ar-stone', 'data-player': index }), `${playerSide({ id: selectedGame }, index)}选手`, h('small', null, selectedGame === 'werewolf' ? '身份随机发放' : index ? '后手' : '先手')),
         h(Field, { label: '参赛模型' }, h('select', { 'aria-label': `${playerSide({ id: selectedGame }, index)}模型`, value: selected[index], onChange: event => pick(index, event.target.value), required: true }, h('option', { value: '' }, '选择模型'), groups)),
         model?.reasoning?.efforts?.length ? h(Field, { label: '推理强度' }, h('select', { value: effort[index], onChange: event => setEffort(previous => previous.map((item, i) => i === index ? event.target.value : item)) }, h('option', { value: '' }, '模型默认'), model.reasoning.efforts.map(item => h('option', { key: item.id, value: item.id }, item.label || item.id)))) : null)
     })),
-    h('div', { className: 'ar-submit' }, h('span', { className: 'ar-muted' }, '按棋规判定胜负 · 违规重试一次后判负'), h('button', { className: 'ar-button ar-primary', type: 'submit', disabled: busy || selected.some(key => !models.some(model => model.key === key && model.selectable !== false)) }, h(Play, { size: 16 }), busy ? '准备比赛…' : '开始比赛')),
+    h('div', { className: 'ar-submit' }, h('span', { className: 'ar-muted' }, selectedGame === 'werewolf' ? '按狼人杀规则判定胜负 · 违规重试一次后判负' : '按棋规判定胜负 · 违规重试一次后判负'), h('button', { className: 'ar-button ar-primary', type: 'submit', disabled: busy || selected.slice(0, seatCount(selectedGame)).some(key => !models.some(model => model.key === key && model.selectable !== false)) }, h(Play, { size: 16 }), busy ? '准备比赛…' : '开始比赛')),
     (error || catalog.error) && h('div', { className: 'ar-error', role: 'alert' }, error || catalog.error)), confirmation)
 }
 function Conversation({ match, turnId, renderConversation, focusSession }) {
@@ -108,7 +114,7 @@ function Conversation({ match, turnId, renderConversation, focusSession }) {
   const focus = () => { if (current?.sessionId) focusSession?.(current.sessionId) }
   return h('section', { className: 'ar-conversation', 'aria-label': 'DSH 官方对话', onPointerDownCapture: focus, onFocusCapture: focus },
     h('div', { className: 'ar-conversation-head' }, h('h2', { className: 'ar-section-title' }, 'DSH 官方对话'), h('span', { className: 'ar-chip' }, '比赛会话 · 只读')),
-    h('div', { className: 'ar-actions' }, [0, 1].map(index => h('button', { key: index, type: 'button', className: `ar-button${currentPlayer === index ? ' ar-live' : ''}`, 'aria-pressed': currentPlayer === index, onClick: () => { setPlayer(index); setSelected(null) } }, `${playerSide(match.game, index)} · ${match.players[index].name}`)),
+    h('div', { className: 'ar-actions' }, match.players.map((item, index) => h('button', { key: index, type: 'button', className: `ar-button${currentPlayer === index ? ' ar-live' : ''}`, 'aria-pressed': currentPlayer === index, onClick: () => { setPlayer(index); setSelected(null) } }, `${playerSide(match.game, index)} · ${item.name}`)),
       h('select', { className: 'ar-select ar-turn-select', 'aria-label': '查看决策会话', value: current?.request.turnId || '', onChange: event => setSelected(event.target.value) }, choices.map(turn => h('option', { key: turn.request.turnId, value: turn.request.turnId }, `第 ${turn.moveNumber} 手${turn.request.attempt ? ` · 重试 ${turn.request.attempt}` : ''}${turn.error ? ' · 未完成' : ''}`)))),
     h('p', { className: 'ar-muted' }, current?.request.contextMode === 'current-position' || match.config.contextMode === 'current-position' && !current
       ? '每次发送当前棋盘与规则，选手在各自的连续会话中决策。' : '历史比赛沿用选手会话，可查看其中的多轮记录。'),
@@ -190,17 +196,32 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
       match.status === 'running' && h(IconButton, { icon: Pause, title: '回合结束后暂停', disabled: !!busy, onClick: () => run('pause', () => api('control', { id, action: 'pause' })) }),
       ['running', 'pausing', 'paused'].includes(match.status) && h(IconButton, { icon: Square, title: '取消比赛', disabled: !!busy, onClick: async () => { if (await confirm({ title: '取消这场比赛？', description: '取消后停止继续落子，已完成的落子、选手发言和用量记录会保留。', confirmLabel: '确认取消比赛' })) run('cancel', () => api('control', { id, action: 'cancel' })) } }))),
     match.status === 'paused' && h(Button, { primary: true, icon: Play, disabled: !!busy, onClick: () => run('resume', () => api('control', { id, action: 'resume' })) }, '继续比赛'),
-    h('div', { className: 'ar-match' }, h('div', { className: 'ar-board-col' },
-      h('div', { className: 'ar-scoreboard' }, h(Player, { player: match.players[0], index: 0, gameId: match.game?.id }), h('span', { className: 'ar-vs' }, 'VS'), h(Player, { player: match.players[1], index: 1, gameId: match.game?.id })),
-      h('div', { className: 'ar-board', key: currentStep, dangerouslySetInnerHTML: { __html: boardSvg(frame.moves, { gameId: match.game?.id }) } }),
-      h('div', { className: 'ar-toolbar' }, h(IconButton, { icon: SkipBack, title: '回到开局', onClick: () => seek(0) }), h(IconButton, { icon: ChevronLeft, title: '上一步', onClick: () => seek(Math.max(0, currentStep - 1)), disabled: currentStep === 0 }), h(IconButton, { icon: playing ? Pause : Play, title: playing ? '暂停回放' : '播放回放', disabled: !moves.length, onClick: () => { if (playing) setPlaying(false); else { if (step === null || currentStep >= moves.length) setStep(0); setPlaying(true) } } }), h(IconButton, { icon: ChevronRight, title: '下一步', onClick: () => seek(Math.min(moves.length, currentStep + 1)), disabled: currentStep === moves.length }),
-        h('input', { type: 'range', 'aria-label': '比赛回放进度', min: 0, max: moves.length, value: currentStep, onChange: event => seek(Number(event.target.value)) }), h('span', { className: 'ar-counter' }, `${currentStep} / ${moves.length}`), h('select', { className: 'ar-select', style: { width: 60 }, value: speed, 'aria-label': '回放速度', onChange: event => setSpeed(event.target.value) }, ['0.5', '1', '2', '4'].map(value => h('option', { key: value, value }, `${value}×`))), h(IconButton, { icon: Radio, title: '跟随最新回合', onClick: () => { setPlaying(false); setStep(null) }, className: `ar-icon${step === null ? ' ar-live' : ''}` }))),
-      h('aside', { className: 'ar-commentary' }, h('div', { className: 'ar-commentary-head' }, h('h2', { className: 'ar-section-title' }, '选手发言'), h('span', { className: 'ar-chip' }, thinking ? '决策中' : `第 ${currentStep} 手`)),
+    h('div', { className: 'ar-match' },
+      h('div', { className: 'ar-board-col' },
+        match.game?.id === 'werewolf'
+          ? h(WerewolfStage, { match, active: currentPlayer, speech: thinking ? phaseLabel : frame.current?.speech || '' })
+          : h(React.Fragment, null,
+              h('div', { className: 'ar-scoreboard' }, h(Player, { player: match.players[0], index: 0, gameId: match.game?.id }), h('span', { className: 'ar-vs' }, 'VS'), h(Player, { player: match.players[1], index: 1, gameId: match.game?.id })),
+              h('div', { className: 'ar-board', key: currentStep, dangerouslySetInnerHTML: { __html: boardSvg(frame.moves, { gameId: match.game?.id }) } })),
+        h('div', { className: 'ar-toolbar' },
+          h(IconButton, { icon: SkipBack, title: '回到开局', onClick: () => seek(0) }),
+          h(IconButton, { icon: ChevronLeft, title: '上一步', onClick: () => seek(Math.max(0, currentStep - 1)), disabled: currentStep === 0 }),
+          h(IconButton, { icon: playing ? Pause : Play, title: playing ? '暂停回放' : '播放回放', disabled: !moves.length, onClick: () => { if (playing) setPlaying(false); else { if (step === null || currentStep >= moves.length) setStep(0); setPlaying(true) } } }),
+          h(IconButton, { icon: ChevronRight, title: '下一步', onClick: () => seek(Math.min(moves.length, currentStep + 1)), disabled: currentStep === moves.length }),
+          h('input', { type: 'range', 'aria-label': '比赛回放进度', min: 0, max: moves.length, value: currentStep, onChange: event => seek(Number(event.target.value)) }),
+          h('span', { className: 'ar-counter' }, `${currentStep} / ${moves.length}`),
+          h('select', { className: 'ar-select', style: { width: 60 }, value: speed, 'aria-label': '回放速度', onChange: event => setSpeed(event.target.value) }, ['0.5', '1', '2', '4'].map(value => h('option', { key: value, value }, `${value}×`))),
+          h(IconButton, { icon: Radio, title: '跟随最新回合', onClick: () => { setPlaying(false); setStep(null) }, className: `ar-icon${step === null ? ' ar-live' : ''}` })),
+      ),
+      h('aside', { className: 'ar-commentary' },
+        h('div', { className: 'ar-commentary-head' }, h('h2', { className: 'ar-section-title' }, '选手发言'), h('span', { className: 'ar-chip' }, thinking ? '决策中' : `第 ${currentStep} 手`)),
         h('div', { className: 'ar-speaking', 'data-thinking': !!thinking }, h('div', { className: 'ar-speaking-name' }, h(MessageCircle), match.players[currentPlayer].name), h('p', { role: thinking ? 'status' : undefined }, thinking ? phaseLabel : frame.current?.speech || '等待第一步走子'), thinking ? h('div', { className: 'ar-generation' }, h('div', null, h('small', null, match.players[currentPlayer].reasoningEffort ? `推理强度：${match.players[currentPlayer].reasoningEffort}` : '模型默认推理'), h('small', null, `已用 ${elapsedSeconds.toFixed(1)} 秒`))) : frame.current && h('small', null, `${actionLabel(frame.current.action, match.game)} · ${(frame.current.elapsedMs / 1000).toFixed(1)} 秒`)),
         frame.result && h('div', { className: 'ar-result' }, h(Trophy), frame.result.message),
         h('div', { className: 'ar-transcript-title' }, h('span', null, '回合记录'), h('span', null, `${frame.speech.length} 条`)),
-        h('div', { className: 'ar-transcript' }, frame.speech.length ? frame.speech.map(event => h('button', { key: event.turnId, className: 'ar-speech', onClick: () => seek(event.moveNumber), 'aria-label': `查看第 ${event.moveNumber} 手` }, h('div', { className: 'ar-speech-head' }, h('span', { className: 'ar-speech-num' }, event.moveNumber), h('strong', null, match.players[event.player].name), h('small', null, actionLabel(event.action, match.game))), h('p', null, event.speech))) : h('div', { className: 'ar-empty' }, '暂无回合记录')))),
-    h(StatBar, { items: [{ label: '已完成走子', value: moves.length, tone: 'brand' }, { label: '决策回合', value: match.calls, detail: '含违规重试与未完成回合' }, { label: '累计 Token', value: match.tokens.toLocaleString(), detail: match.usageUnknown ? '用量不完整' : '服务商上报用量' }, { label: '比赛状态', value: statusLabel[match.status] || match.status, tone: match.status === 'finished' ? 'green' : undefined }] }),
+        h('div', { className: 'ar-transcript' }, frame.speech.length ? frame.speech.map(event => h('button', { key: event.turnId, className: 'ar-speech', onClick: () => seek(event.moveNumber), 'aria-label': `查看第 ${event.moveNumber} 手` }, h('div', { className: 'ar-speech-head' }, h('span', { className: 'ar-speech-num' }, event.moveNumber), h('strong', null, match.players[event.player].name), h('small', null, actionLabel(event.action, match.game))), h('p', null, event.speech))) : h('div', { className: 'ar-empty' }, '暂无回合记录')),
+      ),
+    ),
+    h(StatBar, { items: [{ label: match.game?.id === 'werewolf' ? '已完成动作' : '已完成走子', value: moves.length, tone: 'brand' }, { label: '决策回合', value: match.calls, detail: '含违规重试与未完成回合' }, { label: '累计 Token', value: match.tokens.toLocaleString(), detail: match.usageUnknown ? '用量不完整' : '服务商上报用量' }, { label: '比赛状态', value: statusLabel[match.status] || match.status, tone: match.status === 'finished' ? 'green' : undefined }] }),
     (error || data.error) && h('p', { className: 'ar-error', role: 'alert' }, error || data.error),
     lastError && h('p', { className: 'ar-error', role: 'alert' }, lastError.error),
     h('div', { className: 'ar-export' }, h('div', { className: 'ar-actions' }, h(Button, { icon: FileText, disabled: !!busy, onClick: () => run('report', () => downloadRecord('markdown')) }, '战报'), h(Button, { icon: Download, disabled: !!busy, onClick: () => run('json', () => downloadRecord('json')) }, '完整记录'), h(Button, { icon: Play, disabled: !!busy || match.export?.status === 'running', onClick: () => run('html', () => withAudio ? api('exportReplay', { id }) : downloadRecord('html')) }, match.export?.kind === 'html' && match.export?.status === 'running' ? `合成语音 ${match.export.speechDone || 0}/${match.export.speechTotal || '…'}…` : (withAudio ? '离线回放（有声）' : '离线回放')), match.export?.kind === 'html' && match.export?.status === 'succeeded' && h(IconButton, { icon: Download, title: '下载有声回放', disabled: !!busy, onClick: () => run('replay', () => downloadExport(false)) })),
@@ -208,6 +229,33 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
     h('p', { className: gate.enabled ? 'ar-muted' : 'ar-notice', role: 'status' }, lwbAccount ? gate.reason : '生成声音需要在比赛记录中导出。'),
     match.export?.status === 'failed' && h('p', { className: 'ar-error' }, match.export.error), notice && h('p', { className: 'ar-notice', role: 'status' }, notice), videoUrl && h('video', { className: 'ar-video', src: videoUrl, controls: true }),
     h(Conversation, { match, turnId: step === null ? match.events.findLast(event => event.type === 'request')?.turnId : frame.current?.turnId, renderConversation, focusSession }), confirmation)
+}
+function WerewolfStage({ match, active, speech }) {
+  const stage = werewolfStage({ players: match.players, state: match.state, active, speech })
+  const deaths = stage.deaths || []
+  const act = stage.winnerSide ? 'finale' : deaths.length ? 'death' : 'move'
+  return h('div', { className: 'ar-stage', 'data-scene': stage.scene, 'data-act': act, 'data-ar-stage': 'werewolf' },
+    h('img', { className: 'ar-stage-scene', alt: '', src: WEREWOLF_ART.scenes[stage.scene] }),
+    h('div', { className: 'ar-stage-mask', 'aria-hidden': true }),
+    h('header', { className: 'ar-stage-head' },
+      h('span', { className: 'ar-stage-day' }, `第 ${stage.day} 天 · ${stage.slot}`),
+      h('b', { className: 'ar-stage-phase' }, stage.phaseLabel)),
+    deaths.length ? h('p', { className: 'ar-stage-deaths' }, `${['day-speech', 'day-vote'].includes(stage.phase) ? '昨夜 ' : ''}${deaths.map(seat => `${seat} 号`).join('、')}出局`) : null,
+    h('div', { className: 'ar-stage-cast' }, stage.seats.map(seat => h('figure', {
+      key: seat.seat, className: 'ar-cast', 'data-alive': seat.alive ? 'true' : 'false',
+      'data-active': seat.active ? 'true' : 'false', 'data-role': seat.role,
+    },
+      h('span', { className: 'ar-cast-no' }, seat.seat),
+      h('span', { className: 'ar-cast-face' },
+        h('img', { alt: seat.name, src: WEREWOLF_ART.portraits[`${seat.portrait}${seat.alive ? '' : '-dead'}`] || WEREWOLF_ART.portraits.generic }),
+        h('i', { className: 'ar-cast-veil' }),
+        seat.alive ? null : h('span', { className: 'ar-cast-out' }, '出局')),
+      h('figcaption', null, h('b', null, seat.name), h('em', { className: 'ar-role-mark', 'data-role': seat.role }, seat.mark)))),
+    ),
+    speech ? h('p', { className: 'ar-stage-line' }, speech) : null,
+    stage.winnerSide ? h('div', { className: 'ar-stage-win', 'data-side': stage.winnerSide },
+      h('b', null, stage.winnerSide === 'wolf' ? '狼人获胜' : '好人获胜'),
+      h('span', null, stage.result)) : null)
 }
 function Player({ player, index, gameId = 'gomoku' }) { return h('div', { className: 'ar-player', 'data-game': gameId }, h('i', { className: 'ar-stone', 'data-player': index }), h('div', null, h('strong', null, player.name), h('small', null, `${sideLabel(gameId, index)} / ${player.providerName}`))) }
 function Arena({ renderConversation, focusSession }) {
@@ -219,15 +267,25 @@ function Arena({ renderConversation, focusSession }) {
   React.useEffect(() => { const timer = setInterval(matchesData.refresh, 2000); return () => clearInterval(timer) }, [matchesData.refresh])
   React.useEffect(() => { if (freshEntry) arenaEntryMode = 'resume' }, [freshEntry])
   const displayedActiveCount = initial && ['running', 'pausing'].includes(initial.status) && !matches.some(match => match.id === initial.id) ? activeCount + 1 : activeCount
-  return h(Frame, { tone: 'orange', kicker: '模型对战', title: 'AI竞技台', subtitle: '五子棋 / 中国象棋 · 模型自主决策 · 逐手回放', actions: h(Button, { primary: true, className: 'ar-config-button', icon: Settings2, onClick: () => setSetup(previous => !previous) }, '参赛配置') }, h(Setup, { gameId: selectedGame, onGameChange: setSelectedGame, open: setup, onOpenChange: setSetup, activeCount, onStarted: match => { setInitial(match); setId(match.id); rememberedId = match.id; setSetup(false); matchesData.refresh() } }),
-    id ? h(MatchView, { key: id, id, initial, activeCount: displayedActiveCount, renderConversation, focusSession }) : h('div', { className: 'ar-match', 'data-game': selectedGame }, h('div', { className: 'ar-board-col' }, h('div', { className: 'ar-scoreboard' }, h(Player, { index: 0, gameId: selectedGame, player: { name: '待选模型', providerName: '未参赛' } }), h('span', { className: 'ar-vs' }, 'VS'), h(Player, { index: 1, gameId: selectedGame, player: { name: '待选模型', providerName: '未参赛' } })), h('div', { className: 'ar-board', dangerouslySetInnerHTML: { __html: boardSvg([], { gameId: selectedGame }) } })), h('aside', { className: 'ar-commentary' }, h('div', { className: 'ar-commentary-head' }, h('h2', { className: 'ar-section-title' }, '选手发言'), h('span', { className: 'ar-chip' }, '未开始')), h('div', { className: 'ar-speaking', 'data-thinking': true }, h('div', { className: 'ar-speaking-name' }, h(MessageCircle), '等待参赛选手'), h('p', null, '比赛尚未开始')), h('div', { className: 'ar-transcript-title' }, '回合记录'), h('div', { className: 'ar-empty' }, activeCount ? `已有 ${activeCount} 场比赛进行中，可在比赛记录中查看。` : '暂无回合记录'))))
+  return h(Frame, { tone: 'orange', kicker: '模型对战', title: 'AI竞技台', subtitle: '五子棋 / 中国象棋 / 狼人杀 · 模型自主决策 · 逐手回放', actions: h(Button, { primary: true, className: 'ar-config-button', icon: Settings2, onClick: () => setSetup(previous => !previous) }, '参赛配置') }, h(Setup, { gameId: selectedGame, onGameChange: setSelectedGame, open: setup, onOpenChange: setSetup, activeCount, onStarted: match => { setInitial(match); setId(match.id); rememberedId = match.id; setSetup(false); matchesData.refresh() } }),
+    id ? h(MatchView, { key: id, id, initial, activeCount: displayedActiveCount, renderConversation, focusSession }) : h('div', { className: 'ar-match', 'data-game': selectedGame },
+      h('div', { className: 'ar-board-col' }, selectedGame === 'werewolf'
+        ? h(WerewolfStage, { match: { players: Array.from({ length: 6 }, (_, index) => ({ name: `${index + 1} 号待选` })), state: { phase: 'night-wolf', players: Array.from({ length: 6 }, (_, index) => ({ seat: index + 1, role: 'villager', alive: true })) } }, speech: '选择六名模型后开赛。' })
+        : h(React.Fragment, null, h('div', { className: 'ar-scoreboard' }, h(Player, { index: 0, gameId: selectedGame, player: { name: '待选模型', providerName: '未参赛' } }), h('span', { className: 'ar-vs' }, 'VS'), h(Player, { index: 1, gameId: selectedGame, player: { name: '待选模型', providerName: '未参赛' } })), h('div', { className: 'ar-board', dangerouslySetInnerHTML: { __html: boardSvg([], { gameId: selectedGame }) } }))),
+      h('aside', { className: 'ar-commentary' },
+        h('div', { className: 'ar-commentary-head' }, h('h2', { className: 'ar-section-title' }, '选手发言'), h('span', { className: 'ar-chip' }, '未开始')),
+        h('div', { className: 'ar-speaking', 'data-thinking': true }, h('div', { className: 'ar-speaking-name' }, h(MessageCircle), '等待参赛选手'), h('p', null, '比赛尚未开始')),
+        h('div', { className: 'ar-transcript-title' }, '回合记录'),
+        h('div', { className: 'ar-empty' }, activeCount ? `已有 ${activeCount} 场比赛进行中，可在比赛记录中查看。` : '暂无回合记录'),
+      ),
+    ))
 }
 function History({ renderConversation, focusSession, lwbAccount }) {
   const list = useQuery('matches'), [id, setId] = React.useState(null), [search, setSearch] = React.useState(''), [status, setStatus] = React.useState('')
   React.useEffect(() => { const timer = setInterval(list.refresh, 2000); return () => clearInterval(timer) }, [list.refresh])
   const matches = list.value || [], filtered = matches.filter(match => (!status || match.status === status) && `${match.title} ${gameName(match.game)} ${match.id}`.toLowerCase().includes(search.trim().toLowerCase()))
   if (id) return h(Frame, { tone: 'cyan', kicker: '比赛记录', title: '比赛回放', subtitle: matches.find(match => match.id === id)?.title, actions: h(Button, { primary: true, className: 'ar-back-button', icon: ArrowLeft, onClick: () => setId(null) }, '返回记录') }, h(MatchView, { key: id, id, activeCount: activeMatchCount(matches), onChange: list.refresh, renderConversation, focusSession, lwbAccount }))
-  return h(Frame, { tone: 'cyan', kicker: '对战档案', title: '比赛记录', subtitle: '五子棋 / 中国象棋', actions: h(IconButton, { icon: RefreshCw, title: '刷新比赛记录', onClick: list.refresh }) }, list.error && h('p', { className: 'ar-error' }, list.error),
+  return h(Frame, { tone: 'cyan', kicker: '对战档案', title: '比赛记录', subtitle: '五子棋 / 中国象棋 / 狼人杀', actions: h(IconButton, { icon: RefreshCw, title: '刷新比赛记录', onClick: list.refresh }) }, list.error && h('p', { className: 'ar-error' }, list.error),
     h(StatBar, { items: [{ label: '全部比赛', value: matches.length, tone: 'brand' }, { label: '正在比赛', value: activeMatchCount(matches) }, { label: '已结束', value: matches.filter(match => match.status === 'finished').length, tone: 'green' }, { label: '累计落子', value: matches.reduce((total, match) => total + match.moves, 0) }] }),
     h('div', { className: 'ar-history-toolbar' }, h('h2', { className: 'ar-section-title' }, '对战记录'), h('div', { className: 'ar-actions' }, h('input', { className: 'ar-search', type: 'search', placeholder: '搜索模型或比赛编号', 'aria-label': '搜索比赛', value: search, onChange: event => setSearch(event.target.value) }), h('select', { className: 'ar-select', 'aria-label': '比赛状态筛选', value: status, onChange: event => setStatus(event.target.value) }, h('option', { value: '' }, '全部状态'), Object.entries(statusLabel).map(([value, label]) => h('option', { key: value, value }, label))))),
     filtered.length ? h('nav', { className: 'ar-history-list', 'aria-label': '历史比赛' }, h('div', { className: 'ar-history-columns', 'aria-hidden': true }, h('span', null, '参赛选手'), h('span', null, '比赛时间'), h('span', null, '落子'), h('span', null, '状态'), h('span')), filtered.map(match => h('button', { key: match.id, className: 'ar-row', onClick: () => setId(match.id), 'aria-label': `回放 ${match.title} · ${match.moves} 手` }, h('span', { className: 'ar-row-title' }, h('strong', null, match.title), h('small', null, `${gameName(match.game)} · ${match.id.slice(0, 8)}`)), h('span', { className: 'ar-row-date' }, new Date(match.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })), h('span', { className: 'ar-row-count' }, `${match.moves} 手`), h(Status, { status: match.status }), h(ChevronRight)))) : h('div', { className: 'ar-empty' }, h(Trophy), list.value ? search || status ? '没有符合条件的比赛' : '暂无比赛记录' : '正在读取比赛记录…'))
@@ -241,7 +299,7 @@ function Games({ openPackMenu }) {
     if (!await confirm({ title: `准备一场新的${game.name}比赛？`, description: '确认后进入全新棋盘，再选择参赛模型和比赛配置。历史比赛保留在比赛记录中。', notice: activeCount > 0 ? `已有 ${activeCount} 场比赛进行中，进入新棋盘不会中断这些比赛。` : null, confirmLabel: '进入竞技台' })) return
     rememberedId = null; rememberedGameId = game.id; arenaEntryMode = 'fresh'; openPackMenu?.('arena')
   }
-  return h(Frame, { tone: 'violet', kicker: '竞技游戏', title: '游戏库', subtitle: `${games.value?.length || 0} 款游戏` }, games.error && h('p', { className: 'ar-error' }, games.error), h('div', { className: 'ar-game-grid' }, (games.value || []).map(game => h('article', { key: game.id, className: 'ar-game' }, h('div', { className: 'ar-game-preview', dangerouslySetInnerHTML: { __html: boardSvg(game.id === 'xiangqi' ? [] : example, { gameId: game.id }) } }), h('div', { className: 'ar-game-body' }, h('div', { className: 'ar-game-title' }, h('h2', null, game.name), h('span', { className: 'ar-chip', 'data-tone': 'page' }, '可竞技')), h('p', { className: 'ar-game-rule' }, game.description), h('div', { className: 'ar-game-facts' }, h('span', { className: 'ar-chip' }, gameMeta(game.id).board), h('span', { className: 'ar-chip' }, `${game.players} 位选手`), h('span', { className: 'ar-chip' }, game.id === 'xiangqi' ? '红方先手' : '黑方先手')), h('div', { className: 'ar-game-footer' }, h('span', null, `规则版本 ${game.version}`), h(Button, { primary: true, icon: Play, onClick: () => enterArena(game) }, '开始比赛')))))), confirmation)
+  return h(Frame, { tone: 'violet', kicker: '竞技游戏', title: '游戏库', subtitle: `${games.value?.length || 0} 款游戏` }, games.error && h('p', { className: 'ar-error' }, games.error), h('div', { className: 'ar-game-grid' }, (games.value || []).map(game => h('article', { key: game.id, className: 'ar-game' }, h('div', { className: 'ar-game-preview' }, game.id === 'werewolf' ? h('img', { alt: '', src: WEREWOLF_ART.scenes.night }) : h('div', { dangerouslySetInnerHTML: { __html: boardSvg(game.id === 'xiangqi' ? [] : example, { gameId: game.id }) } })), h('div', { className: 'ar-game-body' }, h('div', { className: 'ar-game-title' }, h('h2', null, game.name), h('span', { className: 'ar-chip', 'data-tone': 'page' }, '可竞技')), h('p', { className: 'ar-game-rule' }, game.description), h('div', { className: 'ar-game-facts' }, h('span', { className: 'ar-chip' }, gameMeta(game.id).board), h('span', { className: 'ar-chip' }, `${game.players} 位选手`), h('span', { className: 'ar-chip' }, game.id === 'werewolf' ? '狼人夜刀' : game.id === 'xiangqi' ? '红方先手' : '黑方先手')), h('div', { className: 'ar-game-footer' }, h('span', null, `规则版本 ${game.version}`), h(Button, { primary: true, icon: Play, onClick: () => enterArena(game) }, '开始比赛')))))), confirmation)
 }
 export function apply(ctx) {
   connection = ctx.connection

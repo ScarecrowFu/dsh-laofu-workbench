@@ -26,7 +26,7 @@
     "pack:list": "node lwb/pack-manager.mjs list",
     "pack:install": "node lwb/pack-manager.mjs install",
     "pack:remove": "node lwb/pack-manager.mjs remove",
-    "arena:build": "node lwb/packs/ai-arena/build-client.mjs && node lwb/packs/ai-arena/build-replay.mjs",
+    "arena:build": "node lwb/packs/ai-arena/build-werewolf-art.mjs && node lwb/packs/ai-arena/build-client.mjs && node lwb/packs/ai-arena/build-replay.mjs",
     "arena:test": "node --test lwb/packs/ai-arena/test/*.test.mjs",
     "check": "node scripts/check-syntax.mjs",
     "dsh:dump": "node lwb/dsh-launcher.mjs --dump-config",

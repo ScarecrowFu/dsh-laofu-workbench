@@ -1,8 +1,83 @@
 export const escapeHtml = value => String(value ?? '').replace(/[&<>"']/gu, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char])
 export const movesOf = match => (match.events || []).filter(event => event.type === 'move')
-export const gameName = game => game?.name || (game?.id === 'xiangqi' ? '中国象棋' : '五子棋')
-export const playerSide = (game, player) => game?.id === 'xiangqi' ? (player ? '黑方' : '红方') : (player ? '白方' : '黑方')
-export const actionLabel = (action, game) => game?.id === 'xiangqi' || (action?.from && action?.to)
+export const gameName = game => game?.name || (game?.id === 'xiangqi' ? '中国象棋' : game?.id === 'werewolf' ? '狼人杀' : '五子棋')
+export const playerSide = (game, player) => game?.id === 'werewolf' ? `${player + 1} 号` : game?.id === 'xiangqi' ? (player ? '黑方' : '红方') : (player ? '白方' : '黑方')
+export const ROLE_MARK = Object.freeze({ werewolf: '狼', seer: '预', witch: '巫', hunter: '猎', villager: '民' })
+export const ROLE_NAME = Object.freeze({ werewolf: '狼人', seer: '预言家', witch: '女巫', hunter: '猎人', villager: '村民' })
+/** 狼人杀每个阶段的中文名与所属场景。猎人开枪要按死因判断白天还是夜里。 */
+export const WEREWOLF_PHASE = Object.freeze({
+  'night-wolf': { label: '狼人行动', scene: 'night', slot: '夜间' },
+  'night-seer': { label: '预言家查验', scene: 'night', slot: '夜间' },
+  'night-witch': { label: '女巫用药', scene: 'night', slot: '夜间' },
+  dawn: { label: '天亮了', scene: 'night', slot: '黎明' },
+  'day-speech': { label: '白天发言', scene: 'day', slot: '白天' },
+  'day-vote': { label: '投票放逐', scene: 'day', slot: '白天' },
+  hunter: { label: '猎人开枪', scene: 'night', slot: '结算' },
+  resolve: { label: '结算', scene: 'night', slot: '结算' },
+  finished: { label: '终局', scene: 'day', slot: '终局' },
+})
+export const werewolfPhase = phase => WEREWOLF_PHASE[phase] || WEREWOLF_PHASE['night-wolf']
+export const werewolfScene = (phase, hunterCause) => phase === 'hunter' ? (hunterCause === 'vote' ? 'day' : 'night') : werewolfPhase(phase).scene
+export const werewolfPhaseLabel = (phase, hunterCause) => phase === 'hunter' ? '猎人开枪' : werewolfPhase(phase).label
+const WEREWOLF_SIDE = Object.freeze({ village: '好人阵营', wolf: '狼人阵营' })
+export const werewolfSideName = side => WEREWOLF_SIDE[side] || ''
+const PORTRAIT_KEY = Object.freeze([
+  ['chatgpt', ['chatgpt', 'openai', 'gpt']],
+  ['claude', ['claude']],
+  ['deepseek', ['deepseek']],
+  ['doubao', ['doubao', '豆包']],
+  ['kimi', ['kimi', 'moonshot']],
+  ['mimo', ['mimo']],
+  ['minimax', ['minimax']],
+  ['qwen', ['qwen', '千问']],
+  ['zhipu', ['zhipu', '智谱', 'glm']],
+])
+const PORTRAIT_FILES = Object.freeze(['chatgpt', 'claude', 'deepseek', 'doubao', 'kimi', 'mimo', 'minimax', 'qwen', 'zhipu', 'generic'])
+/** 立绘按模型名匹配；没命中时按座位错开，避免六席都拿到同一张通用图。 */
+export function portraitKey(player, seat = 0) {
+  const text = [player?.model, player?.provider, player?.providerName, player?.name].filter(Boolean).join(' ').toLowerCase()
+  const matched = PORTRAIT_KEY.find(([, needles]) => needles.some(needle => text.includes(needle)))?.[0]
+  if (matched) return matched
+  const slot = Number.isInteger(player?.id) ? player.id : seat
+  return PORTRAIT_FILES[slot % PORTRAIT_FILES.length]
+}
+/** 观战与回放共用的六席投影：座位、身份、存活、当前行动者。 */
+export function werewolfStage({ players = [], state = {}, active = null, speech = '' } = {}) {
+  const phase = state.phase || 'night-wolf'
+  const hunterCause = state.hunterCause || null
+  const scene = werewolfScene(phase, hunterCause)
+  const seats = (state.players || []).map((seat, index) => {
+    const alive = seat.alive !== false
+    return {
+      seat: seat.seat,
+      name: players[index]?.name || `${seat.seat} 号`,
+      portrait: portraitKey(players[index], index),
+      alive,
+      role: seat.role,
+      roleName: ROLE_NAME[seat.role] || '',
+      mark: ROLE_MARK[seat.role] || '',
+      active: active === index,
+    }
+  })
+  return {
+    scene, phase, day: state.day || 1,
+    phaseLabel: werewolfPhaseLabel(phase, hunterCause),
+    slot: werewolfPhase(phase).slot,
+    seats, speech, deaths: [...(state.lastNightDeaths || [])],
+    winnerSide: typeof state.winner === 'string' ? state.winner : null,
+    result: state.winner ? state.terminalReason : '',
+  }
+}
+export const actionLabel = (action, game) => game?.id === 'werewolf'
+  ? (() => {
+      const target = Number.isInteger(action?.target) ? `${action.target} 号` : ''
+      return ({
+        kill: `夜刀 ${target}`, check: `查验 ${target}`, shoot: `开枪带走 ${target}`,
+        vote: `投票 ${target}`, speak: '发言',
+        potion: action?.potion === 'save' ? '解药救人' : action?.potion === 'poison' ? `毒药 ${target}` : '空过',
+      })[action?.type] || '行动'
+    })()
+  : game?.id === 'xiangqi' || (action?.from && action?.to)
   ? Number.isInteger(action?.from?.row) && Number.isInteger(action?.from?.col) && Number.isInteger(action?.to?.row) && Number.isInteger(action?.to?.col) ? `${action.from.row}行${action.from.col}列 → ${action.to.row}行${action.to.col}列` : '等待走子'
   : Number.isInteger(action?.row) && Number.isInteger(action?.col) ? `${action.row} 行 ${action.col} 列` : '等待落子'
 export function frameAt(match, step) {
@@ -66,6 +141,7 @@ export function xiangqiBoardSvg(moves = [], { opacity = 1 } = {}) {
   return `${parts.join('')}</svg>`
 }
 export function boardSvg(moves, { size = 15, opacity = 1, gameId = '' } = {}) {
+  if (gameId === 'werewolf') return ''
   if (gameId === 'xiangqi' || moves?.some(isXiangqiMove)) return xiangqiBoardSvg(moves, { opacity })
   const margin = 34, gap = 32, end = margin + gap * (size - 1), extent = end + margin
   const parts = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${extent} ${extent}" role="img" aria-label="五子棋棋盘，${moves.length} 手"><defs><linearGradient id="ar-board-wood" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#d7a866"/><stop offset=".5" stop-color="#c6904e"/><stop offset="1" stop-color="#b9793f"/></linearGradient><radialGradient id="ar-stone-black" cx="30%" cy="25%"><stop offset="0" stop-color="#4a514c"/><stop offset=".55" stop-color="#1c2521"/><stop offset="1" stop-color="#0d1310"/></radialGradient><radialGradient id="ar-stone-white" cx="30%" cy="25%"><stop offset="0" stop-color="#fffdf7"/><stop offset=".65" stop-color="#e8e5dc"/><stop offset="1" stop-color="#bdb8ad"/></radialGradient></defs><rect width="${extent}" height="${extent}" rx="6" fill="url(#ar-board-wood)"/><path d="M 0 48 H ${extent} M 0 128 H ${extent} M 0 214 H ${extent} M 0 302 H ${extent} M 0 384 H ${extent}" stroke="#fff1c4" stroke-opacity=".12" stroke-width="2"/>`]

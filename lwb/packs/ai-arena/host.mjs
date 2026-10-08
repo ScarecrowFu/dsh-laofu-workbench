@@ -1,7 +1,8 @@
-import { randomUUID } from 'node:crypto'
+import { randomUUID, randomInt } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { decisionPrompt } from './decision-prompt.mjs'
 import { executeSessionTurn } from './dsh-session.mjs'
+import { WEREWOLF_SYSTEM, noteSpeech } from './werewolf.mjs'
 
 const now = () => new Date().toISOString()
 export const MAX_CONTINUATIONS = 2
@@ -12,9 +13,20 @@ const bounded = (value, fallback, min, max, label) => {
 }
 export const SYSTEM = '你正在参加一场真实规则的 AI 竞技。只依据收到的局面决策。你没有任何工具。只输出一个 JSON 对象：{"action":{"row":整数,"col":整数},"speech":"一句面向观众的简短选手发言"}。speech 使用中文，最多 80 字，表达你这一手的意图或判断，不要叙述完整内部推理，不要伪造对手发言。坐标从 1 开始。不得输出代码围栏或其他文字。'
 export const XIANGQI_SYSTEM = '你正在参加一场真实规则的中国象棋 AI 竞技。只依据收到的局面决策。你没有任何工具。只输出一个 JSON 对象：{"action":{"from":{"row":整数,"col":整数},"to":{"row":整数,"col":整数}},"speech":"一句面向观众的简短选手发言"}。speech 使用中文，最多 80 字，表达这一手的意图或判断，不要叙述完整内部推理，不要伪造对手发言。坐标从 1 开始，行从黑方顶端到红方底端为 1—10，列从左到右为 1—9。只能走合法着法，必须应将，不得让己方将帅被攻击。不得输出代码围栏或其他文字。裁决规则：吃将、将死、困毙均获胜；唯一的和棋是连续 120 半回合既没有吃子也没有兵卒向前推进；局面重复本身不判和，也不会结束比赛。局面字段：recentMoves 是最近若干手的紧凑记法，格式为「手数+走子方+棋子+起点行,列>终点行,列」，x 表示吃子、+ 表示将军，例如 12黑馬8,8>7,6；positionRepeats 是当前局面此前已出现过的次数；legalMoves 每项的 repeats 是走完该着法后新局面此前已出现过的次数；noProgressPlies 是距上一次吃子或兵卒向前推进的半回合数，noProgressLimit 是判和阈值。'
+const gameSystem = gameId => gameId === 'xiangqi' ? XIANGQI_SYSTEM : gameId === 'werewolf' ? WEREWOLF_SYSTEM : SYSTEM
+/* 每局重新发牌：不传 seed 时用真随机，并把结果记进 config 以便复盘复现。 */
+const freshSeed = () => randomInt(0, 2 ** 32)
 export function parseDecision(text, gameId = 'gomoku') {
   const value = JSON.parse(text.trim())
   if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.speech !== 'string' || !value.speech.trim() || value.speech.length > 80 || !value.action) throw new Error('回复必须包含合法的 action 和 1—80 字的 speech。')
+  if (gameId === 'werewolf') {
+    const type = value.action.type
+    if (!['kill', 'check', 'potion', 'shoot', 'speak', 'vote'].includes(type)) throw new Error('狼人杀动作类型无效。')
+    const action = { type }
+    if (value.action.target !== undefined) action.target = value.action.target
+    if (value.action.potion !== undefined) action.potion = value.action.potion
+    return { action, speech: value.speech.trim() }
+  }
   const action = gameId === 'xiangqi'
     ? { from: { row: value.action.from?.row, col: value.action.from?.col }, to: { row: value.action.to?.row, col: value.action.to?.col } }
     : { row: value.action.row, col: value.action.col }
@@ -61,10 +73,13 @@ export class ArenaHost {
     const config = {
       pace: 'native',
       invalidRetries: bounded(request.invalidRetries, 1, 0, 2, '违规重试次数'),
-      speechVisibility: 'spectator', system: game.id === 'xiangqi' ? XIANGQI_SYSTEM : SYSTEM,
+      speechVisibility: 'spectator', system: gameSystem(game.id),
       contextMode: 'current-position',
+      ...(game.id === 'werewolf' ? { seed: Number.isInteger(request.seed) ? request.seed >>> 0 : freshSeed() } : {}),
     }
-    const match = await this.store.create({ title: `${players[0].name} vs ${players[1].name}`, game: { id: game.id, name: game.name, version: game.version, description: game.description }, players, config, state: game.create() })
+    const title = game.id === 'werewolf' ? `狼人杀 · ${players.map(player => player.name).join(' / ')}` : `${players[0].name} vs ${players[1].name}`
+    const state = game.id === 'werewolf' ? game.create(config.seed) : game.create()
+    const match = await this.store.create({ title, game: { id: game.id, name: game.name, version: game.version, description: game.description }, players, config, state })
     this.launch(match.id)
     return match
   }
@@ -215,6 +230,7 @@ export class ArenaHost {
       try {
         decision = parseDecision(pending.response.text, match.game.id)
         next = this.games.get(match.game.id).apply(match.state, decision.action, pending.player)
+        if (match.game.id === 'werewolf') noteSpeech(next, pending.player, decision.speech)
       } catch (error) {
         match.events.push({ type: 'invalid', at: now(), turnId: pending.turnId, player: pending.player, attempt: pending.attempt, error: error.message, raw: pending.response.text })
         match.activeTurn = { player: pending.player, attempt: pending.attempt + 1, error: error.message }
@@ -232,15 +248,26 @@ export class ArenaHost {
         let match = await this.store.get(id)
         if (!['running', 'pausing'].includes(match.status)) return
         if (match.pending) { await this.commitPending(id); continue }
-        if (match.state.winner !== null || match.state.draw) {
-          await this.finish(id, { kind: match.state.draw ? 'draw' : 'win', winner: match.state.winner, message: match.state.draw ? (match.game.id === 'xiangqi' ? `中国象棋和棋（${match.state.terminalReason || '规则判定'}）。` : '棋盘已满，平局。') : `${match.players[match.state.winner].name} ${match.game.id === 'xiangqi' ? `获胜（${match.state.terminalReason || '将死或困毙'}）` : '连成五子，获胜'}。` }); return
+        if (match.game.id === 'werewolf' ? (match.state.phase === 'finished' || match.state.winner) : (match.state.winner !== null || match.state.draw)) {
+          const wolf = match.game.id === 'werewolf'
+          await this.finish(id, wolf
+            ? { kind: 'win', winner: match.state.winner, message: match.state.terminalReason }
+            : { kind: match.state.draw ? 'draw' : 'win', winner: match.state.winner, message: match.state.draw ? (match.game.id === 'xiangqi' ? `中国象棋和棋（${match.state.terminalReason || '规则判定'}）。` : '棋盘已满，平局。') : `${match.players[match.state.winner].name} ${match.game.id === 'xiangqi' ? `获胜（${match.state.terminalReason || '将死或困毙'}）` : '连成五子，获胜'}。` })
+          return
         }
         if (match.status === 'pausing') { await this.store.update(id, value => { value.status = 'paused' }); return }
         const attempt = match.activeTurn?.attempt || 0
+        const player = match.game.id === 'werewolf' ? match.state.pending[0] - 1 : match.state.nextPlayer
+        if (!Number.isInteger(player) || player < 0) { await this.store.update(id, value => { value.status = 'paused'; value.events.push({ type: 'interrupted', at: now(), message: '当前阶段没有行动者。' }) }); return }
         if (attempt > match.config.invalidRetries) {
-          await this.finish(id, { kind: 'forfeit', winner: 1 - match.state.nextPlayer, message: `${match.players[match.state.nextPlayer].name} 连续违规，判负。` }); return
+          if (match.game.id === 'werewolf') {
+            const offender = match.state.players[player]
+            const village = offender?.role === 'werewolf'
+            await this.finish(id, { kind: 'forfeit', winner: village ? 'village' : 'wolf', message: `${match.players[player].name} 连续违规，判负。` })
+          } else await this.finish(id, { kind: 'forfeit', winner: 1 - match.state.nextPlayer, message: `${match.players[match.state.nextPlayer].name} 连续违规，判负。` })
+          return
         }
-        const player = match.state.nextPlayer, model = match.players[player], turnId = randomUUID()
+        const model = match.players[player], turnId = randomUUID()
         const prompt = decisionPrompt(this.games.get(match.game.id), match.state, player, match.activeTurn?.error)
         match = await this.store.update(id, value => {
           if (value.status !== 'running') return

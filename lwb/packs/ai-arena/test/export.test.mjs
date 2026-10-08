@@ -6,7 +6,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ArenaStore } from '../store.mjs'
-import { ArenaExport, replayHtml, reportMarkdown } from '../export.mjs'
+import { ArenaExport, replayHtml, reportMarkdown, verifyVideoProbe } from '../export.mjs'
 import { clipDataUrl } from '../speech.mjs'
 import { boardSvg, frameAt } from '../presentation.mjs'
 
@@ -124,4 +124,16 @@ test('voiced replay is refused without an LWB login and reuses a cached clip', a
   assert.notEqual(leveled.equals(clip), true)
   const html = replayHtml(saved, new Map([[1, { seconds: 1.2, src: await clipDataUrl(first.get(1).file) }]]))
   assert.match(html, /data:audio\/mpeg;base64,/u)
+})
+
+test('成片自检：静音音轨不算配音，尺寸、时长、配音音轨各自判定', () => {
+  const silent = { streams: [{ codec_type: 'video', width: 1280, height: 720 }, { codec_type: 'audio' }], format: { duration: '11.05' } }
+  const request = { width: 1280, height: 720, frames: 330, fps: 30, spoken: [] }
+  /* Remotion 会给无声成片铺一条静音音轨：无配音时不要求音轨缺席 */
+  verifyVideoProbe(silent, request)
+  assert.throws(() => verifyVideoProbe({ ...silent, streams: [{ codec_type: 'video', width: 720, height: 1280 }] }, request), /尺寸不符/u)
+  assert.throws(() => verifyVideoProbe({ ...silent, format: { duration: '20' } }, request), /时长不符/u)
+  assert.throws(() => verifyVideoProbe({ streams: [{ codec_type: 'video', width: 1280, height: 720 }], format: { duration: '11.05' } }, { ...request, spoken: [1] }), /缺少配音音轨/u)
+  /* 真的混过配音时，音轨必须在 */
+  verifyVideoProbe(silent, { ...request, spoken: [1] })
 })
