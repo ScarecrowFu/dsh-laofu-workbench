@@ -157,3 +157,57 @@ export function boardSvg(moves, { size = 15, opacity = 1, gameId = '' } = {}) {
   })
   return `${parts.join('')}</svg>`
 }
+
+/* ---------------------------------------------------------------- 游戏库卡片
+   卡片口径（摘要、事实、封面种类）与赛制实现解耦：新增游戏在这里补一条即可；
+   没有条目的游戏退化成"首字海报"，所以封面永远不会是空白方块。 */
+export const GAME_CARDS = Object.freeze({
+  gomoku: Object.freeze({
+    cover: 'board', badge: '棋', note: '连五获胜',
+    tagline: '15×15 自由五子棋，黑方先手，无禁手；连续五颗及以上获胜。',
+    facts: Object.freeze(['15 × 15', '2 位选手', '黑方先手']),
+    /* 封面示例手顺：黑 4 连 + 白 3 子封头 + 最后一手高亮，一眼看出"再一子即胜"。 */
+    moves: Object.freeze([
+      { row: 8, col: 8, player: 0 }, { row: 7, col: 8, player: 1 },
+      { row: 8, col: 9, player: 0 }, { row: 7, col: 9, player: 1 },
+      { row: 8, col: 10, player: 0 }, { row: 7, col: 10, player: 1 },
+      { row: 8, col: 11, player: 0 },
+    ]),
+  }),
+  xiangqi: Object.freeze({
+    cover: 'board', badge: '棋', note: '将死获胜',
+    tagline: '10×9 中国象棋，红方先手；将死或困毙获胜，无进展判和。',
+    facts: Object.freeze(['9 × 10', '2 位选手', '红方先手']),
+    moves: Object.freeze([]),
+  }),
+  werewolf: Object.freeze({
+    cover: 'werewolf', badge: '牌', note: '阵营获胜',
+    tagline: '6 人标准局：2 狼、预言家、女巫、猎人、村民；隐藏身份，昼夜推进。',
+    facts: Object.freeze(['6 人', '6 位选手', '狼人夜刀']),
+  }),
+})
+/** 卡片口径：已知游戏读登记表，未知游戏用"人数 + 规则版本 + 首字海报"兜底。 */
+export function gameCard(game = {}) {
+  const known = GAME_CARDS[game.id]
+  return {
+    cover: known?.cover || 'poster',
+    badge: known?.badge || '',
+    note: known?.note || '',
+    tagline: known?.tagline || game.description || '',
+    facts: known?.facts || [game.players ? `${game.players} 位选手` : '', game.version ? `规则 ${game.version}` : ''].filter(Boolean),
+    poster: String(game.name || '').trim().slice(0, 1),
+  }
+}
+/** 封面里的棋盘：棋盘类游戏返回可内联的 SVG，狼人杀与未知游戏返回空串（交给舞台或海报）。 */
+export function gameCoverSvg(game = {}) {
+  const card = gameCard(game)
+  return card.cover === 'board' ? boardSvg(GAME_CARDS[game.id].moves, { gameId: game.id }) : ''
+}
+/* 封面用的六席演示阵容：发牌固定，只承担"这是隐藏身份游戏"的表达。 */
+export const WEREWOLF_COVER_ROLES = Object.freeze(['werewolf', 'werewolf', 'seer', 'witch', 'hunter', 'villager'])
+export function werewolfCoverSeats() {
+  return WEREWOLF_COVER_ROLES.map((role, index) => ({
+    seat: index + 1, role, active: index === 0,
+    portrait: portraitKey(null, index), mark: ROLE_MARK[role], roleName: ROLE_NAME[role],
+  }))
+}

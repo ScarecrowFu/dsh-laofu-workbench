@@ -21,6 +21,9 @@ await build({
   outfile: join(root, 'replay', 'runtime.js'),
   bundle: true, write: true, format: 'iife', platform: 'browser', target: 'es2022',
   minify: true, legalComments: 'none',
+  /* presentation.mjs 用 Object.freeze 登记的常量（棋盘之外的卡片口径等）不进这个包：
+     没有这个标记时 esbuild 不敢丢弃 freeze 调用，离线回放会被塞进用不到的展示数据。 */
+  pure: ['Object.freeze'],
 })
 console.log('replay/runtime.js 已生成')
 

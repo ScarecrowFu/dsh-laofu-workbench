@@ -1,6 +1,6 @@
 import React from 'react'
 import { Trophy, Settings2, Play, Pause, Square, SkipBack, ChevronDown, ChevronLeft, ChevronRight, ArrowLeft, Download, FileText, Film, RefreshCw, MessageCircle, Radio, Eye } from 'lucide-react'
-import { boardSvg, frameAt, movesOf, gameName, playerSide, actionLabel, werewolfStage } from './presentation.mjs'
+import { boardSvg, frameAt, movesOf, gameName, playerSide, actionLabel, werewolfStage, gameCard, gameCoverSvg, werewolfCoverSeats } from './presentation.mjs'
 import { WEREWOLF_ART } from './werewolf-art.mjs'
 import { CSS } from './styles.mjs'
 import { activeMatchCount, useConfirmation } from './confirmation.mjs'
@@ -10,11 +10,6 @@ const h = React.createElement
 let connection, rememberedId = null, rememberedGameId = 'gomoku', arenaEntryMode = 'resume'
 const statusLabel = { running: '比赛中', pausing: '回合结算后暂停', paused: '已暂停', finished: '已结束', cancelled: '已取消' }
 const gameLabel = id => id === 'xiangqi' ? '中国象棋' : id === 'werewolf' ? '狼人杀' : '五子棋'
-const gameMeta = id => id === 'xiangqi'
-  ? { board: '9 × 10', facts: '九路十线 · 楚河汉界 · 红方先手', shortRule: '九路十线中国象棋 · 红方先手 · 将死或困毙获胜' }
-  : id === 'werewolf'
-    ? { board: '6 人', facts: '夜村 · 白天同一机位', shortRule: '2 狼、预言家、女巫、猎人、村民' }
-    : { board: '15 × 15', facts: '15 × 15 · 黑方先手', shortRule: '15 × 15 自由五子棋 · 黑方先手 · 连五及以上获胜' }
 const seatCount = gameId => gameId === 'werewolf' ? 6 : 2
 /* 狼人杀没有先后手：六个座位只是席位编号。 */
 const sideLabel = (gameId, index) => gameId === 'werewolf' ? `${playerSide({ id: gameId }, index)}位` : `${playerSide({ id: gameId }, index)} · ${index ? '后手' : '先手'}`
@@ -290,16 +285,50 @@ function History({ renderConversation, focusSession, lwbAccount }) {
     h('div', { className: 'ar-history-toolbar' }, h('h2', { className: 'ar-section-title' }, '对战记录'), h('div', { className: 'ar-actions' }, h('input', { className: 'ar-search', type: 'search', placeholder: '搜索模型或比赛编号', 'aria-label': '搜索比赛', value: search, onChange: event => setSearch(event.target.value) }), h('select', { className: 'ar-select', 'aria-label': '比赛状态筛选', value: status, onChange: event => setStatus(event.target.value) }, h('option', { value: '' }, '全部状态'), Object.entries(statusLabel).map(([value, label]) => h('option', { key: value, value }, label))))),
     filtered.length ? h('nav', { className: 'ar-history-list', 'aria-label': '历史比赛' }, h('div', { className: 'ar-history-columns', 'aria-hidden': true }, h('span', null, '参赛选手'), h('span', null, '比赛时间'), h('span', null, '落子'), h('span', null, '状态'), h('span')), filtered.map(match => h('button', { key: match.id, className: 'ar-row', onClick: () => setId(match.id), 'aria-label': `回放 ${match.title} · ${match.moves} 手` }, h('span', { className: 'ar-row-title' }, h('strong', null, match.title), h('small', null, `${gameName(match.game)} · ${match.id.slice(0, 8)}`)), h('span', { className: 'ar-row-date' }, new Date(match.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })), h('span', { className: 'ar-row-count' }, `${match.moves} 手`), h(Status, { status: match.status }), h(ChevronRight)))) : h('div', { className: 'ar-empty' }, h(Trophy), list.value ? search || status ? '没有符合条件的比赛' : '暂无比赛记录' : '正在读取比赛记录…'))
 }
+/* 封面：棋盘用真实 boardSvg 现画，狼人杀复用观战页的六席舞台，其余走首字海报。
+   注意媒体层只有一层包裹（.ar-game-board / .ar-game-poster），
+   它的高度必须由样式表显式给出——少了尺寸就会塌成空白方块。 */
+function GameCover({ game }) {
+  const card = gameCard(game), svg = gameCoverSvg(game)
+  if (card.cover === 'werewolf') return h('div', { className: 'ar-game-cover-art ar-wf' },
+    h('img', { className: 'ar-wf-scene', alt: '', src: WEREWOLF_ART.scenes.night }),
+    h('div', { className: 'ar-wf-scrim' }),
+    h('div', { className: 'ar-wf-head' }, h('span', null, '第 1 夜'), h('strong', null, '狼人行动')),
+    h('div', { className: 'ar-wf-cast', role: 'img', 'aria-label': '狼人杀六席舞台：2 狼人、预言家、女巫、猎人、村民' }, werewolfCoverSeats().map(seat => h('figure', { key: seat.seat, className: 'ar-wf-seat', 'data-active': seat.active ? 'true' : undefined },
+      h('span', { className: 'ar-wf-no' }, seat.seat),
+      h('img', { alt: '', src: WEREWOLF_ART.portraits[seat.portrait] }),
+      h('em', { className: 'ar-wf-mark', 'data-role': seat.role, title: seat.roleName }, seat.mark)))))
+  return h('div', { className: 'ar-game-cover-art' }, svg
+    ? h('div', { className: 'ar-game-board', dangerouslySetInnerHTML: { __html: svg } })
+    : h('div', { className: 'ar-game-poster' }, h('span', null, card.poster || '棋')))
+}
+/** 页脚战绩：进行中优先，其次已完成场次，没有比赛时明确说"尚无比赛"。 */
+function gameRecord(game, matches) {
+  const own = matches.filter(match => match.game?.id === game.id), running = activeMatchCount(own)
+  if (running > 0) return h('b', { className: 'ar-game-live' }, `进行中 ${running}`)
+  const finished = own.filter(match => match.status === 'finished').length
+  return finished > 0 ? `已完成 ${finished}` : '尚无比赛'
+}
+function GameCard({ game, matches, onStart }) {
+  const card = gameCard(game)
+  return h('article', { className: 'ar-game', 'data-game': game.id },
+    h('div', { className: 'ar-game-cover' }, h(GameCover, { game }), card.badge && h('span', { className: 'ar-game-cover-badge' }, card.badge), card.note && h('span', { className: 'ar-game-cover-note' }, card.note)),
+    h('div', { className: 'ar-game-body' },
+      h('div', { className: 'ar-game-title' }, h('h2', null, game.name), h('span', { className: 'ar-chip', 'data-tone': 'page' }, '可竞技')),
+      card.tagline && h('p', { className: 'ar-game-rule' }, card.tagline),
+      card.facts.length ? h('div', { className: 'ar-game-facts' }, card.facts.map((fact, index) => h('span', { key: index, className: 'ar-chip' }, fact))) : null,
+      h('div', { className: 'ar-game-footer' }, h('span', null, `规则 ${game.version} · `, gameRecord(game, matches)), h(Button, { primary: true, icon: Play, onClick: () => onStart(game) }, '开始比赛'))))
+}
 function Games({ openPackMenu }) {
   const [confirm, confirmation] = useConfirmation()
   const games = useQuery('games'), matches = useQuery('matches'), activeCount = activeMatchCount(matches.value || [])
   React.useEffect(() => { const timer = setInterval(matches.refresh, 2000); return () => clearInterval(timer) }, [matches.refresh])
-  const example = [{ row: 8, col: 8, player: 0 }, { row: 8, col: 9, player: 1 }, { row: 7, col: 8, player: 0 }, { row: 9, col: 8, player: 1 }, { row: 6, col: 8, player: 0 }]
   const enterArena = async game => {
     if (!await confirm({ title: `准备一场新的${game.name}比赛？`, description: '确认后进入全新棋盘，再选择参赛模型和比赛配置。历史比赛保留在比赛记录中。', notice: activeCount > 0 ? `已有 ${activeCount} 场比赛进行中，进入新棋盘不会中断这些比赛。` : null, confirmLabel: '进入竞技台' })) return
     rememberedId = null; rememberedGameId = game.id; arenaEntryMode = 'fresh'; openPackMenu?.('arena')
   }
-  return h(Frame, { tone: 'violet', kicker: '竞技游戏', title: '游戏库', subtitle: `${games.value?.length || 0} 款游戏` }, games.error && h('p', { className: 'ar-error' }, games.error), h('div', { className: 'ar-game-grid' }, (games.value || []).map(game => h('article', { key: game.id, className: 'ar-game' }, h('div', { className: 'ar-game-preview' }, game.id === 'werewolf' ? h('img', { alt: '', src: WEREWOLF_ART.scenes.night }) : h('div', { dangerouslySetInnerHTML: { __html: boardSvg(game.id === 'xiangqi' ? [] : example, { gameId: game.id }) } })), h('div', { className: 'ar-game-body' }, h('div', { className: 'ar-game-title' }, h('h2', null, game.name), h('span', { className: 'ar-chip', 'data-tone': 'page' }, '可竞技')), h('p', { className: 'ar-game-rule' }, game.description), h('div', { className: 'ar-game-facts' }, h('span', { className: 'ar-chip' }, gameMeta(game.id).board), h('span', { className: 'ar-chip' }, `${game.players} 位选手`), h('span', { className: 'ar-chip' }, game.id === 'werewolf' ? '狼人夜刀' : game.id === 'xiangqi' ? '红方先手' : '黑方先手')), h('div', { className: 'ar-game-footer' }, h('span', null, `规则版本 ${game.version}`), h(Button, { primary: true, icon: Play, onClick: () => enterArena(game) }, '开始比赛')))))), confirmation)
+  return h(Frame, { tone: 'violet', kicker: '竞技游戏', title: '游戏库', subtitle: `${games.value?.length || 0} 款游戏` }, games.error && h('p', { className: 'ar-error' }, games.error),
+    h('div', { className: 'ar-game-grid' }, (games.value || []).map(game => h(GameCard, { key: game.id, game, matches: matches.value || [], onStart: enterArena }))), confirmation)
 }
 export function apply(ctx) {
   connection = ctx.connection
