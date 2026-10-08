@@ -115,7 +115,7 @@ test('portrait 与 landscape 的布局属性都由数据驱动', () => {
 test('象棋画面显示红黑身份、楚河汉界与起止坐标', () => {
   const xiangqi = {
     ...gomoku, id: 'cccccccc-cccc-cccc-cccc-cccccccccccc', title: '象棋演示',
-    game: { id: 'xiangqi', name: '中国象棋', description: '规则', version: '1.0.0' },
+    game: { id: 'xiangqi', name: '中国象棋', description: '规则', version: '1.1.0' },
     players: [{ name: '红方模型', provider: 'test', model: 'red' }, { name: '黑方模型', provider: 'test', model: 'black' }],
     events: [{ type: 'move', moveNumber: 1, player: 0, action: { from: { row: 8, col: 2 }, to: { row: 8, col: 5 } }, speech: '起炮' }],
     result: { kind: 'draw', winner: null, message: '和棋。' },

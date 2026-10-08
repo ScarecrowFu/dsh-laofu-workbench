@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { xiangqi } from '../xiangqi.mjs'
 import { ArenaGames } from '../games.mjs'
@@ -73,18 +74,76 @@ test('checkmate and stalemate end the game for the player with no reply', () => 
   assert.equal(ended.result, 'stalemate')
 })
 
-test('tracks threefold repetition and rejects moves after terminal state', () => {
+test('repeating a position never ends the game and is disclosed to the players', () => {
   let state = custom([piece(0, 'general', 10, 5), piece(1, 'general', 1, 6), piece(0, 'chariot', 9, 1), piece(1, 'chariot', 2, 9)])
-  const sequence = [
-    [0, move(9, 1, 9, 2)], [1, move(2, 9, 2, 8)],
-    [0, move(9, 2, 9, 1)], [1, move(2, 8, 2, 9)],
+  const cycle = [
     [0, move(9, 1, 9, 2)], [1, move(2, 9, 2, 8)],
     [0, move(9, 2, 9, 1)], [1, move(2, 8, 2, 9)],
   ]
-  for (const [player, action] of sequence) state = xiangqi.apply(state, action, player)
-  assert.equal(state.draw, true)
-  assert.equal(state.result, 'repetition')
-  assert.throws(() => xiangqi.apply(state, move(9, 1, 9, 2), 0), /结束/)
+  for (let lap = 0; lap < 4; lap += 1) for (const [player, action] of cycle) state = xiangqi.apply(state, action, player)
+  // Sixteen plies of shuffling: a 1.0.0 engine called this a draw, 1.1.0 keeps playing.
+  assert.equal(state.draw, false)
+  assert.equal(state.winner, null)
+  assert.equal(state.result, null)
+  assert.equal(state.halfmoveClock, 16)
+  const observation = xiangqi.observe(state, state.nextPlayer)
+  assert.equal(observation.positionRepeats, 5, '当前局面此前出现次数应当如实上报')
+  assert.equal(observation.noProgressPlies, 16)
+  assert.equal(observation.noProgressLimit, 120)
+  // The loop is visible in the move history and on the moves that would deepen it.
+  assert.equal(observation.recentMoves.length, 16)
+  assert.equal(observation.recentMoves.at(-1), '16黑車2,8>2,9')
+  assert.equal(observation.recentMoves.at(0), '1红俥9,1>9,2')
+  assert.equal(observation.recentMoves.at(-2), '15红俥9,2>9,1')
+  const continuing = observation.legalMoves.filter(move => move.repeats >= 2)
+  assert.ok(continuing.length > 0, '继续循环的着法必须带上 repeats 提示')
+  assert.ok(observation.legalMoves.every(move => Number.isInteger(move.repeats)))
+})
+
+test('a stalled game is closed by the no-progress rule while repeating', () => {
+  let state = { ...custom([piece(0, 'general', 10, 5), piece(1, 'general', 1, 6), piece(0, 'chariot', 9, 1), piece(1, 'chariot', 2, 9)]), halfmoveClock: 119 }
+  const next = xiangqi.apply(state, move(9, 1, 9, 2), 0)
+  assert.equal(next.draw, true)
+  assert.equal(next.result, 'move-limit')
+  assert.equal(next.terminalReason, `连续 120 半回合无吃子及兵卒向前推进和棋`)
+})
+
+test('prunes repetition history only at irreversible moves', () => {
+  const capture = custom([piece(0, 'general', 10, 5), piece(1, 'general', 1, 6), piece(0, 'chariot', 9, 1), piece(1, 'soldier', 6, 1)])
+  let state = capture
+  for (let i = 0; i < 3; i += 1) state = xiangqi.apply(state, move(9, 1, 9, 2), 0), state = xiangqi.apply(state, move(1, 6, 2, 6), 1), state = xiangqi.apply(state, move(9, 2, 9, 1), 0), state = xiangqi.apply(state, move(2, 6, 1, 6), 1)
+  assert.equal(state.positionHistory.length, 13, '可逆着法不得裁剪历史')
+  const afterCapture = xiangqi.apply(state, move(9, 1, 6, 1), 0)
+  assert.equal(afterCapture.positionHistory.length, 1, '吃子前的局面不可能再出现，历史应当裁剪到当前局面')
+  assert.equal(xiangqi.observe(afterCapture, 0).recentMoves.at(-1), '13红俥9,1>6,1x卒', '紧凑记法要标出吃子')
+  const sideways = { ...custom([piece(0, 'general', 10, 5), piece(1, 'general', 1, 6), piece(0, 'soldier', 5, 1)]), positionHistory: ['x', 'y'] }
+  assert.equal(xiangqi.apply(sideways, move(5, 1, 5, 2), 0).positionHistory.length, 3, '过河兵横走可逆，不得裁剪')
+})
+
+test('replays the recorded perpetual-check game without a repetition verdict', async () => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/xiangqi-perpetual-check-loop.json', import.meta.url), 'utf8'))
+  let state = xiangqi.create()
+  for (const entry of fixture.moves) state = xiangqi.apply(state, { from: entry.from, to: entry.to }, entry.player)
+  assert.equal(state.moves.length, 136)
+  // 1.0.0 called this a draw on the 136th ply while Black was up 14:2 in material.
+  // 1.1.0 refuses to judge the position dead: the game is still open.
+  assert.equal(state.draw, false)
+  assert.equal(state.winner, null)
+  assert.equal(state.result, null)
+  assert.equal(state.halfmoveClock, 30)
+  assert.ok(state.positionHistory.length <= 120, '重复历史必须被裁剪到无进展上限之内')
+  const observation = xiangqi.observe(state, state.nextPlayer)
+  assert.equal(observation.recentMoves.at(-1), '136黑馬8,8>10,7+', '紧凑记法要标出将军')
+  // Black checked on every one of its last five moves; the engine simply reports it
+  // and keeps playing instead of turning the loop into a verdict.
+  assert.equal(observation.recentMoves.filter(ply => ply.endsWith('+')).length, 5)
+  assert.equal(observation.positionRepeats, 3, '第 136 手的局面此前已在第 128、132 手出现过两次')
+  assert.ok(observation.legalMoves.length > 0)
+  assert.ok(observation.legalMoves.every(reply => Number.isInteger(reply.repeats)))
+  // 红方只剩光帅加一仕，重复提示是它继续周旋的唯一依据；黑方 8 子对 2 子大优却打摆子，引擎不再替它判和。
+  assert.equal(observation.noProgressPlies, 30)
+  assert.equal(state.pieces.filter(piece => piece.player === 0).length, 2)
+  assert.equal(state.pieces.filter(piece => piece.player === 1).length, 8)
 })
 
 test('accepts a normal opening sequence and does not mutate its input', () => {

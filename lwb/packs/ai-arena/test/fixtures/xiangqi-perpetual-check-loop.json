@@ -1,0 +1,1503 @@
+{
+ "name": "xiangqi-perpetual-check-loop",
+ "note": "deepseek-v4.1-flash(红) vs qwen3.8-flash(黑) 实盘 136 手。1.0.0 规则下第 136 手因「三次重复局面」判和（黑方全程长将、子力 14:2 大优）。1.1.0 规则下重复不再是裁决，棋局应当继续。",
+ "source": "match c206dab7-0fcc-46e7-ae22-aefc992ce497",
+ "moves": [
+  {
+   "player": 0,
+   "from": {
+    "row": 8,
+    "col": 8
+   },
+   "to": {
+    "row": 8,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 3,
+    "col": 8
+   },
+   "to": {
+    "row": 3,
+    "col": 5
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 2
+   },
+   "to": {
+    "row": 8,
+    "col": 3
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 1,
+    "col": 2
+   },
+   "to": {
+    "row": 3,
+    "col": 3
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 8
+   },
+   "to": {
+    "row": 8,
+    "col": 7
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 1,
+    "col": 8
+   },
+   "to": {
+    "row": 3,
+    "col": 7
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 7,
+    "col": 3
+   },
+   "to": {
+    "row": 6,
+    "col": 3
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 1,
+    "col": 9
+   },
+   "to": {
+    "row": 1,
+    "col": 8
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 9
+   },
+   "to": {
+    "row": 10,
+    "col": 8
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 1,
+    "col": 1
+   },
+   "to": {
+    "row": 2,
+    "col": 1
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 7,
+    "col": 5
+   },
+   "to": {
+    "row": 6,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 2,
+    "col": 1
+   },
+   "to": {
+    "row": 2,
+    "col": 4
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 6,
+    "col": 5
+   },
+   "to": {
+    "row": 5,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 2,
+    "col": 4
+   },
+   "to": {
+    "row": 5,
+    "col": 4
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 5,
+    "col": 5
+   },
+   "to": {
+    "row": 5,
+    "col": 4
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 3,
+    "col": 5
+   },
+   "to": {
+    "row": 2,
+    "col": 5
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 8
+   },
+   "to": {
+    "row": 1,
+    "col": 8
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 3,
+    "col": 7
+   },
+   "to": {
+    "row": 1,
+    "col": 8
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 8,
+    "col": 5
+   },
+   "to": {
+    "row": 2,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 3,
+    "col": 3
+   },
+   "to": {
+    "row": 2,
+    "col": 5
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 1
+   },
+   "to": {
+    "row": 8,
+    "col": 1
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 3,
+    "col": 2
+   },
+   "to": {
+    "row": 3,
+    "col": 3
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 8,
+    "col": 3
+   },
+   "to": {
+    "row": 6,
+    "col": 4
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 3,
+    "col": 3
+   },
+   "to": {
+    "row": 6,
+    "col": 3
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 8,
+    "col": 7
+   },
+   "to": {
+    "row": 7,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 6,
+    "col": 3
+   },
+   "to": {
+    "row": 5,
+    "col": 3
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 7,
+    "col": 1
+   },
+   "to": {
+    "row": 6,
+    "col": 1
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 1,
+    "col": 8
+   },
+   "to": {
+    "row": 3,
+    "col": 7
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 5,
+    "col": 4
+   },
+   "to": {
+    "row": 5,
+    "col": 3
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 4,
+    "col": 3
+   },
+   "to": {
+    "row": 5,
+    "col": 3
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 8,
+    "col": 2
+   },
+   "to": {
+    "row": 8,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 2,
+    "col": 5
+   },
+   "to": {
+    "row": 3,
+    "col": 3
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 6,
+    "col": 4
+   },
+   "to": {
+    "row": 4,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 3,
+    "col": 3
+   },
+   "to": {
+    "row": 4,
+    "col": 5
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 7,
+    "col": 5
+   },
+   "to": {
+    "row": 5,
+    "col": 6
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 4,
+    "col": 5
+   },
+   "to": {
+    "row": 6,
+    "col": 6
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 5,
+    "col": 6
+   },
+   "to": {
+    "row": 3,
+    "col": 7
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 6,
+    "col": 6
+   },
+   "to": {
+    "row": 5,
+    "col": 8
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 6,
+    "col": 1
+   },
+   "to": {
+    "row": 5,
+    "col": 1
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 5,
+    "col": 8
+   },
+   "to": {
+    "row": 3,
+    "col": 7
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 5,
+    "col": 1
+   },
+   "to": {
+    "row": 4,
+    "col": 1
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 3,
+    "col": 7
+   },
+   "to": {
+    "row": 2,
+    "col": 9
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 8,
+    "col": 1
+   },
+   "to": {
+    "row": 5,
+    "col": 1
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 2,
+    "col": 9
+   },
+   "to": {
+    "row": 3,
+    "col": 7
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 5,
+    "col": 1
+   },
+   "to": {
+    "row": 5,
+    "col": 3
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 1,
+    "col": 5
+   },
+   "to": {
+    "row": 2,
+    "col": 5
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 5,
+    "col": 3
+   },
+   "to": {
+    "row": 2,
+    "col": 3
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 2,
+    "col": 5
+   },
+   "to": {
+    "row": 1,
+    "col": 5
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 2,
+    "col": 3
+   },
+   "to": {
+    "row": 2,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 1,
+    "col": 5
+   },
+   "to": {
+    "row": 2,
+    "col": 5
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 8,
+    "col": 5
+   },
+   "to": {
+    "row": 4,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 3,
+    "col": 7
+   },
+   "to": {
+    "row": 4,
+    "col": 5
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 4,
+    "col": 1
+   },
+   "to": {
+    "row": 3,
+    "col": 1
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 1,
+    "col": 3
+   },
+   "to": {
+    "row": 3,
+    "col": 5
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 3,
+    "col": 1
+   },
+   "to": {
+    "row": 2,
+    "col": 1
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 4,
+    "col": 5
+   },
+   "to": {
+    "row": 3,
+    "col": 3
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 2,
+    "col": 1
+   },
+   "to": {
+    "row": 1,
+    "col": 1
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 2,
+    "col": 5
+   },
+   "to": {
+    "row": 2,
+    "col": 4
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 7,
+    "col": 7
+   },
+   "to": {
+    "row": 6,
+    "col": 7
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 3,
+    "col": 3
+   },
+   "to": {
+    "row": 4,
+    "col": 5
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 6,
+    "col": 7
+   },
+   "to": {
+    "row": 5,
+    "col": 7
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 4,
+    "col": 5
+   },
+   "to": {
+    "row": 5,
+    "col": 7
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 7,
+    "col": 9
+   },
+   "to": {
+    "row": 6,
+    "col": 9
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 5,
+    "col": 7
+   },
+   "to": {
+    "row": 6,
+    "col": 9
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 1,
+    "col": 1
+   },
+   "to": {
+    "row": 1,
+    "col": 2
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 6,
+    "col": 9
+   },
+   "to": {
+    "row": 5,
+    "col": 7
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 1,
+    "col": 2
+   },
+   "to": {
+    "row": 1,
+    "col": 3
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 1,
+    "col": 4
+   },
+   "to": {
+    "row": 2,
+    "col": 5
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 1,
+    "col": 3
+   },
+   "to": {
+    "row": 1,
+    "col": 2
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 2,
+    "col": 5
+   },
+   "to": {
+    "row": 1,
+    "col": 4
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 3
+   },
+   "to": {
+    "row": 8,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 2,
+    "col": 4
+   },
+   "to": {
+    "row": 3,
+    "col": 4
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 1,
+    "col": 2
+   },
+   "to": {
+    "row": 1,
+    "col": 3
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 3,
+    "col": 5
+   },
+   "to": {
+    "row": 1,
+    "col": 3
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 5
+   },
+   "to": {
+    "row": 9,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 5,
+    "col": 7
+   },
+   "to": {
+    "row": 7,
+    "col": 6
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 9,
+    "col": 5
+   },
+   "to": {
+    "row": 10,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 7,
+    "col": 6
+   },
+   "to": {
+    "row": 8,
+    "col": 4
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 5
+   },
+   "to": {
+    "row": 9,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 4,
+    "col": 9
+   },
+   "to": {
+    "row": 5,
+    "col": 9
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 8,
+    "col": 5
+   },
+   "to": {
+    "row": 6,
+    "col": 7
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 8,
+    "col": 4
+   },
+   "to": {
+    "row": 7,
+    "col": 6
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 9,
+    "col": 5
+   },
+   "to": {
+    "row": 8,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 7,
+    "col": 6
+   },
+   "to": {
+    "row": 6,
+    "col": 4
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 8,
+    "col": 5
+   },
+   "to": {
+    "row": 8,
+    "col": 6
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 6,
+    "col": 4
+   },
+   "to": {
+    "row": 8,
+    "col": 3
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 8,
+    "col": 6
+   },
+   "to": {
+    "row": 8,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 8,
+    "col": 3
+   },
+   "to": {
+    "row": 10,
+    "col": 4
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 8,
+    "col": 5
+   },
+   "to": {
+    "row": 9,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 4,
+    "col": 7
+   },
+   "to": {
+    "row": 5,
+    "col": 7
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 9,
+    "col": 5
+   },
+   "to": {
+    "row": 10,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 5,
+    "col": 7
+   },
+   "to": {
+    "row": 6,
+    "col": 7
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 5
+   },
+   "to": {
+    "row": 9,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 6,
+    "col": 7
+   },
+   "to": {
+    "row": 7,
+    "col": 7
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 7
+   },
+   "to": {
+    "row": 8,
+    "col": 9
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 7,
+    "col": 7
+   },
+   "to": {
+    "row": 8,
+    "col": 7
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 9,
+    "col": 5
+   },
+   "to": {
+    "row": 10,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 10,
+    "col": 4
+   },
+   "to": {
+    "row": 8,
+    "col": 3
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 6
+   },
+   "to": {
+    "row": 9,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 8,
+    "col": 7
+   },
+   "to": {
+    "row": 8,
+    "col": 8
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 5
+   },
+   "to": {
+    "row": 10,
+    "col": 6
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 8,
+    "col": 8
+   },
+   "to": {
+    "row": 8,
+    "col": 9
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 6
+   },
+   "to": {
+    "row": 10,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 8,
+    "col": 9
+   },
+   "to": {
+    "row": 9,
+    "col": 9
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 5
+   },
+   "to": {
+    "row": 10,
+    "col": 6
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 9,
+    "col": 9
+   },
+   "to": {
+    "row": 10,
+    "col": 9
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 6
+   },
+   "to": {
+    "row": 9,
+    "col": 6
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 8,
+    "col": 3
+   },
+   "to": {
+    "row": 7,
+    "col": 5
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 9,
+    "col": 6
+   },
+   "to": {
+    "row": 8,
+    "col": 6
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 7,
+    "col": 5
+   },
+   "to": {
+    "row": 6,
+    "col": 7
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 8,
+    "col": 6
+   },
+   "to": {
+    "row": 9,
+    "col": 6
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 6,
+    "col": 7
+   },
+   "to": {
+    "row": 8,
+    "col": 8
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 9,
+    "col": 6
+   },
+   "to": {
+    "row": 10,
+    "col": 6
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 8,
+    "col": 8
+   },
+   "to": {
+    "row": 7,
+    "col": 6
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 6
+   },
+   "to": {
+    "row": 10,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 7,
+    "col": 6
+   },
+   "to": {
+    "row": 9,
+    "col": 7
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 5
+   },
+   "to": {
+    "row": 10,
+    "col": 6
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 10,
+    "col": 9
+   },
+   "to": {
+    "row": 10,
+    "col": 8
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 6
+   },
+   "to": {
+    "row": 9,
+    "col": 6
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 9,
+    "col": 7
+   },
+   "to": {
+    "row": 8,
+    "col": 9
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 9,
+    "col": 6
+   },
+   "to": {
+    "row": 10,
+    "col": 6
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 8,
+    "col": 9
+   },
+   "to": {
+    "row": 7,
+    "col": 7
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 6
+   },
+   "to": {
+    "row": 10,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 7,
+    "col": 7
+   },
+   "to": {
+    "row": 9,
+    "col": 8
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 9,
+    "col": 5
+   },
+   "to": {
+    "row": 8,
+    "col": 4
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 9,
+    "col": 8
+   },
+   "to": {
+    "row": 8,
+    "col": 6
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 5
+   },
+   "to": {
+    "row": 9,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 8,
+    "col": 6
+   },
+   "to": {
+    "row": 10,
+    "col": 7
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 9,
+    "col": 5
+   },
+   "to": {
+    "row": 10,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 10,
+    "col": 7
+   },
+   "to": {
+    "row": 8,
+    "col": 6
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 10,
+    "col": 5
+   },
+   "to": {
+    "row": 9,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 8,
+    "col": 6
+   },
+   "to": {
+    "row": 10,
+    "col": 7
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 9,
+    "col": 5
+   },
+   "to": {
+    "row": 8,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 10,
+    "col": 7
+   },
+   "to": {
+    "row": 8,
+    "col": 8
+   }
+  },
+  {
+   "player": 0,
+   "from": {
+    "row": 8,
+    "col": 5
+   },
+   "to": {
+    "row": 9,
+    "col": 5
+   }
+  },
+  {
+   "player": 1,
+   "from": {
+    "row": 8,
+    "col": 8
+   },
+   "to": {
+    "row": 10,
+    "col": 7
+   }
+  }
+ ]
+}

@@ -118,6 +118,10 @@ test('xiangqi parses source/destination moves and runs an isolated multi-turn ma
   assert.match(match.config.system, /"from".*"to"/u)
   assert.match(match.config.system, /中国象棋/u)
   assert.match(match.config.system, /行.*1.*10/u)
+  // 裁决规则必须构成性披露：重复不判和，且唯一的和棋是无进展。
+  assert.match(match.config.system, /局面重复本身不判和/u)
+  assert.match(match.config.system, /120 半回合/u)
+  assert.match(match.config.system, /recentMoves.*positionRepeats.*noProgressPlies/u)
   const recordedMoves = match.events.filter(event => event.type === 'move')
   assert.deepEqual(recordedMoves.map(event => event.action), opening.map(([fromRow, fromCol, toRow, toCol]) => ({ from: { row: fromRow, col: fromCol }, to: { row: toRow, col: toCol } })))
   assert.deepEqual(recordedMoves.map(event => event.player), [0, 1, 0, 1, 0, 1])
@@ -126,7 +130,12 @@ test('xiangqi parses source/destination moves and runs an isolated multi-turn ma
     assert.equal(request.system, match.config.system)
     assert.match(request.prompt, /"legalMoves"/u)
     assert.ok(!request.prompt.includes('象棋观众台词'))
+    // 只披露本手需要的局面信息：完整着法数组不泄路，最近着法与重复计数必须给出。
     assert.ok(!request.prompt.includes('"moves"'))
+    assert.match(request.prompt, /"recentMoves"/u)
+    assert.match(request.prompt, /"positionRepeats":/u)
+    assert.match(request.prompt, /"noProgressLimit":120/u)
+    assert.match(request.prompt, /"repeats":/u)
   }
   assert.match(requests[0].prompt, /"color":"红"/u)
   assert.match(requests[1].prompt, /"color":"黑"/u)
@@ -134,6 +143,34 @@ test('xiangqi parses source/destination moves and runs an isolated multi-turn ma
   assert.equal(new Set(match.events.filter(event => event.type === 'request').map(event => event.sessionId)).size, 2)
   assert.equal(env.host.sessions.size, 0)
   assert.deepEqual(parseDecision(xiangqiReply(10, 2, 8, 3, '出马').text, 'xiangqi'), { action: { from: { row: 10, col: 2 }, to: { row: 8, col: 3 } }, speech: '出马' })
+})
+
+test('a stalled xiangqi match ends as a no-progress draw, the only stagnation verdict left', async t => {
+  const requests = []
+  const env = await setup(t, async request => { requests.push(request); return xiangqiReply(9, 1, 9, 2, '出车试探。') })
+  const state = {
+    rows: 10, cols: 9, nextPlayer: 0, moves: [], winner: null, draw: false, check: false, terminalReason: null,
+    halfmoveClock: 119, positionHistory: [],
+    pieces: [{ player: 0, type: 'general', row: 10, col: 5 }, { player: 0, type: 'chariot', row: 9, col: 1 }, { player: 1, type: 'general', row: 1, col: 6 }, { player: 1, type: 'chariot', row: 2, col: 9 }],
+  }
+  const match = await env.store.create({
+    game: env.host.games.list().find(game => game.id === 'xiangqi'),
+    players: [{ name: '红方', provider: 'test', model: 'red' }, { name: '黑方', provider: 'test', model: 'black' }],
+    config: { pace: 'native', invalidRetries: 1, speechVisibility: 'spectator', system: 'Rules', contextMode: 'current-position' },
+    state,
+  })
+  await env.store.update(match.id, value => { value.status = 'paused' })
+  await env.host.control({ id: match.id, action: 'resume' })
+  await env.settle()
+  const finished = await env.store.get(match.id)
+  assert.equal(requests.length, 1, '无进展判和应当在触发当手结算后立即结束，不再请求下一手')
+  assert.equal(finished.status, 'finished')
+  assert.equal(finished.state.result, 'move-limit')
+  assert.equal(finished.state.halfmoveClock, 120)
+  assert.equal(finished.result.kind, 'draw')
+  assert.equal(finished.result.winner, null)
+  assert.match(finished.result.message, /中国象棋和棋/u)
+  assert.match(finished.result.message, /无吃子及兵卒向前推进/u)
 })
 
 test('xiangqi invalid moves retry the same position without committing a move or leaking speech', async t => {

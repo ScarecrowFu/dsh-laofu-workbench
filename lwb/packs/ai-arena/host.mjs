@@ -11,7 +11,7 @@ const bounded = (value, fallback, min, max, label) => {
   return number
 }
 export const SYSTEM = '你正在参加一场真实规则的 AI 竞技。只依据收到的局面决策。你没有任何工具。只输出一个 JSON 对象：{"action":{"row":整数,"col":整数},"speech":"一句面向观众的简短选手发言"}。speech 使用中文，最多 80 字，表达你这一手的意图或判断，不要叙述完整内部推理，不要伪造对手发言。坐标从 1 开始。不得输出代码围栏或其他文字。'
-export const XIANGQI_SYSTEM = '你正在参加一场真实规则的中国象棋 AI 竞技。只依据收到的局面决策。你没有任何工具。只输出一个 JSON 对象：{"action":{"from":{"row":整数,"col":整数},"to":{"row":整数,"col":整数}},"speech":"一句面向观众的简短选手发言"}。speech 使用中文，最多 80 字，表达这一手的意图或判断，不要叙述完整内部推理，不要伪造对手发言。坐标从 1 开始，行从黑方顶端到红方底端为 1—10，列从左到右为 1—9。只能走合法着法，必须应将，不得让己方将帅被攻击。不得输出代码围栏或其他文字。'
+export const XIANGQI_SYSTEM = '你正在参加一场真实规则的中国象棋 AI 竞技。只依据收到的局面决策。你没有任何工具。只输出一个 JSON 对象：{"action":{"from":{"row":整数,"col":整数},"to":{"row":整数,"col":整数}},"speech":"一句面向观众的简短选手发言"}。speech 使用中文，最多 80 字，表达这一手的意图或判断，不要叙述完整内部推理，不要伪造对手发言。坐标从 1 开始，行从黑方顶端到红方底端为 1—10，列从左到右为 1—9。只能走合法着法，必须应将，不得让己方将帅被攻击。不得输出代码围栏或其他文字。裁决规则：吃将、将死、困毙均获胜；唯一的和棋是连续 120 半回合既没有吃子也没有兵卒向前推进；局面重复本身不判和，也不会结束比赛。局面字段：recentMoves 是最近若干手的紧凑记法，格式为「手数+走子方+棋子+起点行,列>终点行,列」，x 表示吃子、+ 表示将军，例如 12黑馬8,8>7,6；positionRepeats 是当前局面此前已出现过的次数；legalMoves 每项的 repeats 是走完该着法后新局面此前已出现过的次数；noProgressPlies 是距上一次吃子或兵卒向前推进的半回合数，noProgressLimit 是判和阈值。'
 export function parseDecision(text, gameId = 'gomoku') {
   const value = JSON.parse(text.trim())
   if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.speech !== 'string' || !value.speech.trim() || value.speech.length > 80 || !value.action) throw new Error('回复必须包含合法的 action 和 1—80 字的 speech。')

@@ -116,7 +116,7 @@ const report = {
   opening,
   mismatches: mismatch ? 1 : 0,
   firstMismatch: mismatch,
-  adjudicationScope: 'Move-set parity only. The reference FEN is rebuilt per position, so repetition history and game-ending adjudication are not compared.',
+  adjudicationScope: 'Move-set parity only. The reference FEN is rebuilt per position, so the no-progress counter and every terminal verdict are not compared. Since 1.1.0 the local engine has no repetition verdict at all; games here end by mate, capture or the no-progress rule.',
 }
 console.log(JSON.stringify(report, null, 2))
 if (mismatch) process.exitCode = 1

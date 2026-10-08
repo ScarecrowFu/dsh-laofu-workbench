@@ -11,6 +11,15 @@ const COLS = 9
 const RED = 0
 const BLACK = 1
 const PLAYERS = [RED, BLACK]
+/**
+ * A stalled game is closed by the no-progress rule alone: the counter resets
+ * only on a capture or a soldier's forward advance, and both are irreversible
+ * and bounded (at most 31 captures plus 30 forward advances per side), so the
+ * total game length is finite without any repetition verdict.
+ */
+const NO_PROGRESS_LIMIT = 120
+/** Plies of move history offered to the players so a loop is visible to them. */
+const RECENT_MOVE_LIMIT = 16
 const ORTHOGONAL = [[-1, 0], [1, 0], [0, -1], [0, 1]]
 const DIAGONAL = [[-1, -1], [-1, 1], [1, -1], [1, 1]]
 const HORSE_STEPS = [
@@ -22,7 +31,11 @@ const SYMBOLS = Object.freeze({
   0: Object.freeze({ general: '帥', advisor: '仕', elephant: '相', horse: '傌', chariot: '俥', cannon: '炮', soldier: '兵' }),
   1: Object.freeze({ general: '將', advisor: '士', elephant: '象', horse: '馬', chariot: '車', cannon: '砲', soldier: '卒' }),
 })
-const TERMINAL_REASONS = Object.freeze({ 'capture-general': '吃将获胜', checkmate: '将死获胜', stalemate: '困毙获胜', repetition: '三次重复局面和棋', 'move-limit': '连续 120 半回合无吃子及兵卒向前推进和棋' })
+/**
+ * Terminal verdicts. Repetition has no entry here on purpose: a position
+ * coming back is reported to the players as information, never as a verdict.
+ */
+const TERMINAL_REASONS = Object.freeze({ 'capture-general': '吃将获胜', checkmate: '将死获胜', stalemate: '困毙获胜', 'move-limit': `连续 ${NO_PROGRESS_LIMIT} 半回合无吃子及兵卒向前推进和棋` })
 
 const inBounds = (row, col) => row >= 1 && row <= ROWS && col >= 1 && col <= COLS
 const inPalace = (player, row, col) => col >= 4 && col <= 6 && (player === RED ? row >= 8 && row <= 10 : row >= 1 && row <= 3)
@@ -157,6 +170,18 @@ function positionKey(pieces, nextPlayer) {
   return `${nextPlayer}|${board}`
 }
 
+/**
+ * How many times the position this move would produce has already occurred in
+ * the visible history. Reported to the player as information; it is the signal
+ * that a loop is forming, not a verdict.
+ */
+function repeatCount(history, pieces, piece, to, nextPlayer) {
+  const key = positionKey(movePieces(pieces, piece, to).pieces, nextPlayer)
+  let total = 0
+  for (const item of history) if (item === key) total += 1
+  return total
+}
+
 function parseSquare(value) {
   if (Array.isArray(value)) return { row: value[0], col: value[1] }
   return value && typeof value === 'object' ? { row: value.row, col: value.col } : null
@@ -177,8 +202,8 @@ function statePieces(state) {
 }
 
 export const xiangqi = Object.freeze({
-  id: 'xiangqi', name: '中国象棋', version: '1.0.0', players: 2,
-  description: '中国象棋 · 10×9 棋盘 · 红方先手 · 将军、应将、将帅照面与困毙判定',
+  id: 'xiangqi', name: '中国象棋', version: '1.1.0', players: 2,
+  description: `中国象棋 · 10×9 棋盘 · 红方先手 · 吃将、将死、困毙获胜 · 重复局面本身不判和，连续 ${NO_PROGRESS_LIMIT} 半回合无吃子及兵卒向前推进判和`,
   actionExample: { from: { row: 10, col: 2 }, to: { row: 8, col: 3 } },
   create() {
     const pieces = initialPieces()
@@ -209,17 +234,22 @@ export const xiangqi = Object.freeze({
       winner = player
       reason = checked ? 'checkmate' : 'stalemate'
     }
-    // The 120-half-move counter is reset by captures and by a soldier's
-    // forward advance. A river-crossed soldier's sideways move does not
-    // advance it under this deliberately conservative draw rule.
+    // The no-progress counter resets on captures and on a soldier's forward
+    // advance. Both are irreversible: no earlier position can ever recur once
+    // they happen, so the repetition history is pruned to the current position
+    // and stays bounded by NO_PROGRESS_LIMIT. A river-crossed soldier's
+    // sideways move is reversible and deliberately keeps the counter running.
     const soldierAdvanced = moving.type === 'soldier' && normalized.to.row !== normalized.from.row
-    const halfmoveClock = captured || soldierAdvanced ? 0 : (state.halfmoveClock || 0) + 1
+    const irreversible = Boolean(captured) || soldierAdvanced
+    const halfmoveClock = irreversible ? 0 : (state.halfmoveClock || 0) + 1
     const priorHistory = Array.isArray(state.positionHistory) && state.positionHistory.length ? state.positionHistory : [positionKey(pieces, state.nextPlayer)]
     const key = positionKey(nextPieces, nextPlayer)
-    const positionHistory = [...priorHistory, key]
-    if (winner === null && (positionHistory.filter(item => item === key).length >= 3 || halfmoveClock >= 120)) {
+    const positionHistory = irreversible ? [key] : [...priorHistory, key]
+    // Repetition is never a verdict here. A stalled game is closed by the
+    // no-progress rule alone, which already bounds the game length.
+    if (winner === null && halfmoveClock >= NO_PROGRESS_LIMIT) {
       draw = true
-      reason = positionHistory.filter(item => item === key).length >= 3 ? 'repetition' : 'move-limit'
+      reason = 'move-limit'
     }
     const move = { player, piece: moving.type, from: normalized.from, to: normalized.to, captured: captured ? { player: captured.player, type: captured.type } : null, check: checked }
     return {
@@ -243,21 +273,48 @@ export const xiangqi = Object.freeze({
     const board = Array.from({ length: ROWS }, () => Array(COLS).fill('·'))
     for (const piece of pieces) board[piece.row - 1][piece.col - 1] = SYMBOLS[piece.player]?.[piece.type] || '?'
     const legal = PLAYERS.includes(player) ? legalMoves(player, pieces) : []
+    const moves = Array.isArray(state.moves) ? state.moves : []
+    const currentKey = positionKey(pieces, state.nextPlayer)
+    // Pruned history is only ever missing entries that can no longer recur, so
+    // these counts stay exact for every position still reachable.
+    const history = Array.isArray(state.positionHistory) && state.positionHistory.length ? state.positionHistory : [currentKey]
+    let positionRepeats = 0
+    for (const item of history) if (item === currentKey) positionRepeats += 1
+    const firstVisiblePly = moves.length - Math.min(moves.length, RECENT_MOVE_LIMIT)
+    const recentMoves = moves.slice(-RECENT_MOVE_LIMIT).map((move, index) => {
+      const side = move.player === RED ? '红' : '黑'
+      const glyph = SYMBOLS[move.player]?.[move.piece] || '?'
+      const taken = move.captured ? `x${SYMBOLS[move.captured.player]?.[move.captured.type] || '?'}` : ''
+      return `${firstVisiblePly + index + 1}${side}${glyph}${move.from.row},${move.from.col}>${move.to.row},${move.to.col}${taken}${move.check ? '+' : ''}`
+    })
     return {
       player,
       color: player === RED ? '红' : '黑',
       coordinateSystem: '行号从上到下 1—10（黑方在上、红方在下）；列号从左到右 1—9；红方先手。',
       legend: '红：帥仕相傌俥炮兵；黑：將士象馬車砲卒；·=空位。',
       board: board.map((row, index) => `${String(index + 1).padStart(2, '0')} ${row.join(' ')}`).join('\n'),
-      turn: (Array.isArray(state.moves) ? state.moves.length : 0) + 1,
+      turn: moves.length + 1,
       nextPlayer: state.nextPlayer,
       check: Boolean(state.check),
       winner: state.winner,
       draw: Boolean(state.draw),
       terminalReason: state.terminalReason || null,
-      legalMoves: legal.map(move => ({ from: move.from, to: move.to })),
+      // Repetition is disclosed as information, not as a verdict: the players
+      // can see a loop forming and choose to break it. Nothing here ends the
+      // game by itself.
+      positionRepeats,
+      noProgressPlies: state.halfmoveClock || 0,
+      noProgressLimit: NO_PROGRESS_LIMIT,
+      // A compact scoresheet, oldest first: 手数 + 走子方 + 棋子 + 起点行,列>终点行,列,
+      // then x被吃子 and + for a check. Far cheaper per turn than nested JSON.
+      recentMoves,
+      legalMoves: legal.map(move => ({
+        from: move.from,
+        to: move.to,
+        repeats: repeatCount(history, pieces, move.piece, move.to, 1 - state.nextPlayer),
+      })),
     }
   },
 })
 
-export { ROWS as XIANGQI_ROWS, COLS as XIANGQI_COLS, SYMBOLS as XIANGQI_SYMBOLS }
+export { ROWS as XIANGQI_ROWS, COLS as XIANGQI_COLS, SYMBOLS as XIANGQI_SYMBOLS, NO_PROGRESS_LIMIT as XIANGQI_NO_PROGRESS_LIMIT, RECENT_MOVE_LIMIT as XIANGQI_RECENT_MOVE_LIMIT }
