@@ -100,6 +100,41 @@ body[data-ds-dark-theme] .ar-page{
 .ar-board{width:calc(100% - 32px);max-width:520px;aspect-ratio:1;margin:16px auto;position:relative;overflow:hidden;border:1px solid #9a6336;border-radius:9px;background:#c58a4d;box-shadow:0 10px 22px rgba(82,45,20,.18),inset 0 1px 0 rgba(255,245,210,.3)}
 .ar-match-view[data-game="xiangqi"] .ar-board,.ar-match[data-game="xiangqi"] .ar-board{aspect-ratio:508/562}
 .ar-board > svg{display:block;width:100%;height:100%}
+.ar-participants[data-game="werewolf"]{grid-template-columns:repeat(3,minmax(0,1fr))}
+.ar-stage{position:relative;width:calc(100% - 24px);aspect-ratio:16/9;margin:12px auto;overflow:hidden;border-radius:12px;background:#0B1119;box-shadow:0 16px 36px rgba(8,12,20,.35)}
+.ar-stage-scene{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 32%}
+.ar-stage-mask{position:absolute;inset:0;background:linear-gradient(180deg,rgba(6,10,16,.72),rgba(6,10,16,.12) 26%,rgba(6,10,16,.2) 50%,rgba(6,10,16,.88)),radial-gradient(120% 78% at 50% 46%,rgba(0,0,0,0) 38%,rgba(4,7,12,.66))}
+.ar-stage[data-scene="day"] .ar-stage-mask{background:linear-gradient(180deg,rgba(12,18,26,.46),rgba(12,18,26,.04) 26%,rgba(12,18,26,.14) 50%,rgba(10,16,24,.84)),radial-gradient(120% 78% at 50% 46%,rgba(0,0,0,0) 44%,rgba(20,26,18,.4))}
+.ar-stage-head{position:absolute;left:3%;top:5%;display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.ar-stage-day{display:inline-flex;align-items:center;height:20px;padding:0 9px;border-radius:999px;background:rgba(9,13,20,.55);border:1px solid rgba(255,255,255,.22);color:#E8EEF6;font-size:11px;font-weight:700;letter-spacing:.04em}
+.ar-stage-phase{font-size:clamp(14px,2.1vw,27px);font-weight:800;line-height:1.1;color:#fff;text-shadow:0 3px 16px rgba(0,0,0,.75)}
+.ar-stage[data-scene="day"] .ar-stage-phase{color:#FFF7E6}
+.ar-stage[data-act="death"] .ar-stage-phase{color:#FFD9D3}
+.ar-stage-deaths{position:absolute;left:50%;bottom:46%;transform:translateX(-50%);margin:0;padding:4px 14px;border-radius:999px;background:rgba(150,32,26,.84);border:1px solid rgba(255,160,150,.55);color:#FFF2EF;font-size:13px;font-weight:800;letter-spacing:.05em;white-space:nowrap;box-shadow:0 8px 26px rgba(120,20,16,.42)}
+.ar-stage-cast{position:absolute;left:2.4%;right:2.4%;bottom:3.4%;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:1.1%;align-items:end}
+.ar-cast{position:relative;margin:0;display:flex;flex-direction:column;align-items:center;gap:3px}
+.ar-cast-no{position:absolute;left:50%;top:-8px;transform:translateX(-50%);z-index:2;display:flex;width:17px;height:17px;align-items:center;justify-content:center;border-radius:50%;background:rgba(10,14,22,.86);border:1px solid rgba(255,255,255,.34);color:#F2F6FB;font-size:10px;font-weight:800}
+.ar-cast-face{position:relative;display:block;width:100%;aspect-ratio:3/4;border-radius:9px;overflow:hidden;background:linear-gradient(180deg,rgba(24,34,48,.5),rgba(10,15,22,.72));border:1px solid rgba(255,255,255,.16);box-shadow:0 10px 22px rgba(3,6,12,.5);transition:border-color .25s ease,box-shadow .25s ease}
+.ar-cast-face img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;object-position:center bottom;transition:filter .3s ease,transform .25s ease}
+.ar-cast-veil{position:absolute;inset:0;background:linear-gradient(180deg,rgba(6,10,16,0) 48%,rgba(6,10,16,.6))}
+.ar-cast[data-active="true"] .ar-cast-face{border-color:#E0A32E;box-shadow:0 0 0 2px rgba(224,163,46,.5),0 12px 26px rgba(3,6,12,.6)}
+.ar-cast[data-active="true"] .ar-cast-face img{transform:translateY(-4px) scale(1.04)}
+.ar-cast[data-alive="false"] .ar-cast-face{border-color:rgba(180,52,42,.6)}
+.ar-cast[data-alive="false"] .ar-cast-face img{filter:grayscale(1) brightness(.46) contrast(1.05)}
+.ar-cast-out{position:absolute;left:50%;bottom:4%;transform:translateX(-50%);padding:1px 7px;border-radius:999px;background:#B4342A;color:#fff;font-size:9px;font-weight:800;letter-spacing:.14em;white-space:nowrap}
+.ar-cast figcaption{display:flex;align-items:center;justify-content:center;gap:4px;max-width:100%}
+.ar-cast figcaption b{font-size:10px;font-weight:700;color:#F3F7FC;text-shadow:0 1px 4px rgba(0,0,0,.85);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ar-role-mark{display:inline-flex;width:15px;height:15px;flex:none;align-items:center;justify-content:center;border-radius:4px;background:rgba(255,255,255,.86);color:#1B232C;font-size:9px;font-weight:800;font-style:normal}
+.ar-role-mark[data-role="werewolf"]{background:#D9534A;color:#fff}
+.ar-role-mark[data-role="seer"]{background:#5B93E0;color:#fff}
+.ar-role-mark[data-role="witch"]{background:#9A6BD6;color:#fff}
+.ar-role-mark[data-role="hunter"]{background:#E0A32E;color:#3A2A08}
+.ar-stage-line{position:absolute;left:8%;right:8%;bottom:43.5%;margin:0;padding:5px 12px;border-radius:8px;background:rgba(8,12,18,.72);color:#f4efe4;text-align:center;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ar-stage-win{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 26px;border-radius:14px;background:rgba(8,12,19,.74);border:1px solid rgba(224,163,46,.6);box-shadow:0 20px 50px rgba(2,5,10,.6);text-align:center}
+.ar-stage-win b{font-size:clamp(17px,2.3vw,30px);font-weight:900;letter-spacing:.06em;color:#E0A32E}
+.ar-stage-win[data-side="wolf"] b{color:#FF7A6E}
+.ar-stage-win span{font-size:12px;font-weight:600;color:#EAF0F7;max-width:420px;line-height:1.5}
+.ar-game-preview img{display:block;width:100%;height:140px;object-fit:cover}
 .ar-board svg g:last-child{animation:ar-place .25s ease-out}
 .ar-toolbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:12px 16px;border-top:1px solid var(--lwb-line);background:var(--lwb-surface)}
 .ar-toolbar input[type=range]{flex:1;min-width:76px;accent-color:var(--ar-brand);margin:0 4px}

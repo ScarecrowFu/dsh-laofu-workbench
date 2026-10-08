@@ -35,7 +35,7 @@ test('mixed colors, gaps and row wrapping are not wins; observations contain no 
 test('game registry supports independent game definitions and rejects duplicates', () => {
   const games = new ArenaGames()
   games.register({ ...gomoku, id: 'another-game', name: 'Other' })
-  assert.deepEqual(games.list().map(game => game.id), ['gomoku', 'xiangqi', 'another-game'])
+  assert.deepEqual(games.list().map(game => game.id), ['gomoku', 'xiangqi', 'werewolf', 'another-game'])
   assert.throws(() => games.register(gomoku))
   assert.throws(() => games.get('missing'))
 })

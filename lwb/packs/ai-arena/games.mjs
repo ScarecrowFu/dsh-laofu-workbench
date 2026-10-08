@@ -1,8 +1,9 @@
 import { gomoku } from './gomoku.mjs'
 import { xiangqi } from './xiangqi.mjs'
+import { werewolf } from './werewolf.mjs'
 
 export class ArenaGames {
-  constructor(games = [gomoku, xiangqi]) { this.games = new Map(); for (const game of games) this.register(game) }
+  constructor(games = [gomoku, xiangqi, werewolf]) { this.games = new Map(); for (const game of games) this.register(game) }
   register(game) {
     if (!game?.id || this.games.has(game.id) || !['create', 'apply', 'observe'].every(key => typeof game[key] === 'function')) throw new Error('竞技游戏定义无效或重复。')
     this.games.set(game.id, game)

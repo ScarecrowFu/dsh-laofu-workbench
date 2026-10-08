@@ -9,6 +9,7 @@ import { movesOf, escapeHtml, actionLabel, playerSide } from './presentation.mjs
 import { replayData } from './replay/data.mjs'
 import { stepStarts, totalFrames } from './replay/timeline.mjs'
 import { clipDataUrl, synthesizeSpeech } from './speech.mjs'
+import { WEREWOLF_ART } from './werewolf-art.mjs'
 
 const exec = promisify(execFile)
 const ROOT = dirname(fileURLToPath(import.meta.url))
@@ -30,6 +31,18 @@ function replayAssets() {
 /** 用 {{KEY}} 占位符渲染骨架；替换值按字面插入，不做 $ 转义。 */
 const fillTemplate = (template, vars) => template.replace(/\{\{(\w+)\}\}/gu, (match, key) => (key in vars ? vars[key] : match))
 
+/** 离线 HTML 要自包含：只内联这一局真正用到的场景与立绘，不把全部素材塞进去。 */
+function replayArt(data) {
+  if (data.game.id !== 'werewolf') return 'null'
+  const portraits = {}
+  for (const seat of data.werewolf?.seats || []) {
+    for (const key of ['generic', seat.portrait, `${seat.portrait}-dead`]) {
+      if (WEREWOLF_ART.portraits[key]) portraits[key] = WEREWOLF_ART.portraits[key]
+    }
+  }
+  return JSON.stringify({ scenes: WEREWOLF_ART.scenes, portraits }).replace(/</gu, '\\u003c')
+}
+
 export function replayHtml(match, audio = null) {
   const assets = replayAssets()
   const data = replayData(match, audio)
@@ -45,17 +58,20 @@ export function replayHtml(match, audio = null) {
     BUNDLE: assets['runtime.js'],
     /* < 转义后模型文本既闭不了 </script>，也注入不了标签 */
     DATA_JSON: JSON.stringify(data).replace(/</gu, '\\u003c'),
+    ART_JSON: replayArt(data),
     APP_JS: assets['app.js'],
   })
 }
 export function reportMarkdown(match) {
   const turns = new Map()
+  const wolf = match.game?.id === 'werewolf'
   for (const event of match.events) {
     if (event.type === 'request' || event.type === 'response') turns.set(event.turnId, { ...turns.get(event.turnId), ...event })
   }
   return [`# ${match.title}`, '', `规则：${match.game.description}（${match.game.version}）`, `创建：${match.createdAt}`, `当前调用配置：${executionLabel(match.config?.pace)}`, `状态：${match.status}`, `结果：${match.result?.message || '尚未结束'}`, `模型调用：${match.calls}；已知 Token：${match.tokens}${match.usageUnknown ? '（部分调用未报告用量）' : ''}`, '选手发言仅对观众可见。', '', ...match.players.map((player, i) => `${playerSide(match.game, i)}：${player.provider}/${player.model}；${player.name}；所选推理强度：${player.reasoningEffort || '模型默认'}`), '', ...movesOf(match).map(event => {
     const turn = turns.get(event.turnId)
-    return `## 第 ${event.moveNumber} 手 · ${match.players[event.player].name}\n\n${actionLabel(event.action, match.game)} · ${event.elapsedMs} ms\n\n${executionLabel(turn?.pace)} · ${turn?.execution?.label || turn?.model?.reasoningEffort || '模型默认推理'}\n\n${event.speech}\n`
+    const who = wolf ? `${playerSide(match.game, event.player)} · ${match.players[event.player].name}` : match.players[event.player].name
+    return `## 第 ${event.moveNumber} 手 · ${who}\n\n${actionLabel(event.action, match.game)} · ${event.elapsedMs} ms\n\n${executionLabel(turn?.pace)} · ${turn?.execution?.label || turn?.model?.reasoningEffort || '模型默认推理'}\n\n${event.speech}\n`
   })].join('\n')
 }
 export class ArenaExport {
@@ -137,6 +153,20 @@ export class ArenaExport {
     } finally { await handle.close() }
   }
 }
+/**
+ * 成片自检：尺寸、时长必须与请求一致；只有真的合成了语音时才要求音轨存在。
+ * Remotion 会给无声成片也铺一条静音音轨，「有音轨」因此不能当作「混过配音」的证据——
+ * 之前正是这条推断让无声导出在本地一直被判失败。
+ */
+export function verifyVideoProbe(probe, { width, height, frames, fps, spoken }) {
+  const video = (probe.streams || []).find(stream => stream.codec_type === 'video')
+  const hasAudio = (probe.streams || []).some(stream => stream.codec_type === 'audio')
+  const duration = Number(probe.format?.duration)
+  if (video?.width !== width || video?.height !== height) throw new Error(`导出视频尺寸不符：${video?.width}×${video?.height}，期望 ${width}×${height}。`)
+  if (!Number.isFinite(duration) || Math.abs(duration - frames / fps) > 1) throw new Error(`导出视频时长不符：${duration} 秒，期望 ${(frames / fps).toFixed(2)} 秒。`)
+  if (spoken?.length && !hasAudio) throw new Error('导出视频缺少配音音轨。')
+}
+
 export async function renderVideo(match, directory, { orientation, secondsPerMove, audio = null, signal }) {
   signal.throwIfAborted()
   await exec('ffmpeg', ['-version'], { signal })
@@ -165,8 +195,7 @@ export async function renderVideo(match, directory, { orientation, secondsPerMov
     if (spoken.length) await mixSpeech(silent, temporary, spoken, data.moves.length, secondsPerMove, signal)
     const { stdout } = await exec('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height,codec_type:format=duration', '-of', 'json', temporary], { signal })
     const probe = JSON.parse(stdout)
-    const hasAudio = probe.streams.some(stream => stream.codec_type === 'audio')
-    if (!probe.streams.some(stream => stream.width === width && stream.height === height) || Math.abs(Number(probe.format.duration) - frames / fps) > 1 || hasAudio !== spoken.length > 0) throw new Error('导出视频未通过尺寸或时长检查。')
+    verifyVideoProbe(probe, { width, height, frames, fps, spoken })
     await rename(temporary, join(directory, `${orientation}.mp4`))
     await writeFile(join(directory, 'video-report.json'), `${JSON.stringify(probe, null, 2)}\n`, { mode: 0o600 })
   } finally {

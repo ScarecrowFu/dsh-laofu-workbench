@@ -7,6 +7,7 @@ import { ArenaStore } from '../store.mjs'
 import { ArenaHost, parseDecision, tokenCount } from '../host.mjs'
 import { ArenaGames } from '../games.mjs'
 import { decisionPrompt } from '../decision-prompt.mjs'
+import { dealRoles } from '../werewolf.mjs'
 
 const winningPoints = [[8, 4], [1, 1], [8, 5], [1, 2], [8, 6], [1, 3], [8, 7], [1, 4], [8, 8]]
 async function pauseMatch(env) {
@@ -69,6 +70,61 @@ async function setup(t, complete, models = [{ id: 'black', name: 'Black' }, { id
   const settle = async () => { while (jobs.length) await jobs.shift() }
   return { root, store, scope, host, start, settle, sessions, sessionEvents, setResponder: value => { complete = value }, stop: () => { signal.abort(); stops.forEach(fn => fn()) } }
 }
+test('每局狼人杀按种子重新发牌，并把种子记进配置以便复现', async t => {
+  const models = ['a', 'b', 'c', 'd', 'e', 'f'].map(id => ({ id, name: id }))
+  const env = await setup(t, async () => ({ text: JSON.stringify({ action: { type: 'speak' }, speech: '开局。' }), finish: { kind: 'stop' }, usage: { inputTokens: 1, outputTokens: 1 } }), models)
+  const seats = models.map(model => ({ provider: 'test', model: model.id }))
+  const fresh = await env.host.start({ gameId: 'werewolf', players: seats })
+  assert.ok(Number.isInteger(fresh.config.seed) && fresh.config.seed >= 0 && fresh.config.seed < 2 ** 32, '不传 seed 时必须生成 32 位整数种子')
+  assert.deepEqual(fresh.state.players.map(player => player.role), dealRoles(fresh.config.seed), '发牌必须与该局种子一致，才能离线复现')
+  const pinned = await env.host.start({ gameId: 'werewolf', seed: 0x574f4c46, players: seats })
+  assert.equal(pinned.config.seed, 0x574f4c46)
+  assert.deepEqual(pinned.state.players.map(player => player.role), ['hunter', 'werewolf', 'villager', 'werewolf', 'seer', 'witch'])
+  /* 这里只验证发牌，不打算打完：把两场都停在回合边界再等后台收尾。 */
+  for (const id of [fresh.id, pinned.id]) {
+    const current = await env.store.get(id)
+    if (['running', 'pausing'].includes(current.status)) await env.host.control({ id, action: 'pause' })
+  }
+  await env.settle()
+})
+
+test('werewolf match runs the night through a scripted local model to a village win', async t => {
+  const models = ['hunter', 'wolf-a', 'villager', 'wolf-b', 'seer', 'witch'].map(id => ({ id, name: id }))
+  const env = await setup(t, async request => {
+    const line = request.prompt.split('\n').find(item => item.startsWith('{'))
+    const view = JSON.parse(line)
+    const speech = `${view.roleLabel}发言`
+    if (view.phase === 'night-wolf') return { text: JSON.stringify({ action: { type: 'kill', target: view.day === 1 ? 3 : 1 }, speech }), finish: { kind: 'stop' }, usage: { inputTokens: 1, outputTokens: 1 } }
+    if (view.phase === 'night-seer') return { text: JSON.stringify({ action: { type: 'check', target: view.alive.find(seat => seat !== view.seat) }, speech }), finish: { kind: 'stop' }, usage: { inputTokens: 1, outputTokens: 1 } }
+    if (view.phase === 'night-witch') return { text: JSON.stringify({ action: { type: 'potion', potion: 'pass' }, speech }), finish: { kind: 'stop' }, usage: { inputTokens: 1, outputTokens: 1 } }
+    if (view.phase === 'hunter') return { text: JSON.stringify({ action: { type: 'shoot', target: view.alive.includes(2) ? 2 : 4 }, speech }), finish: { kind: 'stop' }, usage: { inputTokens: 1, outputTokens: 1 } }
+    if (view.phase === 'day-speech') return { text: JSON.stringify({ action: { type: 'speak' }, speech }), finish: { kind: 'stop' }, usage: { inputTokens: 1, outputTokens: 1 } }
+    const ballot = view.seat === 2 ? 1 : 2
+    return { text: JSON.stringify({ action: { type: 'vote', target: ballot }, speech }), finish: { kind: 'stop' }, usage: { inputTokens: 1, outputTokens: 1 } }
+  }, models)
+  const started = await env.host.start({ gameId: 'werewolf', seed: 0x574f4c46, players: models.map(model => ({ provider: 'test', model: model.id })) })
+  await env.settle()
+  const match = await env.store.get(started.id)
+  assert.equal(match.game.id, 'werewolf')
+  assert.equal(match.status, 'finished')
+  assert.equal(match.result.winner, 'village')
+  assert.match(match.result.message, /好人获胜/)
+  const prompts = match.events.filter(event => event.type === 'request').map(event => event.prompt)
+  const wolf = prompts.find(prompt => prompt.includes('"role":"werewolf"'))
+  assert.match(wolf, /wolfPack/)
+  assert.equal(wolf.includes('"checks"'), false)
+  assert.equal(wolf.includes('saveAvailable'), false)
+  const seer = prompts.find(prompt => prompt.includes('"role":"seer"') && prompt.includes('"phase":"night-seer"'))
+  assert.match(seer, /"checks"/)
+  assert.equal(seer.includes('wolfPack'), false)
+  assert.equal(seer.includes('tonightDeath'), false)
+  const witch = prompts.find(prompt => prompt.includes('"phase":"night-witch"'))
+  assert.match(witch, /"tonightDeath":3/)
+  assert.equal(witch.includes('wolfPack'), false)
+  assert.equal(witch.includes('"checks"'), false)
+  assert.equal(prompts.some(prompt => prompt.includes('观众台词')), false)
+})
+
 test('complete match persists inputs, output, speech and deterministic winner without opponent speech', async t => {
   const points = [[8, 4], [1, 1], [8, 5], [1, 2], [8, 6], [1, 3], [8, 7], [1, 4], [8, 8]], requests = []
   const env = await setup(t, async request => { requests.push(request); return reply(...points[requests.length - 1], '观众台词') })

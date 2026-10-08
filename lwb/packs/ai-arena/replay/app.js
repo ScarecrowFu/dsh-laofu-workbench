@@ -19,7 +19,7 @@
     if (keyMode === 'off') return false
     const k = D.keys.find(x => x.n === i)
     if (!k) return false
-    if (k.kind === 'win' || k.kind === 'check') return true
+    if (k.kind === 'win' || k.kind === 'check' || k.kind === 'death') return true
     if (k.kind !== 'capture') return false
     return keyMode === 'all' || (keyMode === 'major' && MAJOR.has(k.piece))
   }
@@ -52,6 +52,158 @@
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
   const side = i => S.playerSide(D.game, i)
   const visibleMoves = index => D.moves.slice(0, index)
+
+  /* ---------------- 狼人杀：六席舞台 ---------------- */
+  const WOLF = D.game.id === 'werewolf'
+  const WOLF_SEATS = (D.werewolf && D.werewolf.seats) || []
+  const WOLF_STEPS = (D.werewolf && D.werewolf.steps) || []
+  const ART = globalThis.__ARENA_ART__ || { scenes: {}, portraits: {} }
+  const artPortrait = key => ART.portraits[key] || ART.portraits.generic || ''
+  const seatFace = (seat, alive) => alive ? artPortrait(seat.portrait) : (ART.portraits[`${seat.portrait}-dead`] || artPortrait(seat.portrait))
+  const wolfStep = index => (index >= 1 && index <= M ? WOLF_STEPS[index - 1] || null : null)
+  const wolfFrame = index => {
+    const step = wolfStep(index)
+    const last = WOLF_STEPS[WOLF_STEPS.length - 1] || null
+    const isFinale = index === M + 1
+    const initial = WOLF_SEATS.map(s => s.seat)
+    const phase = (step && step.phase) || (D.moves[index - 1] && D.moves[index - 1].phase) || 'night-wolf'
+    const fallbackScene = String(phase).indexOf('day') === 0 ? 'day' : 'night'
+    return {
+      step,
+      alive: new Set(isFinale ? ((last && last.alive) || initial) : (step ? step.alive : initial)),
+      deaths: step ? step.deaths : [],
+      active: step ? step.seat : null,
+      scene: step ? step.scene : fallbackScene,
+      day: isFinale ? ((last && last.day) || 1) : ((step && step.day) || 1),
+      label: step ? step.label : (index >= 1 ? '结算' : '天黑请闭眼'),
+    }
+  }
+  function buildWolf() {
+    boardCard.innerHTML =
+      '<div class="ww-scene">' +
+      ['night', 'day'].map(scene => `<img class="ww-bg" data-scene="${scene}" src="${ART.scenes[scene] || ''}" alt="">`).join('') +
+      '<div class="ww-mask"></div>' +
+      '<header class="ww-head"><span class="ww-day" id="wwDay"></span><b class="ww-phase" id="wwPhase"></b></header>' +
+      '<p class="ww-deaths" id="wwDeaths" hidden></p>' +
+      '<div class="ww-cast" id="wwCast">' + WOLF_SEATS.map((seat, i) =>
+        `<figure class="ww-seat" data-i="${i}" data-seat="${seat.seat}">` +
+        `<span class="ww-no">${seat.seat}</span>` +
+        `<span class="ww-face"><img src="${seatFace(seat, true)}" alt=""><i class="ww-veil"></i></span>` +
+        `<figcaption><b class="ww-name">${esc(seat.name)}</b><em class="ww-role" data-role="${esc(seat.role)}">${esc(seat.mark || '·')}</em></figcaption>` +
+        `</figure>`).join('') +
+      '</div>' +
+      '<div class="ww-win" id="wwWin" hidden></div></div>'
+  }
+  const wolfSeatNodes = () => (WOLF ? [...$('wwCast').querySelectorAll('.ww-seat')] : [])
+  function wolfPill(index, frame) {
+    const key = index >= 1 ? D.keys.find(k => k.n === index) : null
+    if (key && key.kind === 'death') return `<span class="pill cap">出局 ${key.seats.map(s => `${s} 号`).join('、')}</span>`
+    if (index >= 1) return `<span class="pill chk">${esc(frame.label)}</span>`
+    return ''
+  }
+  function renderWolf(index, animate) {
+    const isFinale = index === FINALE
+    const frame = wolfFrame(index)
+    const winnerSide = (D.result && D.result.side) || null
+    const scene = isFinale ? (winnerSide === 'wolf' ? 'night' : 'day') : frame.scene
+    const label = isFinale ? '终局' : frame.label
+
+    stage.dataset.scene = scene
+    stage.dataset.act = isFinale ? 'finale' : (frame.deaths.length ? 'death' : 'move')
+
+    $('wwDay').textContent = isFinale ? `共 ${M} 步 · ${frame.day} 天` : `第 ${frame.day} 天 · ${scene === 'day' ? '白天' : '夜间'}`
+    $('wwPhase').textContent = label
+
+    boardCard.querySelectorAll('.ww-bg').forEach(img => { img.style.opacity = img.dataset.scene === scene ? '1' : '0' })
+
+    wolfSeatNodes().forEach(node => {
+      const seat = WOLF_SEATS[Number(node.dataset.i)]
+      const alive = frame.alive.has(seat.seat)
+      const active = !isFinale && seat.seat === frame.active
+      const winning = isFinale && winnerSide && seat.role && (seat.role === 'werewolf' ? 'wolf' : 'village') === winnerSide
+      node.dataset.alive = String(alive)
+      node.dataset.active = String(active)
+      if (winning) node.dataset.win = 'true'; else delete node.dataset.win
+      const img = node.querySelector('.ww-face img')
+      if (img.getAttribute('src') !== seatFace(seat, alive)) img.setAttribute('src', seatFace(seat, alive))
+      const face = node.querySelector('.ww-face')
+      const strike = face.querySelector('.ww-strike')
+      const dying = frame.deaths.indexOf(seat.seat) >= 0
+      if (dying && animate && !strike) {
+        const mark = document.createElement('span')
+        mark.className = 'ww-strike'
+        face.insertBefore(mark, face.querySelector('.ww-out'))
+      } else if (!dying && strike) strike.remove()
+      if (!alive && !face.querySelector('.ww-out')) {
+        const out = document.createElement('span')
+        out.className = 'ww-out'
+        out.textContent = '出局'
+        face.appendChild(out)
+      } else if (alive) {
+        const out = face.querySelector('.ww-out')
+        if (out) out.remove()
+      }
+    })
+
+    const deaths = $('wwDeaths')
+    deaths.hidden = frame.deaths.length === 0
+    if (frame.deaths.length) deaths.textContent = frame.deaths.map(s => `${s} 号出局`).join('、')
+
+    const win = $('wwWin')
+    win.hidden = !isFinale
+    if (isFinale) {
+      win.dataset.side = winnerSide || 'draw'
+      win.innerHTML = `<b>${winnerSide === 'wolf' ? '狼人获胜' : winnerSide ? '好人获胜' : '比赛结束'}</b><span>${esc((D.result && D.result.message) || '')}</span>`
+    }
+
+    heroLbl.textContent = isFinale ? '终局' : `第 ${frame.day} 天`
+    heroNum.textContent = label
+    heroTot.textContent = isFinale ? `共 ${M} 步` : `${index} / ${M} 步`
+    heroTag.innerHTML = isFinale
+      ? `<span class="pill win">${winnerSide === 'wolf' ? '狼人获胜' : '好人获胜'}</span>`
+      : wolfPill(index, frame)
+
+    score.querySelectorAll('.pcard').forEach(card => {
+      const i = Number(card.dataset.i)
+      const seat = WOLF_SEATS[i]
+      const alive = frame.alive.has(seat.seat)
+      const active = !isFinale && seat.seat === frame.active
+      card.dataset.active = String(active)
+      card.dataset.alive = String(alive)
+      card.querySelector('.bd').textContent = isFinale
+        ? (winnerSide && (seat.role === 'werewolf' ? 'wolf' : 'village') === winnerSide ? '胜' : D.result ? '负' : '')
+        : (alive ? '' : '出局')
+    })
+
+    /* 叙事区与进度（与棋类共用同一套侧栏元素） */
+    const last = index >= 1 ? D.moves[index - 1] : null
+    if (isFinale) {
+      fmessage.textContent = (D.result && D.result.message) || '比赛已结束。'
+      finale.dataset.kind = 'win'
+      finale.querySelector('small').textContent = `终局 · ${winnerSide === 'wolf' ? '狼人阵营' : '好人阵营'}`
+    } else if (last) {
+      who.innerHTML = `<img class="logo" src="${(WOLF_SEATS[last.p] || {}).logo || ''}" alt="">${esc(D.players[last.p].name)} · 本手发言`
+      coord.textContent = S.actionLabel(last.a, D.game)
+      coord.hidden = false
+      text.textContent = last.s
+      text.style.fontSize = stepSize(last.s.length) + 'px'
+    } else {
+      who.textContent = '开局'
+      coord.hidden = true
+      text.textContent = '天黑请闭眼。'
+      text.style.fontSize = stepSize(6) + 'px'
+    }
+    const entries = visibleMoves(index).slice(-4, -1).reverse()
+    recentEl.hidden = isFinale || entries.length === 0
+    rlist.innerHTML = entries
+      .map(m => `<div class="rentry"><b>${m.n} · ${esc(D.players[m.p].name)}</b><span>${esc(m.s)}</span></div>`).join('')
+    const pct = (index / FINALE) * 100
+    fill.style.width = `${pct}%`
+    cursorEl.style.left = `calc(${pct}% - ${(pct * 0.065).toFixed(2)}px)`
+    pcount.innerHTML = isFinale ? `共 <b>${M}</b> 手 · 终局` : `第 <b>${index}</b> / ${M} 手`
+    ptime.innerHTML = `出局 / 终局 <b>${activeKeys().length}</b> 处`
+    drawTicks()
+  }
   const duration = i => {
     if (i === FINALE) return FINALE_MS
     const spoken = i >= 1 ? Number(D.moves[i - 1]?.audioSec) : 0
@@ -64,7 +216,16 @@
     if (D.game.id === 'xiangqi') return i ? 'xq-black' : 'xq-red'
     return i ? 'white' : 'black'
   }
-  score.innerHTML = D.players.map((p, i) => `
+  score.innerHTML = WOLF
+    ? WOLF_SEATS.map((seat, i) => `
+    <div class="pcard" data-i="${i}" data-role="${esc(seat.role)}">
+      <img class="logo" src="${seat.logo || ''}" alt="">
+      <i class="stone ww-chip" data-role="${esc(seat.role)}">${esc(seat.mark || '·')}</i>
+      <span class="nm">${esc(seat.name)}</span>
+      <span class="sd">${esc(seat.roleName || '')}</span>
+      <em class="bd"></em>
+    </div>`).join('')
+    : D.players.map((p, i) => `
     <div class="pcard" data-i="${i}">
       <img class="logo" src="${p.logo || ''}" alt="">
       <i class="stone ${stoneClass(i)}"></i>
@@ -73,12 +234,15 @@
       <em class="bd"></em>
     </div>`).join('')
 
+  /* 狼人杀没有棋盘：主画面改由六席舞台接管 */
+  if (WOLF) buildWolf()
+
   /* ---------------- 进度条锚点（关键手） ---------------- */
   /* 分母兜底：没有任何落子的比赛（例如开局即取消）不能除以 0 */
   const DEN = M || 1
   function drawTicks() {
     tickLayer.innerHTML = activeKeys().map(k => {
-      const cls = k.kind === 'check' ? 'chk' : k.kind === 'win' ? 'win' : 'cap'
+      const cls = k.kind === 'check' ? 'chk' : k.kind === 'win' ? 'win' : k.kind === 'death' ? 'death' : 'cap'
       return `<i class="tick ${cls}" style="left:${(k.n / DEN) * 100}%"></i>`
     }).join('')
   }
@@ -210,14 +374,22 @@
     const key = !isFinale && index >= 1 ? D.keys.find(k => k.n === index) : null
     const last = index >= 1 ? D.moves[index - 1] : null
     const winner = D.result && typeof D.result.winner === 'number' ? D.result.winner : null
-    const isDraw = !!D.result && winner === null
+    /* 狼人杀用 result.side 表示阵营，不能因为 winner 不是数字就当成和棋。 */
+    const isDraw = !!D.result && winner === null && !D.result.side
 
     stage.dataset.phase = isFinale ? 'finale' : 'move'
     stage.dataset.game = D.game.id || ''
     stage.dataset.fx = animate && key ? key.kind : ''
     stage.classList.remove('animate')
+    stage.classList.toggle('ww-enter', WOLF && index <= 1)
     boardCard.classList.remove('push')
     board.classList.remove('shake')
+
+    if (WOLF) {
+      renderWolf(index, animate)
+      if (animate) { void stage.offsetWidth; stage.classList.add('animate') }
+      return
+    }
 
     /* 棋盘 */
     const built = boardMarkup(index)
@@ -396,8 +568,12 @@
   }
   layoutBtns.forEach(b => { b.onclick = () => setLayout(b.dataset.layoutBtn) })
 
-  /* 关键手强调档位（便于 A/B 对比） */
+  /* 关键手强调档位（便于 A/B 对比）。狼人杀没有吃子/将军，档位改成出局与终局。 */
   const keySelect = $('keyMode')
+  if (WOLF) {
+    keySelect.closest('label').firstChild.textContent = '出局强调'
+    keySelect.innerHTML = '<option value="major">出局 / 终局</option><option value="check">仅终局</option><option value="off">关闭</option>'
+  }
   keySelect.value = keyMode
   keySelect.onchange = () => {
     keyMode = keySelect.value

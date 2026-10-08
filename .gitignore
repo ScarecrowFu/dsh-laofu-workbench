@@ -2,6 +2,9 @@
 node_modules/
 vendor/
 .tooling/
+# worktree 里这两个是符号链接，带斜杠的目录规则匹配不到
+/node_modules
+/vendor
 
 # Runtime state and local credentials
 .dsh/
