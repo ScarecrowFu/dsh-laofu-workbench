@@ -89,7 +89,7 @@ test('the LWB account states that signing in stays optional', async () => {
 test('settings is the only primary navigation entry to native DSH runtime settings', async () => {
   const source = await readFile(clientPath, 'utf8')
   assert.match(source, /function LwbRuntimeSettingsTrigger\(\{ openSettings \}\)/u)
-  assert.match(source, /html\[data-platform='darwin'\] \.lwb-sidebar \{ padding-top:48px; \}/u)
+  assert.match(source, /html\[data-platform='darwin'\] \.lwb-sidebar \{ padding-top:0; \}/u)
   assert.doesNotMatch(source, /\[data-shell-leading\] \{ display:none; \}/u)
   assert.match(source, /const desktopCollapsed = sidebarCollapsed && width === 0/u)
   assert.match(source, /createPortal\(h\(LwbSidebarExpand, \{ className: 'lwb-desktop-expand' \}\), document\.body\)/u)
@@ -372,4 +372,68 @@ test('the hidden-column reopen control outranks the frame overlay layer', async 
   const overlayLayer = Number(frame.match(/\.overlayLayer \{[^}]*z-index: (\d+)/u)?.[1])
   assert.ok(Number.isFinite(control) && Number.isFinite(overlayLayer), 'both layers must declare a z-index')
   assert.ok(control > overlayLayer, `the reopen control (${control}) must outrank the shell overlay layer (${overlayLayer})`)
+})
+
+/**
+ * Window drag-region ownership for the macOS desktop shell.
+ *
+ * The shell declares `-webkit-app-region: drag` exactly once — ui-web base.css,
+ * for any element marked `data-window-drag` — and Electron composes those boxes
+ * by geometry in DOM order, last box wins. A chrome row nobody marks is dead,
+ * and a surface covering a marked row keeps dragging the window instead of
+ * taking the press. The ui-theme app-region gate pairs each upstream row with
+ * its mark; this gate does the same for the rows LWB owns, because LWB owns the
+ * frame's sidebar column and both overlay surfaces while the upstream package
+ * that marked the sidebar's rows is disabled for this composition.
+ */
+test('every macOS desktop chrome row LWB owns marks itself for the window drag', async () => {
+  const source = await readFile(clientPath, 'utf8')
+  const shell = await readFile(new URL('../../../vendor/deepseek-harness/packages/client/web/src/base.css', import.meta.url), 'utf8')
+  const frame = await readFile(new URL('../../../vendor/deepseek-harness/packages/client/ui-layout/src/client/AppFrame.module.css', import.meta.url), 'utf8')
+  const patch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+
+  // The one shell rule, and the frame's own macOS side of the contract: nothing
+  // else can make a box draggable, so a missing mark is a dead band.
+  assert.match(shell, /html\[data-platform='darwin'\] \[data-window-drag\] \{\s*-webkit-app-region: drag;\s*\}/u)
+  assert.match(frame, /The frame declares no window drag of its own[\s\S]*?The Windows\s*\n\s*caption row above is the other platform's chrome and stays\./u)
+
+  // Why LWB has to own these rows: the package that marked the sidebar column's
+  // own chrome rows is disabled, and the sidebar slot is LWB's.
+  assert.match(patch, /- id: ui-sidebar\s*\n\s*disabled: true/u)
+  assert.match(source, /ctx\.slots\.inject\('sidebar', \(\) => ctx\.slots\.register\(\{/u)
+
+  // Every row LWB renders into chrome carries the mark in markup, and the mark
+  // is inert outside darwin because the sheet scopes the rule.
+  for (const row of ['lwb-sidebar-chrome', 'lwb-conversation-pane-head', 'lwb-conversation-gutter', 'lwb-mobile-chrome', 'lwb-overlay-head']) {
+    assert.match(source, new RegExp(`className: '${row}', 'data-window-drag'`, 'u'), `${row} must mark itself as a window drag row`)
+  }
+  assert.match(source, /\.lwb-sidebar-chrome,\.lwb-conversation-gutter,\.lwb-mobile-chrome \{ display:none; \}/u, 'the bands stay out of the layout outside darwin')
+
+  // The sidebar band is the column's own clearance: the traffic-light band is the
+  // row rather than padding, so geometry and clearance cannot drift apart. It
+  // spans past the aside's inline padding and it must not shrink — as a flex item
+  // the default flex-shrink would collapse it to nothing in a short window,
+  // which is a drag-region hole rather than a cosmetic bug.
+  assert.match(source, /html\[data-platform='darwin'\] \.lwb-sidebar \{ padding-top:0; \}/u)
+  assert.match(source, /html\[data-platform='darwin'\] \.lwb-sidebar-chrome \{[^}]*flex:none;[^}]*height:var\(--lwb-desktop-chrome-height,48px\);[^}]*margin-inline:-10px; \}/u)
+
+  // The conversation column leaves a deliberate gap to the session column, and
+  // the band covering that gap is placed from the same two variables as the
+  // offset that creates it, so the two cannot disagree.
+  assert.match(source, /padding-left:calc\(var\(--lwb-conversation-panel-width,264px\) \+ var\(--lwb-conversation-gutter,16px\)\)/u)
+  assert.match(source, /html\[data-platform='darwin'\] \.lwb-conversation-gutter \{[^}]*left:var\(--lwb-conversation-panel-width,264px\);[^}]*width:calc\(var\(--lwb-conversation-gutter,16px\) \+ 1px\);[^}]*height:var\(--lwb-desktop-chrome-height,48px\); \}/u)
+
+  // Narrow desktop turns LWB's column into an off-canvas drawer, so the window's
+  // leading edge needs a band of its own. It is rendered ahead of the mobile
+  // triggers and stops where the conversation column begins: covering that column
+  // would override the controls it marks ahead of this band in document order.
+  assert.match(source, /@media \(max-width:680px\) \{\s*html\[data-platform='darwin'\] \.lwb-mobile-chrome \{[^}]*left:0;[^}]*width:var\(--lwb-conversation-panel-width,264px\);[^}]*height:var\(--lwb-desktop-chrome-height,48px\); \}\s*\}/u)
+  assert.match(source, /h\('div', \{ className: 'lwb-mobile-chrome', 'data-window-drag': '', 'aria-hidden': 'true' \}\),\s*\n\s*state\.mobileNavOpen && h\('button'/u)
+
+  // LWB declares no drag region of its own: the shell rule is the only drag
+  // source, and LWB's sole app-region declaration subtracts a control.
+  const css = source.match(/const css = `([\s\S]*?)`;/u)?.[1]
+  assert.ok(css, 'client must define its product CSS')
+  const declarations = [...css.replace(/\/\*[\s\S]*?\*\//gu, '').matchAll(/-webkit-app-region:\s*([A-Za-z-]+)/gu)].map((match) => match[1])
+  assert.deepEqual(declarations, ['no-drag'], 'LWB may only opt controls out of a drag row, never declare one')
 })

@@ -21,6 +21,22 @@ npm run start:desktop
 
 开发入口默认本地端口 19487（可用 `LWB_DESKTOP_PORT` 覆盖），避免和单独安装的官方应用冲突。以终端启动命令为开发运行入口，官方开发 Dock 启动器不是 LWB 发行包。
 
+## 窗口拖拽
+
+macOS 上窗口没有可拖的标题栏：官方壳用 `titleBarStyle: 'hiddenInset'`，`AppFrame` 也明确声明 frame 自己不带任何拖拽，`-webkit-app-region: drag` 在整个客户端只声明一次——ui-web `base.css` 针对 `html[data-platform='darwin'] [data-window-drag]`。Electron 按几何在文档顺序上合成这些盒子，**最后一个覆盖该点的盒子说了算**：`drag` 加几何、`no-drag` 减几何，没有标记的元素什么都不贡献。所以每一个压在窗口顶部、又要能点的面，都得自己标记一行；没人标记的那一段就是拖不动的死区。
+
+这意味着「谁拥有这一列/这一面，谁就负责标记它的窗口行」。官方侧栏列的两行（`ui-sidebar` 的 `.topStrip` 与 `.logoRow`，即上游 ui-theme `CHROME_ROWS` 清单里的对应项）随 `ui-sidebar` 一起被本组合 `disabled`，因为 LWB 自己拥有侧栏槽位，所以这四行由 LWB 标记（都在 `lwb/dsh-bundle/client.js`）：
+
+| 行 | 覆盖 | 说明 |
+| --- | --- | --- |
+| `.lwb-sidebar-chrome` | 侧栏列顶部 48px | 红绿灯让位的窗口带。占位由这一行本身提供（因此 darwin 下 `aside` 的 `padding-top` 为 0），`flex:none` 防止矮窗被 flex 压成 0，`sticky` 让列滚动时仍留在窗口边缘 |
+| `.lwb-conversation-pane-head` | 会话列表列头 | 该列从窗口顶边开始，列头就是它的窗口行；头内的关闭按钮按 base.css 的交互元素规则自行让位 |
+| `.lwb-conversation-gutter` | 会话列与官方对话列之间的间隙 | 两列各自独立、间隙是刻意留的，没有任何包拥有这段 chrome；它的位置与列偏移共用 `--lwb-conversation-panel-width` / `--lwb-conversation-gutter` |
+| `.lwb-overlay-head` | 能力包 / 设置页页头 | 这一面盖住 frame 的各列，页头就是它的窗口行 |
+| `.lwb-mobile-chrome` | 窄窗口（≤680px）窗口左缘 | 窄窗口把侧栏变成离屏抽屉，抽屉的窗口带随它一起离场；这条带只铺到对话列起始处，且排在移动端触发器之前，避免盖掉它们自己的控件 |
+
+不确定的地方不用猜：CSS 合同由 `lwb/dsh-bundle/test/client-style-contract.test.mjs` 的门禁守住（标记、标记只在 darwin 生效、带宽与占位同源、不得自行声明 `drag`），侧栏那一行另有 `client-nav-preference.test.mjs` 的渲染断言。Windows 不受影响：frame 自己有 caption 行；Web 端没有拖拽区。
+
 ## 数据
 
 | 内容 | 源码启动默认位置 |

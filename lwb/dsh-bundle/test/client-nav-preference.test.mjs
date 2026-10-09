@@ -462,3 +462,25 @@ test('reopen controls delegate to the native layout and mobile uses full groups'
     assert.equal(JSON.parse(app.window.localStorage.getItem(WORKBENCH_KEY)).capabilityPage, 'pack-a:runs')
   } finally { await app.unload() }
 })
+
+test('the sidebar renders its own window chrome row ahead of every control', async () => {
+  // The sidebar column's drag geometry is this row and nothing else: the shell
+  // turns the mark into `-webkit-app-region: drag` for darwin only, and the
+  // package that used to mark the column's chrome rows is disabled for this
+  // composition. It has to precede the brand and collapse controls so their own
+  // no-drag still wins over it, and it must exist in both column states because
+  // a collapsed rail is still part of the window's top edge.
+  for (const options of [{}, { collapsed: true, width: 56 }, { collapsed: true, width: 0 }, { mobile: true }]) {
+    const app = await mountSidebar(options)
+    try {
+      await app.render()
+      const sidebar = app.container.querySelector('.lwb-sidebar')
+      const band = sidebar.querySelector('.lwb-sidebar-chrome')
+      assert.ok(band, 'the sidebar marks a window chrome row')
+      assert.equal(band.hasAttribute('data-window-drag'), true, 'the row carries the shell mark')
+      assert.equal(sidebar.firstElementChild, band, 'the row leads the column, so controls subtract from it')
+      assert.equal(band.getAttribute('aria-hidden'), 'true', 'the row is geometry, not content')
+      assert.equal(band.textContent, '')
+    } finally { await app.unload() }
+  }
+})
