@@ -27,6 +27,8 @@
 | `lwb/packs/spoken-video/skills/remotion-best-practices/` | 仓库包含 Remotion 编程规则资料；当前未完整记录其原始发布地址、导入版本和独立许可文件，需维护者补充核验。Remotion 软件本身的许可证不能代替这份资料的来源证明。 |
 | `lwb/packs/spoken-video/skills/content-video/` | 口播创作规则，历史迁移背景见 [历史摘要与出处说明](docs/history.md#资源出处保留说明)；原始来源及可再分发声明需进一步补充。 |
 | `lwb/packs/spoken-video/assets/voices/tiffy-confident.mp3` | 随包参考音频；当前未记录可核验的来源和使用/再分发授权，需维护者补充。 |
+| `lwb/packs/ai-arena/assets/voices/host.mp3` | 狼人杀主持人参考音色，由产品负责人提供自有的语音素材（原文件 `Documents/语音备份/planA 语音.mp3`），随包作为 TTS 参考音频使用；对外再分发范围需维护者确认。 |
+| `lwb/packs/ai-arena/assets/voices/` 其余参考音频与 `assets/logos/` | 选手音色与模型 logo，随包分发；当前未逐条记录来源和使用/再分发授权，需维护者补充。 |
 
 以上未完成的出处记录是发布资料缺口，不表示已核验拥有开放再分发许可。贡献新的技能、音频、图片或字体时，应同时提交来源链接、版本、许可及必要署名；用户上传的素材由用户自行确认使用权限。
 

@@ -29,10 +29,17 @@
   const stage = $('stage')
   const boardCard = $('boardCard')
   const board = $('board')
+  const heroEl = document.querySelector('.hero')
   const heroLbl = $('heroLbl')
   const heroNum = $('heroNum')
   const heroTot = $('heroTot')
   const heroTag = $('heroTag')
+  const turnEl = $('turn')
+  const turnLogo = $('turnLogo')
+  const turnKicker = $('turnKicker')
+  const turnName = $('turnName')
+  const turnMove = $('turnMove')
+  const turnTag = $('turnTag')
   const score = $('score')
   const who = $('who')
   const coord = $('coord')
@@ -52,6 +59,19 @@
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
   const side = i => S.playerSide(D.game, i)
   const visibleMoves = index => D.moves.slice(0, index)
+
+  /* ---------------- 当前执行者卡（与 replay/markup.mjs 同源） ----------------
+     整场画面里「谁在执行」的唯一大号常驻元素。视频侧由 markup 算成内联样式，
+     这里只换文本与状态，入场节奏交给 scene.css 的 .stage.animate 关键帧。 */
+  function renderTurn({ player = null, kicker, name, meta = '', tag = '', phase = 'move' }) {
+    turnEl.dataset.phase = phase
+    turnKicker.textContent = kicker
+    turnName.textContent = name
+    turnMove.innerHTML = meta
+    turnTag.innerHTML = tag
+    if (player && player.logo) { turnLogo.src = player.logo; turnLogo.hidden = false }
+    else { turnLogo.hidden = true; turnLogo.removeAttribute('src') }
+  }
 
   /* ---------------- 狼人杀：六席舞台 ---------------- */
   const WOLF = D.game.id === 'werewolf'
@@ -79,14 +99,19 @@
     }
   }
   function buildWolf() {
+    /* 列数按人数与画幅取向写进 CSS 变量：横竖屏切换时不用重建 DOM。 */
+    const cols = (D.werewolf && D.werewolf.columns) || {}
+    stage.style.setProperty('--ww-cols', String(cols.landscape || Math.min(WOLF_SEATS.length, 6)))
+    stage.style.setProperty('--ww-cols-portrait', String(cols.portrait || 3))
+    stage.dataset.seats = String(WOLF_SEATS.length)
     boardCard.innerHTML =
       '<div class="ww-scene">' +
       ['night', 'day'].map(scene => `<img class="ww-bg" data-scene="${scene}" src="${ART.scenes[scene] || ''}" alt="">`).join('') +
       '<div class="ww-mask"></div>' +
       '<header class="ww-head"><span class="ww-day" id="wwDay"></span><b class="ww-phase" id="wwPhase"></b></header>' +
-      '<p class="ww-deaths" id="wwDeaths" hidden></p>' +
+      '<div class="ww-host" id="wwHost" hidden><em>主持人</em><p id="wwHostText"></p></div>' +
       '<div class="ww-cast" id="wwCast">' + WOLF_SEATS.map((seat, i) =>
-        `<figure class="ww-seat" data-i="${i}" data-seat="${seat.seat}">` +
+        `<figure class="ww-seat" data-i="${i}" data-seat="${seat.seat}" style="--ww-i:${i}">` +
         `<span class="ww-no">${seat.seat}</span>` +
         `<span class="ww-face"><img src="${seatFace(seat, true)}" alt=""><i class="ww-veil"></i></span>` +
         `<figcaption><b class="ww-name">${esc(seat.name)}</b><em class="ww-role" data-role="${esc(seat.role)}">${esc(seat.mark || '·')}</em></figcaption>` +
@@ -145,9 +170,13 @@
       }
     })
 
-    const deaths = $('wwDeaths')
-    deaths.hidden = frame.deaths.length === 0
-    if (frame.deaths.length) deaths.textContent = frame.deaths.map(s => `${s} 号出局`).join('、')
+    /* 主持人播报：出局与阶段由它一起说出，不再单独挂一条出局横幅。 */
+    const hostLine = isFinale
+      ? ((D.werewolf && D.werewolf.finale) || '')
+      : ((frame.step && frame.step.host) || (index === 0 ? (D.werewolf && D.werewolf.host) || '' : ''))
+    const host = $('wwHost')
+    host.hidden = !hostLine
+    if (hostLine) $('wwHostText').textContent = hostLine
 
     const win = $('wwWin')
     win.hidden = !isFinale
@@ -156,12 +185,18 @@
       win.innerHTML = `<b>${winnerSide === 'wolf' ? '狼人获胜' : winnerSide ? '好人获胜' : '比赛结束'}</b><span>${esc((D.result && D.result.message) || '')}</span>`
     }
 
-    heroLbl.textContent = isFinale ? '终局' : `第 ${frame.day} 天`
-    heroNum.textContent = label
-    heroTot.textContent = isFinale ? `共 ${M} 步` : `${index} / ${M} 步`
-    heroTag.innerHTML = isFinale
-      ? `<span class="pill win">${winnerSide === 'wolf' ? '狼人获胜' : '好人获胜'}</span>`
-      : wolfPill(index, frame)
+    /* 执行者卡接管「谁在执行」：狼人杀没有棋盘，侧栏的 hero 行整块让给它
+       （天数与阶段在舞台抬头里已经有了，不再重复一遍）。 */
+    heroEl.hidden = true
+    const actor = !isFinale && index >= 1 ? (D.players[D.moves[index - 1].p] || null) : null
+    renderTurn(isFinale
+      ? {
+          kicker: '终局', name: winnerSide ? (winnerSide === 'wolf' ? '狼人阵营' : '好人阵营') : '比赛结束',
+          meta: `共 <b>${M}</b> 步`, tag: `<span class="pill win">${winnerSide === 'wolf' ? '狼人获胜' : '好人获胜'}</span>`, phase: 'finale',
+        }
+      : actor
+        ? { player: actor, kicker: '本手执行', name: actor.name || '', meta: `<b>${index}</b> / ${M} 步`, tag: wolfPill(index, frame) }
+        : { kicker: '开局', name: '天黑请闭眼', meta: `<b>0</b> / ${M} 步` })
 
     score.querySelectorAll('.pcard').forEach(card => {
       const i = Number(card.dataset.i)
@@ -182,13 +217,13 @@
       finale.dataset.kind = 'win'
       finale.querySelector('small').textContent = `终局 · ${winnerSide === 'wolf' ? '狼人阵营' : '好人阵营'}`
     } else if (last) {
-      who.innerHTML = `<img class="logo" src="${(WOLF_SEATS[last.p] || {}).logo || ''}" alt="">${esc(D.players[last.p].name)} · 本手发言`
+      who.innerHTML = `<img class="logo" src="${(WOLF_SEATS[last.p] || {}).logo || ''}" alt=""><b class="sn">${esc(D.players[last.p].name)}</b><em class="stag">本手发言</em>`
       coord.textContent = S.actionLabel(last.a, D.game)
       coord.hidden = false
       text.textContent = last.s
       text.style.fontSize = stepSize(last.s.length) + 'px'
     } else {
-      who.textContent = '开局'
+      who.innerHTML = '<b class="sn">开局</b>'
       coord.hidden = true
       text.textContent = '天黑请闭眼。'
       text.style.fontSize = stepSize(6) + 'px'
@@ -205,7 +240,11 @@
     drawTicks()
   }
   const duration = i => {
-    if (i === FINALE) return FINALE_MS
+    if (i === FINALE) {
+      /* 终局卡那一手可能带最后一条结算播报（见 replay/data.mjs）：卡本身固定 4 秒，但要放得下这一句。 */
+      const closing = Number(D.werewolf && D.werewolf.finaleAudioSec) || 0
+      return closing > 0 ? Math.max(FINALE_MS, closing * 1000 + AUDIO_TAIL_MS) : FINALE_MS
+    }
     const spoken = i >= 1 ? Number(D.moves[i - 1]?.audioSec) : 0
     return Number.isFinite(spoken) && spoken > 0 ? Math.max(STEP_MS, spoken * 1000 + AUDIO_TAIL_MS) : STEP_MS
   }
@@ -408,14 +447,27 @@
     }
     prevPieces = nextPieces
 
-    /* 手数（状态，放大为主角之一）+ 关键手标签 */
+    /* 手数：降级为执行者卡下的元数据行；关键手标签仍挂在这里 */
+    heroEl.hidden = false
     heroLbl.textContent = isFinale ? '终局' : '当前手数'
     heroNum.textContent = isFinale ? M : index
     heroTot.textContent = `/ ${M} 手`
     heroTag.innerHTML = tagHtml(key, isFinale, isDraw)
 
-    /* 记分板 */
+    /* 当前执行者卡：开局指先手、逐手指本手、终局指胜方（与 replay/markup.mjs 同一口径）。
+       右侧标出席位，让观众能把「这个模型」对上盘上的颜色。 */
     const active = isFinale ? -1 : (last ? last.p : 0)
+    const seat = isFinale ? winner : active
+    const turnPlayer = seat === null || seat < 0 ? null : (D.players[seat] || null)
+    renderTurn({
+      player: turnPlayer,
+      name: turnPlayer ? (turnPlayer.name || '') : (isFinale ? (isDraw ? '和棋' : '比赛结束') : ''),
+      meta: turnPlayer ? `${esc(side(seat))} · ${seat === 0 ? '先手' : '后手'}` : '',
+      kicker: isFinale ? (isDraw ? '终局' : '胜方') : (index >= 1 ? '本手执行' : '先手'),
+      phase: isFinale ? 'finale' : 'move',
+    })
+
+    /* 记分板：执行者卡之下的常驻名册（active 已在上面算过） */
     score.querySelectorAll('.pcard').forEach(card => {
       const i = Number(card.dataset.i)
       card.dataset.active = String(i === active)
@@ -427,23 +479,23 @@
       fmessage.textContent = (D.result && D.result.message) || '比赛已结束。'
       finale.dataset.kind = isDraw ? 'draw' : 'win'
     } else if (last) {
-      who.innerHTML = `<img class="logo" src="${D.players[last.p].logo || ''}" alt="">${esc(D.players[last.p].name)} · 本手发言`
+      who.innerHTML = `<img class="logo" src="${D.players[last.p].logo || ''}" alt=""><b class="sn">${esc(D.players[last.p].name)}</b><em class="stag">本手发言</em>`
       coord.textContent = S.actionLabel(last.a, D.game)
       coord.hidden = false
       text.textContent = last.s
       text.style.fontSize = stepSize(last.s.length) + 'px'
     } else {
-      who.textContent = '开局'
+      who.innerHTML = '<b class="sn">开局</b>'
       coord.hidden = true
       text.textContent = '比赛开始'
       text.style.fontSize = stepSize(4) + 'px'
     }
 
-    /* 回合记录：当前手之前的最近 5 手，压低对比。
-       取 5 而非 3：横屏叙事区高 387px，3 条时本手发言与记录之间空出 124~169px
-       （比发言块本身还高），5 条把空隙压到 46~91px；6 条在最长发言下会溢出。
+    /* 回合记录：当前手之前的最近 4 手，压低对比。
+       取 4 而非 5：侧栏顶部让给了执行者卡（84px），记录块是可收缩的一方，
+       本手发言永远优先保留完整高度；超出由 .rlist 的 overflow 从最旧一条裁。
        第 0 手没有历史就整块收起。 */
-    const entries = visibleMoves(index).slice(-6, -1).reverse()
+    const entries = visibleMoves(index).slice(-5, -1).reverse()
     recentEl.hidden = entries.length === 0
     rlist.innerHTML = entries
       .map(m => `<div class="rentry"><b>${m.n} · ${esc(D.players[m.p].name)}</b><span>${esc(m.s)}</span></div>`).join('')
@@ -477,15 +529,40 @@
     for (let i = 0; i <= FINALE; i++) sum += duration(i)
     return sum
   }
+  /* 一手可以先主持人后选手：两个播放器 + 一个定时器，把选手发言排在主持人那一段之后。 */
   const voice = document.createElement('audio')
+  const hostVoice = document.createElement('audio')
   voice.preload = 'auto'
+  hostVoice.preload = 'auto'
+  /* 挂在文档里：脱离文档的音频元素可能被浏览器回收，播放状态也不便于观察。 */
+  voice.hidden = true
+  hostVoice.hidden = true
+  document.body.append(hostVoice, voice)
+  let speechTimer = null
+  function stopAudio() {
+    clearTimeout(speechTimer)
+    speechTimer = null
+    for (const element of [hostVoice, voice]) { element.pause(); element.removeAttribute('src') }
+  }
+  function playClip(element, src) {
+    if (!src) return
+    element.src = src
+    element.currentTime = 0
+    if (playing) element.play().catch(() => {})
+  }
   function speak(step) {
-    voice.pause()
-    const clip = step >= 1 && step <= M ? D.moves[step - 1]?.audio : ''
-    if (!clip) { voice.removeAttribute('src'); return }
-    voice.src = clip
-    voice.currentTime = 0
-    if (playing) voice.play().catch(() => {})
+    stopAudio()
+    const move = step >= 1 && step <= M ? D.moves[step - 1] : null
+    /* 终局卡没有选手发言，只有最后一条结算播报（见 replay/data.mjs 的 hostNarrationLines）。 */
+    if (!move) {
+      if (step === FINALE) playClip(hostVoice, (D.werewolf && D.werewolf.finaleAudio) || '')
+      return
+    }
+    playClip(hostVoice, move.hostAudio)
+    if (!move.audio) return
+    const delay = Math.max(0, Number(move.hostAudioSec || 0) * 1000)
+    if (delay) speechTimer = setTimeout(() => playClip(voice, move.audio), delay)
+    else playClip(voice, move.audio)
   }
   const fmt = ms => {
     const s = Math.max(0, Math.round(ms / 1000))
@@ -528,7 +605,7 @@
   }
   function pause() {
     playing = false
-    voice.pause()
+    stopAudio()
     stage.classList.add('paused')
     syncPlayButton()
   }

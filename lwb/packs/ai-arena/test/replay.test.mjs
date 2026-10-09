@@ -3,10 +3,10 @@ import test from 'node:test'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { boardSvg } from '../presentation.mjs'
+import { boardSvg, playerSide } from '../presentation.mjs'
 import { replayData } from '../replay/data.mjs'
 import { isKeyMove, stageHtml } from '../replay/markup.mjs'
-import { AUDIO_TAIL_SECONDS, FINALE_SECONDS, frameToStep, totalFrames } from '../replay/timeline.mjs'
+import { AUDIO_TAIL_SECONDS, FINALE_SECONDS, frameToStep, stepSeconds, totalFrames } from '../replay/timeline.mjs'
 import { assignVoices, matchVoiceKey } from '../voices.mjs'
 import { SCENE_CSS } from '../replay/styles.mjs'
 
@@ -43,6 +43,18 @@ test('视频时间轴：每手 secondsPerMove 秒 + 终局卡 4 秒', () => {
   assert.equal(voiced, Math.round((3 + (5 + AUDIO_TAIL_SECONDS) + 3 + 3 + FINALE_SECONDS) * fps))
   assert.deepEqual(frameToStep(3 * fps, fps, 3, 3, durations), { index: 1, t: 0 })
   assert.equal(frameToStep(Math.round((3 + 5 + AUDIO_TAIL_SECONDS) * fps), fps, 3, 3, durations).index, 2)
+})
+
+test('终局卡那一手也能带配音：最后一条结算播报要放得下，其余仍固定 4 秒', () => {
+  const moves = 3
+  /* durations 比手数多一格：第 moves 项是终局卡那一手的配音（狼人杀最后一条结算播报） */
+  const durations = [0, 5, 0, 4.2]
+  assert.equal(stepSeconds(moves + 1, moves, 3, durations), 4.2 + AUDIO_TAIL_SECONDS)
+  /* 没有终局配音时，终局卡还是固定的 4 秒，前面几手各按自己的音频/每手秒数 */
+  assert.equal(stepSeconds(moves + 1, moves, 3, [0, 5, 0, 0]), FINALE_SECONDS)
+  assert.equal(stepSeconds(moves + 1, moves, 3, null), FINALE_SECONDS)
+  assert.equal(stepSeconds(2, moves, 3, durations), 5 + AUDIO_TAIL_SECONDS)
+  assert.equal(stepSeconds(3, moves, 3, durations), 3)
 })
 
 test('关键手档位只筛推近与刻度，与离线 HTML 的 isKey 口径一致', () => {
@@ -163,4 +175,63 @@ test('模型文本在 markup 里被 HTML 转义，不会注入标签', () => {
   assert.equal(html.includes('</script><img onerror='), false)
   assert.match(html, /&lt;b&gt;Black&lt;\/b&gt;/u)
   assert.match(html, /&lt;\/script&gt;&lt;img onerror=alert\(1\)&gt;/u)
+})
+
+/* 手机上看不清「谁在执行」是这个画面此前的真实缺陷：名字只有 12—13px 挂在记分条上。
+   下面两条守住补救：每一手都有一张写明模型名的执行者卡，字号不低于可读下限。 */
+test('每一手都有一张写明执行模型的执行者卡', () => {
+  const data = replayData(gomoku)
+  for (const layout of ['landscape', 'portrait']) {
+    const opening = stageHtml(data, 0, { layout, t: 0.5 })
+    assert.match(opening, /class="turn" data-phase="move"/u)
+    assert.match(opening, /<small class="turn-kicker">先手<\/small>/u)
+    assert.match(opening, new RegExp(`<b class="turn-name">${data.players[0].name}</b>`, 'u'))
+
+    /* 第 5 手由谁走，卡片上就该是谁；右侧席位要与记分条的side一致 */
+    const mid = stageHtml(data, 5, { layout, t: 0.5 })
+    const speaker = data.moves[4].p
+    assert.match(mid, /<small class="turn-kicker">本手执行<\/small>/u)
+    assert.match(mid, new RegExp(`<b class="turn-name">${data.players[speaker].name}</b>`, 'u'))
+    assert.match(mid, new RegExp(`<span class="turn-meta">${playerSide(data.game, speaker)} · ${speaker === 0 ? '先手' : '后手'}</span>`, 'u'))
+
+    const end = stageHtml(data, 10, { layout, t: 1 })
+    assert.match(end, /<small class="turn-kicker">胜方<\/small>/u)
+    assert.match(end, /<b class="turn-name">黑模型<\/b>/u)
+    assert.match(end, /data-phase="finale" style="opacity/u)
+  }
+  /* 署名跟着画面最大的那句字幕走，不再是一行 12px 的元数据 */
+  assert.match(stageHtml(data, 5, { layout: 'landscape', t: 0.5 }), new RegExp(`<b class="sn">${data.players[data.moves[4].p].name}</b><em class="stag">本手发言</em>`, 'u'))
+})
+
+test('换手节拍：执行者卡先到、落子随后、台词最后', async () => {
+  const data = replayData(gomoku)
+  const html = (t, index = 5) => stageHtml(data, index, { layout: 'landscape', t })
+  /* t=0 三者都还没入场；执行者卡的时长最短（.34s），台词要等到 .22s 之后才开始。
+     「没入场」要连分号一起匹配，否则 opacity:0.85 也会被当成 0。 */
+  assert.match(html(0), /class="turn" data-phase="move" style="opacity:0;transform:translateY\(14px\)"/u)
+  assert.match(html(0), /class="speech" style="opacity:0;/u)
+  assert.match(html(0), /<g style="opacity:0;transform:translateY\(-10px\)"/u)
+  assert.match(html(0.2), /class="speech" style="opacity:0;/u, '台词要排在落子之后')
+  assert.doesNotMatch(html(0.35), /class="speech" style="opacity:0;/u)
+  /* 离线 HTML 用同名关键帧复刻同一节奏（延迟写死在 scene.css 里），两边必须一起改 */
+  const css = await readFile(join(HERE, '..', 'replay', 'scene.css'), 'utf8')
+  assert.match(css, /\.stage\.animate \.board svg g\.is-new\{animation:stoneIn \.26s cubic-bezier\(\.2,\.8,\.3,1\) \.12s both\}/u)
+  assert.match(css, /\.stage\.animate \.speech\{animation:fadeUp \.2s ease-out \.22s both\}/u)
+  assert.match(css, /\.stage\.animate \.turn\{animation:turnIn \.34s/u)
+})
+
+test('执行者卡与字幕署名的字号守住手机可读下限', async () => {
+  const css = await readFile(join(HERE, '..', 'replay', 'scene.css'), 'utf8')
+  const px = pattern => {
+    const match = css.match(pattern)
+    assert.ok(match, `scene.css 缺少 ${pattern}`)
+    return Number(match[1])
+  }
+  /* 720×1280 降到手机宽度（约 393pt）时缩放约 0.55：28px 以下就掉到 15pt 以下，
+     在竖屏 feed 里读不出模型名 —— 这是这次改造要守住的下限。 */
+  assert.ok(px(/\.turn-name\{font-size:(\d+)px/u) >= 28, '横屏执行者卡名字不小于 28px')
+  assert.ok(px(/\.stage\[data-layout="portrait"\] \.turn-name\{font-size:(\d+)px/u) >= 30, '竖屏执行者卡名字不小于 30px')
+  assert.ok(px(/\.sn\{font-size:(\d+)px/u) >= 20, '字幕署名不小于 20px')
+  assert.ok(px(/\.stage\[data-layout="portrait"\] \.sn\{font-size:(\d+)px/u) >= 20, '竖屏字幕署名不小于 20px')
+  assert.ok(px(/\.shead \.logo\{width:(\d+)px/u) >= 24, '署名的 logo 不小于 24px')
 })

@@ -1,12 +1,30 @@
 {
   "name": "@scitiger-ai/lwb-ai-arena",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "main": "index.mjs",
-  "exports": {".": "./index.mjs", "./client": "./client.js", "./lwb-pack.json": "./lwb-pack.json", "./package.json": "./package.json"},
-  "dependencies": {"@algorithm.ts/gomoku": "4.0.5", "lucide-react": "0.468.0"},
-  "peerDependencies": {"@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2", "@scitiger-ai/lwb-pack-sdk": "0.1.0"},
-  "dsh": {"client": {"platform": "web", "inject": ["@scitiger-ai/lwb-dsh-bundle"]}}
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./client.js",
+    "./lwb-pack.json": "./lwb-pack.json",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@algorithm.ts/gomoku": "4.0.5",
+    "lucide-react": "0.468.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
+    "@scitiger-ai/lwb-pack-sdk": "0.1.0"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@scitiger-ai/lwb-dsh-bundle"
+      ]
+    }
+  }
 }

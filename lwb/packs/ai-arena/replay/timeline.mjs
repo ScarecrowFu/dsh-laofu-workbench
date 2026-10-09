@@ -12,9 +12,15 @@ export const AUDIO_TAIL_SECONDS = 0.35
 /**
  * 每一步的时长（秒）。index 0 是开局，1..moveCount 是落子，moveCount+1 是终局卡。
  * 没有音频时长表时，每手仍是 secondsPerMove，和旧回放一致。
+ *
+ * `durations` 按手数排列，多出来的第 moveCount 项是**终局卡那一手的配音**（狼人杀最后一条
+ * 结算播报，见 replay/data.mjs 的 hostNarrationLines）：终局卡固定 4 秒，但必须放得下这一句。
  */
 export function stepSeconds(index, moveCount, secondsPerMove, durations = null) {
-  if (index >= moveCount + 1) return FINALE_SECONDS
+  if (index >= moveCount + 1) {
+    const closing = Number(durations?.[moveCount]) || 0
+    return closing > 0 ? Math.max(FINALE_SECONDS, closing + AUDIO_TAIL_SECONDS) : FINALE_SECONDS
+  }
   const spoken = index >= 1 ? Number(durations?.[index - 1]) : 0
   if (Number.isFinite(spoken) && spoken > 0) return Math.max(secondsPerMove, spoken + AUDIO_TAIL_SECONDS)
   return secondsPerMove

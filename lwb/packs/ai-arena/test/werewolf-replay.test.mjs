@@ -9,11 +9,13 @@ import { readdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { noteSpeech, werewolf } from '../werewolf.mjs'
-import { replayData } from '../replay/data.mjs'
+import { hostNarrationLines, replayData } from '../replay/data.mjs'
+import { countSpeechLines } from '../speech.mjs'
 import { stageHtml } from '../replay/markup.mjs'
 import { replayHtml, reportMarkdown } from '../export.mjs'
 import { parseDecision } from '../host.mjs'
-import { ROLE_MARK, werewolfPhaseLabel, werewolfScene, werewolfStage } from '../presentation.mjs'
+import { WEREWOLF_PORTRAIT_VARIANTS, assignPortraits, portraitKey, ROLE_MARK, werewolfPhaseLabel, werewolfScene, werewolfStage } from '../presentation.mjs'
+import { werewolfTimeline, werewolfStageState } from '../werewolf-projection.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -45,12 +47,36 @@ function playedMatch(overrides = {}) {
   })
   return {
     id: ID, title: '狼人杀演示',
-    game: { id: 'werewolf', name: '狼人杀', description: '6 人标准局', version: werewolf.version },
+    game: { id: 'werewolf', name: '狼人杀', description: '标准局', version: werewolf.version },
     players: ['猎人', '狼甲', '村民', '狼乙', '预言家', '女巫'].map((name, index) => ({ name, provider: 'test', model: `ww-${index + 1}` })),
-    config: { seed: SEED },
+    config: { seed: SEED, seats: 6 },
     events, status: 'finished', result: { kind: 'win', winner: state.winner, message: state.terminalReason },
     calls: SCRIPT.length, tokens: 100, state,
     ...overrides,
+  }
+}
+
+/* 8 人局只跑到第一天：验证档位、栅格列数与逐手播报都在同一条链路上。 */
+const SEED_8 = 0x8f3d1c07
+function playedEightPlayerMatch() {
+  let state = werewolf.create(SEED_8, 8)
+  const events = []
+  const play = (player, action) => {
+    state = werewolf.apply(state, action, player)
+    noteSpeech(state, player, '发言')
+    events.push({ type: 'move', moveNumber: events.length + 1, player, action, speech: '发言', elapsedMs: 100 })
+  }
+  const wolves = state.players.filter(player => player.role === 'werewolf' && player.alive).map(player => player.seat)
+  const victim = state.players.find(player => player.role === 'villager').seat
+  for (const seat of wolves) play(seat - 1, { type: 'kill', target: victim })
+  play(state.players.find(player => player.role === 'seer').seat - 1, { type: 'check', target: wolves[0] })
+  play(state.players.find(player => player.role === 'witch').seat - 1, { type: 'potion', potion: 'pass' })
+  return {
+    id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', title: '狼人杀 8 人演示',
+    game: { id: 'werewolf', name: '狼人杀', description: '标准局', version: werewolf.version },
+    players: Array.from({ length: 8 }, (_, index) => ({ name: `模型 ${index + 1}`, provider: 'test', model: `ww-${index + 1}` })),
+    config: { seed: SEED_8, seats: 8 },
+    events, status: 'running', result: null, calls: events.length, tokens: 10, state,
   }
 }
 
@@ -89,16 +115,33 @@ test('replayData 投影出六席身份、逐手存活与出局座位', () => {
   assert.deepEqual(data.werewolf.seats.map(seat => seat.portrait), ['chatgpt', 'claude', 'deepseek', 'doubao', 'kimi', 'mimo'])
   const steps = data.werewolf.steps
   assert.equal(steps.length, 18)
-  assert.deepEqual(steps[0], { n: 1, seat: 2, phase: 'night-wolf', label: '狼人行动', scene: 'night', day: 1, alive: [1, 2, 3, 4, 5, 6], deaths: [] })
-  /* 女巫那一手同时是黎明结算：3 号出局 */
+  assert.deepEqual(steps[0], {
+    n: 1, seat: 2, phase: 'night-wolf', label: '狼人行动', scene: 'night', day: 1, alive: [1, 2, 3, 4, 5, 6], deaths: [],
+    /* 第一头狼只是提案，阶段没变，这一步开场的播报仍是开局的「天黑请闭眼」 */
+    host: '天黑请闭眼。狼人请睁眼，选择今晚要击杀的玩家。',
+  })
+  /* 台词是「本手开场」口径：第 4 手是女巫用药，出局画在这一帧，天亮结算却属于下一步
+     （白天第一位发言者那一手）——主持人先说引导、选手后说发言，两者不能同帧错位。 */
   assert.deepEqual(steps[3].deaths, [3])
   assert.deepEqual(steps[3].alive, [1, 2, 4, 5, 6])
+  assert.equal(steps[3].host, '女巫请睁眼。')
   assert.equal(steps[4].scene, 'day')
+  assert.match(steps[4].host, /^天亮了，昨夜 3 号出局。第 1 天，请存活玩家依次发言。$/)
+  /* 用户报的那一处：白天最后一位发言者（6 号）手里不能提前说「发言结束」，
+     它落在进入投票阶段的第一手（第 10 手 = 第一位投票者）。 */
+  assert.equal(steps[8].seat, 6)
+  assert.match(steps[8].host, /请存活玩家依次发言/u)
+  assert.equal(steps[9].seat, 1)
+  assert.equal(steps[9].host, '发言结束，请投票放逐一名玩家。')
   assert.deepEqual(steps[13].deaths, [2])
+  assert.match(steps[14].host, /^2 号被投票放逐。天黑请闭眼。/)
   assert.deepEqual(steps[16].deaths, [1])
   assert.equal(steps[17].phase, 'hunter')
   assert.deepEqual(steps[17].deaths, [4])
   assert.equal(steps[17].scene, 'night')
+  /* 猎人开枪那一手读「可以开枪」的引导；他打出的结果没有下一手可挂，交给终局卡。 */
+  assert.match(steps[17].host, /^天亮了，昨夜 1 号出局。猎人出局，可以开枪带走一名玩家。$/)
+  assert.match(data.werewolf.finale, /^猎人开枪带走了 4 号。/)
 })
 
 test('关键步是出局与终局，不是吃子/将军', () => {
@@ -112,14 +155,70 @@ test('关键步是出局与终局，不是吃子/将军', () => {
   assert.equal(data.winRun, null)
 })
 
-test('规则版本不匹配时降级为「只播发言」，不按新规则解释历史对局', () => {
+test('种子缺失或档位不支持时降级为「只播发言」，不按新规则解释历史对局', () => {
   const match = playedMatch()
-  const data = replayData({ ...match, game: { ...match.game, version: '9.9.9' } })
+  const data = replayData({ ...match, config: { seats: 6 } })
   assert.equal(data.werewolf.steps, null)
   assert.equal(data.result.side, 'village')
   assert.equal(data.werewolf.seats.filter(seat => seat.role).length, 6)
-  /* 仍然画得出六席，不抛异常 */
+  /* 仍然画得出六席，不抛异常；降级时开局与终局播报照旧 */
+  const stage = stageHtml(data, 5, { layout: 'landscape', t: 0 })
+  assert.equal((stage.match(/class="ww-seat"/gu) || []).length, 6)
+  assert.match(stageHtml(data, 0, { layout: 'landscape', t: 0 }), /天黑请闭眼/u)
+  assert.match(stageHtml(data, 19, { layout: 'landscape', t: 1 }), /好人获胜/u)
+})
+
+/* 狼人杀没有棋盘：侧栏的执行者卡就是「谁在执行」的主入口，逐手都要写明模型名。
+   席位舞台上的金框只留给胜方，本手执行改用蓝环（颜色口径在 scene.css）。 */
+test('狼人杀的执行者卡逐手写明模型名，终局换成阵营口径', () => {
+  const data = replayData(playedMatch())
+  for (const layout of ['landscape', 'portrait']) {
+    const opening = stageHtml(data, 0, { layout, t: 0.5 })
+    assert.match(opening, /class="turn" data-phase="move"/u)
+    assert.match(opening, /<small class="turn-kicker">开局<\/small>/u)
+
+    const mid = stageHtml(data, 5, { layout, t: 0.5 })
+    const speaker = data.moves[4].p
+    assert.match(mid, /<small class="turn-kicker">本手执行<\/small>/u)
+    assert.match(mid, new RegExp(`<b class="turn-name">${data.players[speaker].name}</b>`, 'u'))
+    assert.match(mid, new RegExp(`<span class="sn">${data.players[speaker].name}</span>|<b class="sn">${data.players[speaker].name}</b>`, 'u'))
+
+    const end = stageHtml(data, 19, { layout, t: 1 })
+    assert.match(end, /<div class="turn" data-phase="finale"/u)
+    assert.match(end, /<small class="turn-kicker">终局<\/small>/u)
+    assert.match(end, /<b class="turn-name">\S+阵营<\/b>/u)
+  }
+})
+
+test('1.0.0 的历史对局按 6 人牌型重放：版本升级不吞掉旧回放的席卡与身份', () => {
+  const match = playedMatch()
+  /* 1.0.0 的比赛没有 config.seats，人数只能从选手列表推断 */
+  const legacy = { ...match, game: { ...match.game, version: '1.0.0' }, config: { seed: SEED } }
+  const data = replayData(legacy)
+  assert.equal(data.werewolf.steps.length, 18)
+  assert.deepEqual(data.werewolf.steps[3].deaths, [3])
   assert.equal((stageHtml(data, 5, { layout: 'landscape', t: 0 }).match(/class="ww-seat"/gu) || []).length, 6)
+})
+
+test('8 人档位：投影、栅格列数与逐手播报都跟着人数走', () => {
+  const data = replayData(playedEightPlayerMatch())
+  assert.equal(data.werewolf.seats.length, 8)
+  assert.deepEqual(data.werewolf.columns, { landscape: 4, portrait: 4 })
+  assert.equal(data.werewolf.seats.map(seat => seat.role).filter(role => role === 'werewolf').length, 2)
+  assert.equal(data.werewolf.steps.length, 4)
+  /* 8 人局只跑到女巫：这一步开场的播报是「女巫请睁眼」，天亮结算还没有下一手可挂，归终局文案 */
+  assert.equal(data.werewolf.steps[3].host, '女巫请睁眼。')
+  assert.match(data.werewolf.finale, /^天亮了，昨夜 \d+ 号出局。第 1 天，请存活玩家依次发言。$/)
+  const stage = stageHtml(data, 4, { layout: 'landscape', t: 0.2 })
+  assert.match(stage, /data-seats="8"/u)
+  assert.match(stage, /--ww-cols:4;--ww-cols-portrait:4/u)
+  assert.equal((stage.match(/class="ww-seat"/gu) || []).length, 8)
+  assert.match(stage, /class="ww-host"/u)
+  assert.match(stage, /女巫请睁眼/u)
+  assert.match(stageHtml(data, 5, { layout: 'landscape', t: 0.2 }), /天亮了，昨夜 \d+ 号出局/u)
+  const portrait = stageHtml(data, 4, { layout: 'portrait', t: 0.2 })
+  assert.match(portrait, /data-layout="portrait"/u)
+  assert.match(portrait, /--ww-cols-portrait:4/u)
 })
 
 test('六席舞台：昼夜、阶段、行动者与出局都能画出来', () => {
@@ -133,19 +232,25 @@ test('六席舞台：昼夜、阶段、行动者与出局都能画出来', () =>
   assert.equal(opening.includes('<svg'), false, '狼人杀不应再画棋盘')
   assert.match(opening, /第 1 天/u)
 
-  /* 第 4 手：女巫用药，3 号出局，白天只出现在白天 */
+  /* 第 4 手：女巫用药，3 号出局；出局由主持人台词说出，但台词是「本手开场」口径——
+     这一步说「女巫请睁眼」，天亮结算与出局人数留给下一步（天亮后的第一位发言者）。 */
   const death = stageHtml(data, 4, { layout: 'landscape', t: 0.2 })
   assert.match(death, /data-act="death"/u)
-  assert.match(death, /class="ww-deaths"/u)
-  assert.match(death, /3 号出局/u)
+  assert.match(death, /class="ww-host"/u)
+  assert.match(death, /女巫请睁眼/u)
   assert.match(death, /class="ww-strike"/u)
   assert.equal((death.match(/data-alive="false"/gu) || []).length, 2, '席卡与身份榜各一处')
+  assert.equal(death.includes('ww-deaths'), false, '出局横幅已并入主持人台词，不再单独画一条')
+  assert.match(stageHtml(data, 5, { layout: 'landscape', t: 0.2 }), /天亮了，昨夜 3 号出局/u)
 
   const vote = stageHtml(data, 14, { layout: 'landscape', t: 0.2 })
   assert.match(vote, /data-scene="day"/u)
-  assert.match(vote, /投票放逐/u)
-  assert.match(vote, /2 号出局/u)
-  assert.match(vote, /夜刀 3 号|投票 2 号|查验 2 号|解药救人|开枪带走 4 号|空过|发言/u)
+  assert.match(vote, /发言结束，请投票放逐一名玩家/u)
+  assert.match(vote, /投票 2 号/u)
+  /* 结算播报排在造成它的那一手之后：镜头走到下一手（进入夜晚）才说谁被放逐 */
+  const voted = stageHtml(data, 15, { layout: 'landscape', t: 0.2 })
+  assert.match(voted, /2 号被投票放逐/u)
+  assert.match(voted, /data-scene="night"/u)
 })
 
 test('终局卡按阵营判定胜负，不再画成和棋', () => {
@@ -192,6 +297,97 @@ test('狼人杀战报与离线回放：座位、阶段动作、自包含素材',
   assert.equal(embedded.werewolf.steps.length, 18)
 })
 
+test('主持人播报配音：按换句取台词，一手先主持人后选手', () => {
+  const match = playedMatch()
+  const lines = hostNarrationLines(match)
+  /* 台词锚在「本手开场」：进入新阶段的那一手带走新的一句，最后一条结算播报落在终局卡那一手（手数 + 1） */
+  assert.deepEqual(lines.map(line => line.n), [1, 3, 4, 5, 10, 15, 16, 17, 18, 19], '开局挂第一手，其后每句台词只占一手')
+  assert.equal(lines[0].text, '天黑请闭眼。狼人请睁眼，选择今晚要击杀的玩家。')
+  assert.equal(lines[1].text, '预言家请睁眼，查验一名玩家的身份。')
+  assert.equal(lines[2].text, '女巫请睁眼。')
+  assert.equal(lines[3].text, '天亮了，昨夜 3 号出局。第 1 天，请存活玩家依次发言。')
+  assert.equal(lines[4].text, '发言结束，请投票放逐一名玩家。')
+  assert.equal(lines.at(-1).text, '猎人开枪带走了 4 号。')
+  assert.deepEqual(countSpeechLines(match), { speech: 18, host: 10, total: 28 })
+
+  /* 音频分段：主持人先说，选手后说；audioSec 是两段之和（时间轴按它拉长） */
+  const data = replayData(match, new Map([
+    [1, { host: { seconds: 2.5 }, speech: { seconds: 3.5 } }],
+    [4, { speech: { seconds: 4 } }],
+  ]))
+  assert.equal(data.moves[0].hostAudioSec, 2.5)
+  assert.equal(data.moves[0].audioSec, 6)
+  assert.equal(data.moves[3].hostAudioSec, undefined)
+  assert.equal(data.moves[3].audioSec, 4)
+  /* 旧的单轨形状继续按「选手发言」解释，不产生主持人那一段 */
+  const legacy = replayData(match, new Map([[1, { seconds: 2 }]]))
+  assert.equal(legacy.moves[0].audioSec, 2)
+  assert.equal(legacy.moves[0].hostAudioSec, undefined)
+  /* 离线回放把两段都内联成 data URL，并按主持人时长把选手发言往后排 */
+  const html = replayHtml(match, new Map([[4, {
+    host: { seconds: 2, src: 'data:audio/mpeg;base64,AAAA' },
+    speech: { seconds: 3, src: 'data:audio/mpeg;base64,BBBB' },
+  }]]))
+  const embedded = JSON.parse(html.match(/__ARENA_DATA__=(.*?);<\/script>/su)[1])
+  assert.deepEqual(embedded.moves[3].hostAudio, 'data:audio/mpeg;base64,AAAA')
+  assert.deepEqual(embedded.moves[3].audio, 'data:audio/mpeg;base64,BBBB')
+  assert.equal(embedded.moves[3].hostAudioSec, 2)
+  assert.equal(embedded.moves[3].audioSec, 5)
+})
+
+/* 用户报的那一处：离线回放里 6 号还在发言，主持人已经先说「发言结束，请投票放逐一名玩家。」。
+   根因是规则层在最后一位发言者的 apply 里写结算播报，而画面按「主持人先说、选手后说」渲染。
+   这里守住修好后的口径：这一手只带发言引导，投票引导落在进入投票阶段的第一手；
+   整局最后一条结算播报没有下一手可挂，由终局卡说出来并配音。 */
+test('最后一位发言者不再提前说「发言结束」，结算播报与终局卡各就各位', () => {
+  const match = playedMatch()
+  const replay = replayData(match).werewolf
+  const lastSpeech = replay.steps.filter(step => step.phase === 'day-speech').at(-1)
+  const firstVote = replay.steps.find(step => step.phase === 'day-vote')
+  assert.equal(lastSpeech.seat, 6, '白天按存活座位顺序发言，最后一位是 6 号（5 号首夜已出局）')
+  assert.equal(replay.steps[lastSpeech.n - 2].seat, 5, '5 号在前面一手发言')
+  assert.match(lastSpeech.host, /请存活玩家依次发言/u, '发言那一手只能说「请依次发言」')
+  assert.equal(lastSpeech.host.includes('发言结束'), false)
+  assert.equal(firstVote.n, lastSpeech.n + 1)
+  assert.equal(firstVote.host, '发言结束，请投票放逐一名玩家。', '投票引导落在第一位投票者那一手')
+
+  /* 配音按同一口径排：发言那一手只有 6 号的发言；投票那一手才是「主持人先说、选手后说」 */
+  const data = replayData(match, new Map([
+    [lastSpeech.n, { speech: { seconds: 4 } }],
+    [firstVote.n, { host: { seconds: 2 }, speech: { seconds: 3 } }],
+  ]))
+  assert.equal(data.moves[lastSpeech.n - 1].hostAudioSec, undefined)
+  assert.equal(data.moves[lastSpeech.n - 1].audioSec, 4)
+  assert.equal(data.moves[firstVote.n - 1].hostAudioSec, 2)
+  assert.equal(data.moves[firstVote.n - 1].audioSec, 5)
+
+  /* 整局最后一条结算播报（猎人开枪）挂在终局卡那一手：文案进终局卡，配音进终局卡那一格 */
+  const closingNumber = replay.steps.length + 1
+  assert.equal(hostNarrationLines(match).at(-1).n, closingNumber)
+  const closing = replayData(match, new Map([[closingNumber, { host: { seconds: 2.5, src: 'data:audio/mpeg;base64,AAAA' } }]]))
+  assert.match(closing.werewolf.finale, /^猎人开枪带走了 4 号。狼人全灭，好人获胜。/)
+  /* 终局那一帧三处同源：观战（记录自己的 state + finale 分支）与回放/视频的终局卡逐字一致 */
+  assert.equal(closing.werewolf.finale, '猎人开枪带走了 4 号。狼人全灭，好人获胜。')
+  assert.equal(werewolfStage({ players: match.players, state: werewolfStageState(match, werewolfTimeline(match), closingNumber - 1) }).host, closing.werewolf.finale)
+  assert.match(stageHtml(closing, closingNumber, { layout: 'landscape', t: 1 }), /猎人开枪带走了 4 号。狼人全灭，好人获胜。/u)
+  assert.equal(closing.werewolf.finaleAudioSec, 2.5)
+  assert.equal(closing.werewolf.finaleAudio, 'data:audio/mpeg;base64,AAAA')
+  assert.equal(closing.moves.length, replay.steps.length, '终局那一手不占手数')
+  /* 离线 HTML 把终局那一段也内联进去：不联网也能听见最后一句 */
+  const html = replayHtml(match, new Map([[closingNumber, { host: { seconds: 2.5, src: 'data:audio/mpeg;base64,AAAA' } }]]))
+  const embedded = JSON.parse(html.match(/__ARENA_DATA__=(.*?);<\/script>/su)[1])
+  assert.equal(embedded.werewolf.finaleAudioSec, 2.5)
+  assert.match(embedded.werewolf.finale, /^猎人开枪带走了 4 号。/)
+})
+
+test('降级投影仍给出开局播报，非狼人杀没有主持人台词', () => {
+  const match = playedMatch()
+  const degraded = { ...match, config: { seats: 6 } }
+  assert.deepEqual(hostNarrationLines(degraded), [{ n: 1, text: '天黑请闭眼。狼人请睁眼，选择今晚要击杀的玩家。' }])
+  assert.deepEqual(hostNarrationLines({ ...match, game: { id: 'gomoku', name: '五子棋' } }), [])
+  assert.deepEqual(countSpeechLines({ ...match, game: { id: 'gomoku' } }).host, 0)
+})
+
 test('观战投影与回放用同一套阶段语义', () => {
   const match = playedMatch()
   assert.equal(werewolfScene('night-witch'), 'night')
@@ -212,6 +408,12 @@ test('观战投影与回放用同一套阶段语义', () => {
   assert.equal(live.seats[2].active, true)
   assert.equal(live.seats[2].roleName, '村民')
   assert.equal(live.winnerSide, 'village')
+  assert.equal(live.columns, 6)
+  /* 终局那一帧说裁决文案，并把最后一条结算播报一起说完；非终局读规则层这一手的播报 */
+  assert.equal(live.host, '猎人开枪带走了 4 号。狼人全灭，好人获胜。')
+  const mid = werewolfStage({ players: match.players, state: { ...match.state, winner: null, terminalReason: null, phase: 'day-vote' }, active: 2 })
+  assert.match(mid.host, /猎人开枪带走了 4 号/)
+  assert.equal(mid.seatCount, 6)
 
   /* 赛前占位：六个座位拿到六张不同立绘，不再全是同一张通用图 */
   const stub = werewolfStage({
@@ -219,6 +421,87 @@ test('观战投影与回放用同一套阶段语义', () => {
     state: { phase: 'night-wolf', players: Array.from({ length: 6 }, (_, index) => ({ seat: index + 1, role: 'villager', alive: true })) },
   })
   assert.equal(new Set(stub.seats.map(seat => seat.portrait)).size, 6)
+  /* 观战舞台的列数也按人数走：8 人 4 列、9 人 5 列 */
+  assert.equal(werewolfStage({
+    players: Array.from({ length: 9 }, (_, index) => ({ name: `${index + 1} 号待选` })),
+    state: { phase: 'night-wolf', players: Array.from({ length: 9 }, (_, index) => ({ seat: index + 1, role: 'villager', alive: true })) },
+  }).columns, 5)
+})
+
+/* 观战页的播放/拖动曾经是坏的：席位舞台只读 match.state（终局的唯一快照），所以点播放
+   从头播时画面一直停在「好人获胜 + 全部出局」。这里守住修复后的口径 —— 停在那一刻画那一刻，
+   且与离线回放/视频逐手投影同源。 */
+test('观战页往回拖按第 k 步的公开局面重画席位，且与离线回放逐手投影同源', () => {
+  const match = playedMatch()
+  const timeline = werewolfTimeline(match)
+  assert.equal(timeline.replayable, true)
+  assert.equal(timeline.steps.length, match.events.length)
+  const stageAt = step => werewolfStage({ players: match.players, state: werewolfStageState(match, timeline, step) })
+
+  /* 第 0 步是开局：全员存活、第 1 天夜间，既没有终局图层也不提前挂胜负徽标 */
+  const opening = stageAt(0)
+  assert.deepEqual(opening.seats.map(seat => seat.alive), Array(6).fill(true))
+  assert.deepEqual(opening.seats.map(seat => seat.badge), Array(6).fill(''))
+  assert.equal(opening.winnerSide, null)
+  assert.equal(opening.day, 1)
+  assert.equal(opening.phaseLabel, '狼人行动')
+  assert.equal(opening.host, '天黑请闭眼。狼人请睁眼，选择今晚要击杀的玩家。')
+
+  /* 逐手同源：观战停在第 k 步看到的存活、天数、阶段、昼夜与主持人台词，
+     必须与离线回放/视频那一帧逐字一致。终局帧（离线是最后一手之后单独的一帧）不在其中：
+     观战按棋类的口径把终局图层挂在最后一手，见下面的断言。 */
+  const replay = replayData(match).werewolf
+  for (const step of replay.steps.slice(0, -1)) {
+    const stage = stageAt(step.n)
+    assert.deepEqual(stage.seats.filter(seat => seat.alive).map(seat => seat.seat), step.alive, `第 ${step.n} 步存活名单`)
+    assert.equal(stage.day, step.day, `第 ${step.n} 步天数`)
+    assert.equal(stage.phaseLabel, step.label, `第 ${step.n} 步阶段`)
+    assert.equal(stage.scene, step.scene, `第 ${step.n} 步昼夜`)
+    assert.equal(stage.host, step.host, `第 ${step.n} 步主持人台词`)
+    assert.equal(stage.winnerSide, null, `第 ${step.n} 步不提前泄露胜负`)
+    assert.deepEqual(stage.seats.map(seat => seat.badge), Array(6).fill(''), `第 ${step.n} 步不提前挂徽标`)
+  }
+  /* 首夜出局落在第 4 手：停在第 3 手还不许画出局，停在第 4 手必须已经画上 */
+  assert.deepEqual(stageAt(3).seats.map(seat => seat.alive), Array(6).fill(true))
+  assert.equal(stageAt(4).seats[2].alive, false)
+
+  /* 停在最后一手 = 跟随最新回合 = 记录自己的 state：终局抬头、胜负面板与「胜 / 负」徽标只在这里出现 */
+  const end = stageAt(replay.steps.at(-1).n)
+  assert.equal(end.winnerSide, 'village')
+  assert.equal(end.phaseLabel, '终局')
+  assert.deepEqual(end.seats.map(seat => seat.alive), [false, false, false, false, true, true])
+  assert.equal(end.seats.filter(seat => seat.badge === '胜').length, 4, '好人阵营 3 神 + 1 民')
+  assert.equal(end.seats.filter(seat => seat.badge === '负').length, 2)
+})
+
+/* 身份整局不变，且是发牌时落盘的权威值。重放也会发一次牌，但画面上的身份标记必须取落盘那一份：
+   否则改了发牌算法之后，历史对局往回拖时身份会跟着变，而终局帧（读 match.state）却不变。 */
+test('观战逐手画的身份取落盘那一份，不拿重放重发的牌覆盖记录', () => {
+  const match = playedMatch()
+  /* 把落盘身份整体错开一位：重放发牌与它不一致时，画面与席卡都必须跟着记录走 */
+  const shifted = { ...match, state: { ...match.state, players: match.state.players.map((player, index) => ({ ...player, role: match.state.players[(index + 1) % 6].role })) } }
+  const dealt = shifted.state.players.map(player => player.role)
+  const timeline = werewolfTimeline(shifted)
+  assert.equal(timeline.replayable, true)
+  /* 规则重放照旧用自己的发牌（不然动作序列对不上），只有画面身份被覆盖 */
+  assert.deepEqual(timeline.steps[0].snapshot.players.map(player => player.role), dealt)
+  assert.deepEqual(werewolfStage({ players: shifted.players, state: werewolfStageState(shifted, timeline, 3) }).seats.map(seat => seat.role), dealt)
+  assert.deepEqual(replayData(shifted).werewolf.seats.map(seat => seat.role), dealt)
+})
+
+test('狼人杀档位不可重放时观战退回比赛自己的 state，不猜局面', () => {
+  const match = playedMatch()
+  const degraded = { ...match, config: { ...match.config, seed: undefined } }
+  const timeline = werewolfTimeline(degraded)
+  assert.equal(timeline.replayable, false)
+  assert.deepEqual(timeline.steps, [])
+  /* 终局口径仍从记录自己的 state 读，降级不等于不报胜负 */
+  assert.equal(timeline.winnerSide, 'village')
+  for (const step of [0, 1, 5, match.events.length]) assert.equal(werewolfStageState(degraded, timeline, step), degraded.state)
+  /* 档位与选手数对不上（host 创建时强制相等，只可能是记录被改过）同样降级，不画多出来的无名席卡 */
+  assert.equal(werewolfTimeline({ ...match, config: { ...match.config, seats: 8 } }).replayable, false)
+  /* 不是狼人杀就没有这份投影，调用方按 game.id 分流 */
+  assert.equal(werewolfTimeline({ ...match, game: { id: 'gomoku', name: '五子棋' } }), null)
 })
 test('werewolf-art.mjs 与 assets/werewolf 保持同步（改了素材必须重新 arena:build）', async () => {
   const names = async directory => (await readdir(join(HERE, '..', 'assets', 'werewolf', directory)))
@@ -229,9 +512,75 @@ test('werewolf-art.mjs 与 assets/werewolf 保持同步（改了素材必须重�
   for (const url of [...Object.values(WEREWOLF_ART.scenes), ...Object.values(WEREWOLF_ART.portraits)]) {
     assert.match(url, /^data:image\/jpeg;base64,\/9j\//u)
   }
-  /* 立绘匹配表里的每个 key（含 -dead）都必须真的有图，否则观战会掉到通用图 */
-  for (const key of ['chatgpt', 'claude', 'deepseek', 'doubao', 'kimi', 'mimo', 'minimax', 'qwen', 'zhipu', 'generic']) {
+  /* 每个家族都要有主图、出局图与 2..N 号变体：少一套就有选手会掉到别的形象上 */
+  const families = ['chatgpt', 'claude', 'deepseek', 'doubao', 'kimi', 'mimo', 'minimax', 'qwen', 'zhipu', 'generic']
+  for (const key of families) {
     assert.ok(WEREWOLF_ART.portraits[key], `${key} 缺少立绘`)
     assert.ok(WEREWOLF_ART.portraits[`${key}-dead`], `${key} 缺少出局立绘`)
+    for (let slot = 1; slot < WEREWOLF_PORTRAIT_VARIANTS; slot += 1) {
+      assert.ok(WEREWOLF_ART.portraits[`${key}-${slot + 1}`], `${key} 缺少第 ${slot + 1} 套立绘`)
+    }
   }
+  /* 变体数常量必须与随包素材严格对齐：它是「同族多少席以内保证不重复」的判据，
+     写大了会取到不存在的图，写小了会白白浪费已铺的素材。 */
+  assert.deepEqual(Object.keys(WEREWOLF_ART.portraits).sort(), families.flatMap(key => [
+    key, `${key}-dead`,
+    ...Array.from({ length: WEREWOLF_PORTRAIT_VARIANTS - 1 }, (_, index) => `${key}-${index + 2}`),
+  ]).sort())
+})
+
+/* ------------------------------------------------------- 同族立绘不重复（观战/回放同源）
+   用户的原始诉求：同一个供应商下的不同模型（qwen3.8-max 与 qwen-3.8-flash）此前共用一张图。
+   立绘按家族成池分配后，判据是「同族席位数 <= 变体数」；变体数当前 3，最大档位 9，
+   所以 9 席全同族仍会回绕复用——这是分期铺素材的已知上限，补到 9 套即自动收紧。 */
+const portraitPlayer = (model, id, provider = 'bailian', providerName = '百炼') => ({ id, name: model, provider, providerName, model })
+
+test('同一家族的不同模型拿到不同立绘，同族席位数不超过变体数时零重复', () => {
+  const pair = assignPortraits([portraitPlayer('qwen3.8-max', 0), portraitPlayer('qwen-3.8-flash', 1)])
+  assert.equal(new Set(pair).size, 2, '同族两个模型不能共用一张立绘')
+  assert.deepEqual(assignPortraits([portraitPlayer('qwen3.8-max', 0)]), ['qwen'], '只出现一次的家族拿主图')
+  for (let seats = 1; seats <= WEREWOLF_PORTRAIT_VARIANTS; seats += 1) {
+    const cast = Array.from({ length: seats }, (_, index) => portraitPlayer(`qwen3.8-${index}`, index))
+    assert.equal(new Set(assignPortraits(cast)).size, seats, `同族 ${seats} 席应当零重复`)
+  }
+  assert.equal(new Set(assignPortraits([portraitPlayer('qwen3.8-max', 0), portraitPlayer('qwen3.8-max', 1)])).size, 2,
+    '同一个模型自对弈也要错开')
+})
+
+test('超出变体数后确定性回绕复用（补素材即可收紧，不需要改分配逻辑）', () => {
+  const nine = Array.from({ length: 9 }, (_, index) => portraitPlayer(`qwen3.8-${index}`, index))
+  const portraits = assignPortraits(nine)
+  assert.equal(new Set(portraits).size, WEREWOLF_PORTRAIT_VARIANTS, '每套变体都被用到')
+  assert.deepEqual(assignPortraits(nine), portraits, '同一份输入必须每次一样')
+  /* 任意局面零重复的条件是 变体数 >= 最大席位数（9）；补齐后这一条会自动生效。 */
+  if (WEREWOLF_PORTRAIT_VARIANTS >= 9) assert.equal(new Set(portraits).size, 9)
+})
+
+test('同一模型跨局穿同一套，未命中家族不与命中家族撞车', () => {
+  const first = assignPortraits([portraitPlayer('qwen3.8-max', 0), portraitPlayer('qwen-3.8-flash', 1)])
+  const swapped = assignPortraits([portraitPlayer('qwen-3.8-flash', 0), portraitPlayer('qwen3.8-max', 1)])
+  assert.equal(first[0], swapped[1], 'qwen3.8-max 换座位后仍是同一套')
+  assert.equal(first[1], swapped[0], 'qwen-3.8-flash 换座位后仍是同一套')
+
+  /* 未命中家族的选手走品牌轮转，必须绕开已命中的家族：否则第 9 席会和 GLM 撞成同一张 */
+  const mixed = assignPortraits([
+    portraitPlayer('qwen3.8-max', 0), portraitPlayer('qwen-3.8-flash', 1),
+    portraitPlayer('kimi-k3', 2, 'moonshot', '月之暗面'), portraitPlayer('claude-opus', 3, 'anthropic', 'Anthropic'),
+    portraitPlayer('qwen3.8-turbo', 4), portraitPlayer('claude-sonnet', 5, 'anthropic', 'Anthropic'),
+    portraitPlayer('glm-5.3', 6, 'zhipu', '智谱'), portraitPlayer('kimi-k2.5', 7, 'moonshot', '月之暗面'),
+    portraitPlayer('local-llama', 8, 'ollama', '自建'),
+  ])
+  assert.equal(new Set(mixed).size, 9, '混合九席必须零重复')
+  assert.equal(portraitKey({ id: 8, model: 'local-llama' }, 8), 'zhipu', '单席兜底仍是按座位轮转')
+  const unknowns = Array.from({ length: 6 }, (_, index) => portraitPlayer(`mystery-${index}`, index, 'ollama', '自建'))
+  assert.equal(new Set(assignPortraits(unknowns)).size, 6, '未命中六席不能退化成一堆通用图')
+})
+
+test('观战舞台与离线回放取同一批立绘', () => {
+  const match = playedMatch()
+  const players = Array.from({ length: 6 }, (_, index) => portraitPlayer(`qwen3.8-${index}`, index))
+  const stage = werewolfStage({ players, state: { ...match.state, phase: 'day-vote' } })
+  const replay = replayData({ ...match, players })
+  assert.deepEqual(stage.seats.map(seat => seat.portrait), replay.werewolf.seats.map(seat => seat.portrait))
+  assert.equal(new Set(stage.seats.map(seat => seat.portrait)).size, WEREWOLF_PORTRAIT_VARIANTS)
 })

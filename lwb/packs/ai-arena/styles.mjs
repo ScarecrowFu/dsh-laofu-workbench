@@ -71,7 +71,7 @@ body[data-ds-dark-theme] .ar-page{
 .ar-setup-title svg{width:16px;height:16px;color:var(--ar-tone)}
 .ar-setup-chevron{width:15px;height:15px;color:var(--lwb-muted);transform:rotate(-90deg);transition:transform .15s}
 .ar-setup[open] .ar-setup-chevron{transform:none}
-.ar-form{display:grid;gap:16px;padding:0 0 16px}.ar-participants{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.ar-form{display:grid;gap:16px;padding:0 0 16px}.ar-form-head{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px}.ar-participants{display:grid;grid-template-columns:1fr 1fr;gap:24px}
 .ar-participant{display:grid;align-content:start;gap:10px;min-width:0}
 .ar-participant-head{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:650}
 .ar-participant-head small{margin-left:auto;color:var(--lwb-muted);font-size:12px;font-weight:400}
@@ -93,6 +93,9 @@ body[data-ds-dark-theme] .ar-page{
 .ar-player{display:flex;align-items:center;gap:9px;min-width:0}.ar-player:last-child{flex-direction:row-reverse;text-align:right}
 .ar-player strong{display:block;font-size:13px;font-weight:650;overflow-wrap:anywhere}
 .ar-player small{display:block;margin-top:3px;font-size:11px;color:var(--lwb-muted);overflow-wrap:anywhere}
+/* 终局徽标：胜方「胜」、和棋两边「和」，落点朝记分板中央，两边对称。 */
+.ar-player-badge{flex:none;display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:20px;padding:0 7px;border-radius:999px;background:var(--ar-green);color:#fff;font-size:11px;font-weight:800;font-style:normal}
+.ar-player-badge[data-badge="和"]{background:var(--lwb-page);color:var(--lwb-muted);border:1px solid var(--lwb-line)}
 .ar-stone{display:block;flex:none;width:19px;height:19px;border-radius:50%;background:#252b28;border:1px solid #a9b5ac;box-shadow:0 1px 2px #0001}
 .ar-stone[data-player="1"]{background:#fff}.ar-vs{text-align:center;color:var(--lwb-muted);font-size:11px;font-weight:700}
 .ar-player[data-game="xiangqi"] .ar-stone,.ar-participant[data-game="xiangqi"] .ar-stone{background:#b83c2e;border-color:#f0c999}
@@ -110,7 +113,9 @@ body[data-ds-dark-theme] .ar-page{
 .ar-stage-phase{font-size:clamp(14px,2.1vw,27px);font-weight:800;line-height:1.1;color:#fff;text-shadow:0 3px 16px rgba(0,0,0,.75)}
 .ar-stage[data-scene="day"] .ar-stage-phase{color:#FFF7E6}
 .ar-stage[data-act="death"] .ar-stage-phase{color:#FFD9D3}
-.ar-stage-deaths{position:absolute;left:50%;bottom:46%;transform:translateX(-50%);margin:0;padding:4px 14px;border-radius:999px;background:rgba(150,32,26,.84);border:1px solid rgba(255,160,150,.55);color:#FFF2EF;font-size:13px;font-weight:800;letter-spacing:.05em;white-space:nowrap;box-shadow:0 8px 26px rgba(120,20,16,.42)}
+.ar-stage-host{position:absolute;left:3%;top:20%;max-width:64%;display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.ar-host-badge{display:inline-flex;align-items:center;height:18px;padding:0 9px;border-radius:999px;background:rgba(224,163,46,.18);border:1px solid rgba(224,163,46,.55);color:#F2DCA8;font-size:10px;font-weight:800;font-style:normal;letter-spacing:.14em}
+.ar-stage-host p{margin:0;padding:5px 13px;border-radius:9px;background:rgba(8,12,18,.74);border:1px solid rgba(255,255,255,.14);color:#F6F1E4;font-size:13px;font-weight:700;line-height:1.45}
 .ar-stage-cast{position:absolute;left:2.4%;right:2.4%;bottom:3.4%;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:1.1%;align-items:end}
 .ar-cast{position:relative;margin:0;display:flex;flex-direction:column;align-items:center;gap:3px}
 .ar-cast-no{position:absolute;left:50%;top:-8px;transform:translateX(-50%);z-index:2;display:flex;width:17px;height:17px;align-items:center;justify-content:center;border-radius:50%;background:rgba(10,14,22,.86);border:1px solid rgba(255,255,255,.34);color:#F2F6FB;font-size:10px;font-weight:800}
@@ -121,9 +126,13 @@ body[data-ds-dark-theme] .ar-page{
 .ar-cast[data-active="true"] .ar-cast-face img{transform:translateY(-4px) scale(1.04)}
 .ar-cast[data-alive="false"] .ar-cast-face{border-color:rgba(180,52,42,.6)}
 .ar-cast[data-alive="false"] .ar-cast-face img{filter:grayscale(1) brightness(.46) contrast(1.05)}
+/* 终局：胜方阵营的席卡加金框，口径与离线回放的 data-win 一致；死掉的胜方仍保留灰化。 */
+.ar-cast[data-win="true"] .ar-cast-face{border-color:#E0A32E;box-shadow:0 0 0 2px rgba(224,163,46,.5),0 10px 22px rgba(3,6,12,.55)}
 .ar-cast-out{position:absolute;left:50%;bottom:4%;transform:translateX(-50%);padding:1px 7px;border-radius:999px;background:#B4342A;color:#fff;font-size:9px;font-weight:800;letter-spacing:.14em;white-space:nowrap}
 .ar-cast figcaption{display:flex;align-items:center;justify-content:center;gap:4px;max-width:100%}
 .ar-cast figcaption b{font-size:10px;font-weight:700;color:#F3F7FC;text-shadow:0 1px 4px rgba(0,0,0,.85);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ar-cast-badge{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 5px;border-radius:5px;background:var(--ar-green);color:#fff;font-size:9px;font-weight:800;font-style:normal;flex:none}
+.ar-cast-badge[data-badge="负"]{background:rgba(255,255,255,.22);color:#EAF0F7}
 .ar-role-mark{display:inline-flex;width:15px;height:15px;flex:none;align-items:center;justify-content:center;border-radius:4px;background:rgba(255,255,255,.86);color:#1B232C;font-size:9px;font-weight:800;font-style:normal}
 .ar-role-mark[data-role="werewolf"]{background:#D9534A;color:#fff}
 .ar-role-mark[data-role="seer"]{background:#5B93E0;color:#fff}
@@ -134,7 +143,15 @@ body[data-ds-dark-theme] .ar-page{
 .ar-stage-win b{font-size:clamp(17px,2.3vw,30px);font-weight:900;letter-spacing:.06em;color:#E0A32E}
 .ar-stage-win[data-side="wolf"] b{color:#FF7A6E}
 .ar-stage-win span{font-size:12px;font-weight:600;color:#EAF0F7;max-width:420px;line-height:1.5}
-.ar-board svg g:last-child{animation:ar-place .25s ease-out}
+/* 最后一手的入场动画必须用 :last-of-type 而不是 :last-child：胜局图层会在棋子之后
+   追加 <circle class="winring">，象棋本来也在棋子之后画最后一手圈，:last-child 会静默失效。 */
+.ar-board svg g:last-of-type{animation:ar-place .25s ease-out}
+/* 胜局图层：金带铺底 + 五颗连子点亮，与离线回放同构（观战版动效更短、不做逐颗延迟）。 */
+.ar-board svg line.winband{animation:ar-band .5s ease-out both}
+.ar-board svg circle.winring{transform-box:fill-box;transform-origin:center;animation:ar-winring .46s cubic-bezier(.2,.8,.3,1) both}
+/* 终局那颗子会同时拿到「最后一手」圈与金色连子环，橙红与金相邻会糊成一圈：
+   照离线回放的做法把最后一手圈改成品牌色（蓝在内、金在外）。 */
+.ar-board[data-win="true"] svg circle[stroke="#e45d3c"]{stroke:var(--ar-cyan)}
 .ar-toolbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:12px 16px;border-top:1px solid var(--lwb-line);background:var(--lwb-surface)}
 .ar-toolbar input[type=range]{flex:1;min-width:76px;accent-color:var(--ar-brand);margin:0 4px}
 .ar-toolbar .ar-select{width:64px;height:34px;padding:0 6px}
@@ -142,7 +159,11 @@ body[data-ds-dark-theme] .ar-page{
 .ar-live{color:var(--ar-brand);border-color:var(--ar-brand);background:var(--ar-brand-soft)}
 .ar-commentary{display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;max-height:690px;border:1px solid var(--lwb-line);border-radius:10px;background:var(--lwb-surface);box-shadow:var(--ar-shadow);overflow:hidden}
 .ar-commentary-head{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:66px;padding:15px 18px;border-bottom:1px solid var(--lwb-line)}
-.ar-commentary-head .ar-chip{color:var(--ar-cyan);background:var(--ar-cyan-soft);white-space:nowrap}
+.ar-commentary-head .ar-chip{margin-left:auto;color:var(--ar-cyan);background:var(--ar-cyan-soft);white-space:nowrap}
+/* 终局胶囊：文案与配色档位来自 presentation.finaleInfo，和离线回放的 heroTag 同源。 */
+.ar-pill{display:inline-flex;align-items:center;min-height:23px;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap;border:1px solid transparent;color:var(--lwb-muted);background:var(--lwb-page);border-color:var(--lwb-line)}
+.ar-pill[data-tone=win]{color:#fff;background:var(--ar-green);border-color:var(--ar-green)}
+.ar-pill[data-tone=warn]{color:var(--ar-amber);background:var(--ar-amber-soft);border-color:var(--ar-amber)}
 .ar-speaking{margin:0;padding:20px 18px;border-bottom:1px solid var(--lwb-line);min-height:180px;flex:none;background:var(--lwb-surface)}
 .ar-speaking-name{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:650;overflow-wrap:anywhere}
 .ar-speaking-name svg{width:16px;height:16px;flex:none;color:var(--ar-tone)}
@@ -150,6 +171,26 @@ body[data-ds-dark-theme] .ar-page{
 .ar-speaking[data-thinking=true] p{color:var(--lwb-muted);font-weight:400}
 .ar-generation{display:grid;gap:8px}.ar-generation > div{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}.ar-generation small:last-child{font-variant-numeric:tabular-nums}
 .ar-result{display:flex;align-items:center;gap:9px;margin:0;padding:12px 18px;color:var(--ar-green);background:var(--ar-green-soft);font-size:13px;font-weight:600;overflow-wrap:anywhere;flex:none}.ar-result svg{width:17px;height:17px;flex:none}
+/* 和棋、判负、取消都不是胜利：不能沿用胜利绿 + 奖杯。 */
+.ar-result[data-tone=draw],.ar-result[data-tone=plain]{color:var(--lwb-muted);background:var(--lwb-page)}
+.ar-result[data-tone=warn]{color:var(--ar-amber);background:var(--ar-amber-soft)}
+/* 判罚明细：判负裁决的是协议遵守度，不是棋力，所以要写清「第几手、连续几次、每次为什么」。
+   配色沿用警告琥珀，与终局胶囊的 data-tone=warn 同源，不借胜利绿。 */
+.ar-forfeit{display:grid;gap:8px;padding:12px 18px;border-bottom:1px solid var(--lwb-line);background:var(--ar-amber-soft);color:var(--ar-amber);font-size:12px;flex:none}
+.ar-forfeit-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.ar-forfeit-head strong{font-size:13px;font-weight:650}
+.ar-forfeit-head span{color:var(--lwb-muted);font-size:11px;font-variant-numeric:tabular-nums}
+.ar-forfeit-list{display:grid;gap:5px;margin:0;padding:0;list-style:none}
+.ar-forfeit-list li{display:grid;grid-template-columns:56px minmax(0,1fr);gap:8px;align-items:baseline}
+.ar-forfeit-list i{font-style:normal;color:var(--lwb-muted);font-size:11px;white-space:nowrap}
+.ar-forfeit-list span{color:var(--lwb-ink);overflow-wrap:anywhere}
+.ar-forfeit .ar-raw{padding-top:8px}
+.ar-forfeit-raw pre{max-height:150px;margin-top:8px;padding:10px;font-size:11px}
+/* 被判负的那一手在回合记录里占位：它没有落子、发言也从未生效，样式必须和可点的发言分开。 */
+.ar-speech[data-invalid=true]{cursor:default}
+.ar-speech[data-invalid=true]:hover{color:var(--lwb-ink)}
+.ar-speech[data-invalid=true] .ar-speech-num{background:var(--ar-amber-soft);color:var(--ar-amber)}
+.ar-speech[data-invalid=true] small{color:var(--ar-amber)}
 .ar-transcript-title{display:flex;justify-content:space-between;gap:8px;padding:12px 18px 4px;color:var(--lwb-muted);font-size:11px;flex:none}
 .ar-transcript{flex:1;min-height:120px;overflow:auto;padding:0 18px 8px;display:grid;grid-auto-rows:max-content;align-content:start;overscroll-behavior:contain}
 .ar-speech{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid var(--lwb-line);background:transparent;color:var(--lwb-ink);padding:12px 0;cursor:pointer}
@@ -170,11 +211,14 @@ body[data-ds-dark-theme] .ar-page{
 .ar-empty > svg{width:28px;height:28px;color:var(--ar-tone)}.ar-empty strong{color:var(--lwb-ink);font-size:15px}
 .ar-history-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.ar-history-toolbar .ar-actions{flex:1;min-width:0}
 .ar-history-toolbar .ar-search{max-width:320px}.ar-history-toolbar .ar-select{width:140px}.ar-history-list{display:grid;border-top:1px solid var(--lwb-line)}
-.ar-history-columns,.ar-row{display:grid;grid-template-columns:minmax(0,1fr) 160px 80px 110px 26px;gap:16px;align-items:center;min-width:0;padding:13px 16px}
+.ar-history-columns,.ar-row{display:grid;grid-template-columns:minmax(0,1fr) 140px 70px 150px 110px 26px;gap:16px;align-items:center;min-width:0;padding:13px 16px}
 .ar-history-columns{color:var(--lwb-muted);font-size:12px;background:var(--lwb-page);border-bottom:1px solid var(--lwb-line)}
 .ar-row{width:100%;min-height:80px;border:0;border-bottom:1px solid var(--lwb-line);background:var(--lwb-surface);color:var(--lwb-ink);text-align:left;cursor:pointer}.ar-row:hover{background:var(--ar-brand-soft)}
 .ar-row-title{display:grid;gap:5px;min-width:0}.ar-row strong{font-size:14px;font-weight:650;overflow-wrap:anywhere}
 .ar-row small,.ar-row-date,.ar-row-count{font-size:12px;color:var(--lwb-muted);font-variant-numeric:tabular-nums}.ar-row > svg{width:16px;height:16px;color:var(--lwb-muted)}.ar-row > .ar-tag{justify-self:start}
+/* 结果列：未裁决显示占位符，列宽不随内容跳动；长模型名截断，完整裁决话术交给 title。 */
+.ar-outcome{justify-self:start;min-width:0;max-width:100%;font-size:12px;font-weight:650;color:var(--lwb-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ar-outcome[data-outcome=win]{color:var(--ar-green)}
 /* 游戏库卡片 --------------------------------------------------------------
    封面锁 16:10，媒体由带尺寸的包裹层（.ar-game-board）承载；
    卡片是 flex 列，页脚 margin-top:auto，三张卡等高且 CTA 对齐。 */
@@ -227,8 +271,12 @@ body[data-ds-dark-theme] .ar-page .ar-game[data-game=werewolf]{--ar-game-accent:
 .ar-game .ar-primary:hover{border-color:var(--ar-game-accent);color:var(--ar-on-brand);filter:brightness(.95)}
 .ar-video{display:block;width:100%;max-height:600px;background:#111;border-radius:8px}
 @keyframes ar-place{from{opacity:.25}to{opacity:1}}@keyframes ar-pulse{50%{opacity:.35}}
-@media(max-width:1100px){.ar-match{grid-template-columns:minmax(0,1.1fr) minmax(290px,.9fr)}.ar-toolbar{gap:5px;padding:10px}.ar-toolbar input[type=range]{flex-basis:110px}.ar-history-columns,.ar-row{grid-template-columns:minmax(0,1fr) 130px 55px 95px 20px;gap:12px}}
-@media(max-width:820px){.ar-match{grid-template-columns:minmax(0,1fr)}.ar-commentary{height:490px;max-height:none}.ar-speaking{min-height:150px}.ar-top{flex-wrap:wrap}.ar-top h1{font-size:22px}.ar-history-columns,.ar-row{grid-template-columns:minmax(0,1fr) 90px 20px}.ar-history-columns > :nth-child(2),.ar-history-columns > :nth-child(3),.ar-row-date,.ar-row-count{display:none}}
-@media(max-width:520px){.ar-page{gap:14px}.ar-top h1{font-size:20px}.ar-top-actions{width:100%}.ar-participants{grid-template-columns:1fr;gap:16px}.ar-submit{align-items:flex-start}.ar-submit .ar-muted{max-width:220px}.ar-scoreboard{padding:12px;gap:6px}.ar-player{gap:7px}.ar-player strong{font-size:12px}.ar-player small{font-size:10px}.ar-board{width:calc(100% - 20px);margin:10px auto}.ar-toolbar{gap:5px}.ar-toolbar input[type=range]{min-width:60px}.ar-commentary-head{min-height:54px;padding:12px 14px}.ar-speaking{padding:16px 14px}.ar-speaking p{font-size:16px}.ar-transcript{padding:0 14px 8px}.ar-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 0}.ar-stat:nth-child(3){border-left:0}.ar-stat strong{font-size:18px}.ar-stat{padding:0 12px}.ar-export .ar-actions{width:100%}.ar-history-toolbar .ar-search{max-width:none;flex:1}.ar-history-toolbar .ar-select{width:125px}.ar-history-columns,.ar-row{gap:8px;padding:12px 10px}.ar-row strong{font-size:13px}.ar-match-head{align-items:flex-start}.ar-match-head .ar-actions{justify-content:flex-end}.ar-tag{font-size:10px}.ar-game-grid{grid-template-columns:1fr}}
+@keyframes ar-band{from{opacity:0}to{opacity:.55}}
+@keyframes ar-winring{from{opacity:0;transform:scale(.45)}to{opacity:1;transform:scale(1)}}
+@media(max-width:1100px){.ar-match{grid-template-columns:minmax(0,1.1fr) minmax(290px,.9fr)}.ar-toolbar{gap:5px;padding:10px}.ar-toolbar input[type=range]{flex-basis:110px}.ar-history-columns,.ar-row{grid-template-columns:minmax(0,1fr) 115px 50px 120px 95px 20px;gap:12px}}
+@media(max-width:820px){.ar-match{grid-template-columns:minmax(0,1fr)}.ar-commentary{height:490px;max-height:none}.ar-speaking{min-height:150px}.ar-top{flex-wrap:wrap}.ar-top h1{font-size:22px}.ar-history-columns,.ar-row{grid-template-columns:minmax(0,1fr) 120px 80px 20px}.ar-history-columns > :nth-child(2),.ar-history-columns > :nth-child(3),.ar-row-date,.ar-row-count{display:none}/* 窄屏结果列是唯一结果入口：允许换行，别把长模型名截掉。 */.ar-outcome{white-space:normal;overflow-wrap:anywhere}}
+@media(max-width:520px){.ar-page{gap:14px}.ar-top h1{font-size:20px}.ar-top-actions{width:100%}.ar-participants{grid-template-columns:1fr;gap:16px}.ar-submit{align-items:flex-start}.ar-submit .ar-muted{max-width:220px}.ar-scoreboard{padding:12px;gap:6px}.ar-player{gap:7px}.ar-player strong{font-size:12px}.ar-player small{font-size:10px}.ar-board{width:calc(100% - 20px);margin:10px auto}.ar-toolbar{gap:5px}.ar-toolbar input[type=range]{min-width:60px}.ar-commentary-head{min-height:54px;padding:12px 14px}.ar-speaking{padding:16px 14px}.ar-speaking p{font-size:16px}.ar-transcript{padding:0 14px 8px}.ar-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 0}.ar-stat:nth-child(3){border-left:0}.ar-stat strong{font-size:18px}.ar-stat{padding:0 12px}.ar-export .ar-actions{width:100%}.ar-history-toolbar .ar-search{max-width:none;flex:1}.ar-history-toolbar .ar-select{width:125px}.ar-history-columns,.ar-row{gap:8px;padding:12px 10px}.ar-row strong{font-size:13px}.ar-match-head{align-items:flex-start}.ar-match-head .ar-actions{justify-content:flex-end}.ar-tag{font-size:10px}.ar-outcome{font-size:10px}.ar-game-grid{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){.ar-page *{animation:none!important;transition:none!important}}
+/* 窄屏：狼人杀的 8 / 9 人档位也走单列，三列模型选择在手机上放不下。 */
+@media(max-width:520px){.ar-participants[data-game="werewolf"]{grid-template-columns:1fr}}
 `

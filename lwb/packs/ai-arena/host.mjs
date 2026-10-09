@@ -60,7 +60,11 @@ export class ArenaHost {
   }
   async start(request) {
     const game = this.games.get(request.gameId || 'gomoku')
-    if (!Array.isArray(request.players) || request.players.length !== game.players) throw new Error(`本游戏需要 ${game.players} 名选手。`)
+    /* 人数档位：棋类是固定的 2 人，狼人杀是 6 / 8 / 9。seats 缺省时按选手数推断，
+       这样旧客户端（只发 players）仍然能开赛。 */
+    const seatOptions = Array.isArray(game.seatOptions) && game.seatOptions.length ? game.seatOptions : [game.players]
+    const seats = request.seats ?? request.players?.length
+    if (!seatOptions.includes(seats) || !Array.isArray(request.players) || request.players.length !== seats) throw new Error(`本游戏需要 ${seatOptions.join(' / ')} 名选手。`)
     const catalog = await this.scope.models.list()
     const players = request.players.map((input, index) => {
       const route = catalog.find(item => item.id === input.provider)
@@ -75,10 +79,13 @@ export class ArenaHost {
       invalidRetries: bounded(request.invalidRetries, 1, 0, 2, '违规重试次数'),
       speechVisibility: 'spectator', system: gameSystem(game.id),
       contextMode: 'current-position',
+      ...(Array.isArray(game.seatOptions) ? { seats } : {}),
       ...(game.id === 'werewolf' ? { seed: Number.isInteger(request.seed) ? request.seed >>> 0 : freshSeed() } : {}),
     }
-    const title = game.id === 'werewolf' ? `狼人杀 · ${players.map(player => player.name).join(' / ')}` : `${players[0].name} vs ${players[1].name}`
-    const state = game.id === 'werewolf' ? game.create(config.seed) : game.create()
+    /* 标题一律自带游戏名：列表主标题、面包屑、战报与回放四处共用，避免只有狼人杀看得出游戏。
+       历史记录保持创建时的快照，显示层由 presentation.matchTitle 补前缀。 */
+    const title = game.id === 'werewolf' ? `狼人杀（${seats} 人）· ${players[0].name} 等 ${seats} 位` : `${game.name} · ${players[0].name} vs ${players[1].name}`
+    const state = game.id === 'werewolf' ? game.create(config.seed, seats) : game.create()
     const match = await this.store.create({ title, game: { id: game.id, name: game.name, version: game.version, description: game.description }, players, config, state })
     this.launch(match.id)
     return match

@@ -23,6 +23,11 @@ test('每款注册游戏都有摘要、标签和可渲染封面，未知游戏�
   assert.equal(unknown.tagline, '19 路围棋')
   assert.deepEqual(unknown.facts, ['2 位选手', '规则 0.2.0'])
   assert.equal(gameCoverSvg({ id: 'weiqi', name: '围棋' }), '')
+  /* 多档位游戏的人数标签由 seatOptions 现算，登记表里不再写死人数 */
+  const wolf = gameCard(games.find(game => game.id === 'werewolf'))
+  assert.equal(wolf.facts[0], '6 / 8 / 9 人')
+  assert.deepEqual(games.find(game => game.id === 'werewolf').seatOptions, [6, 8, 9])
+  assert.equal(gameCard({ id: 'gomoku', name: '五子棋', players: 2, version: '1' }).facts[0], '15 × 15')
 })
 
 test('棋盘封面画的是真局面：五子棋示例手顺、象棋开局 32 子', () => {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { werewolf } from '../werewolf.mjs'
+import { dealRoles, werewolf } from '../werewolf.mjs'
 
 const SEED = 0x574f4c46
 
@@ -37,8 +37,66 @@ test('fixed seed deals the 6 standard roles and opens on the first wolf', () => 
   assert.deepEqual(state.players.map(player => player.role), ['hunter', 'werewolf', 'villager', 'werewolf', 'seer', 'witch'])
   assert.equal(state.phase, 'night-wolf')
   assert.deepEqual(state.pending, [2])
-  assert.equal(werewolf.version, '1.0.0')
+  assert.equal(werewolf.version, '1.1.0')
   assert.equal(werewolf.players, 6)
+  assert.deepEqual(werewolf.seatOptions, [6, 8, 9])
+})
+
+test('人数档位 6 / 8 / 9 各有牌型，发牌按种子复现且座位边界跟着档位走', () => {
+  const count = roles => roles.reduce((tally, role) => (tally[role] = (tally[role] || 0) + 1, tally), {})
+  assert.deepEqual(count(dealRoles(SEED, 6)), { werewolf: 2, seer: 1, witch: 1, hunter: 1, villager: 1 })
+  assert.deepEqual(count(dealRoles(SEED, 8)), { werewolf: 2, seer: 1, witch: 1, hunter: 1, villager: 3 })
+  assert.deepEqual(count(dealRoles(SEED, 9)), { werewolf: 3, seer: 1, witch: 1, hunter: 1, villager: 3 })
+  for (const seats of [6, 8, 9]) {
+    assert.deepEqual(dealRoles(SEED, seats), dealRoles(SEED, seats), `${seats} 人局同一 seed 必须复现`)
+    const state = werewolf.create(SEED, seats)
+    assert.equal(state.players.length, seats)
+    assert.deepEqual(state.players.map(player => player.role), dealRoles(SEED, seats))
+    assert.equal(werewolf.observe(state, 0).seatCount, seats)
+  }
+  /* 8 人局的狼只能刀 1—8，9 号根本不存在 */
+  const eight = werewolf.create(SEED, 8)
+  const wolf = eight.pending[0] - 1
+  assert.throws(() => step(eight, wolf, { type: 'kill', target: 9 }), /目标必须是 1—8 的座位/)
+  assert.throws(() => werewolf.create(SEED, 7), /没有 7 人档位/)
+})
+
+test('主持人播报按阶段推进，同一手的多个阶段合并成一条，且不进选手局面', () => {
+  let state = werewolf.create(SEED)
+  assert.deepEqual(state.narration.map(item => item.text), ['天黑请闭眼。狼人请睁眼，选择今晚要击杀的玩家。'])
+  const beforeNight = state.narration.length
+  state = playNight(state, { kill: 3, check: 2, potion: 'pass' })
+  assert.deepEqual(state.narration.slice(beforeNight).map(item => item.text), [
+    '预言家请睁眼，查验一名玩家的身份。',
+    '女巫请睁眼。',
+    /* 天亮与白天开场落在女巫那一手，合成一条：观众一眼看到出局与接下来做什么 */
+    '天亮了，昨夜 3 号出局。第 1 天，请存活玩家依次发言。',
+  ])
+  const beforeVote = state.narration.length
+  state = playDay(state, 2)
+  assert.deepEqual(state.narration.slice(beforeVote).map(item => item.text), [
+    '发言结束，请投票放逐一名玩家。',
+    '2 号被投票放逐。天黑请闭眼。狼人请睁眼，选择今晚要击杀的玩家。',
+  ])
+  for (const seat of [0, 2, 4]) {
+    const view = JSON.stringify(werewolf.observe(state, seat))
+    assert.equal(view.includes('narration'), false, '播报是观众侧数据，不能进选手局面')
+    assert.equal(view.includes('主持人'), false)
+    /* 选手只拿到公开记录（第三人称"3 号出局"），拿不到主持人台词（"昨夜 3 号出局"） */
+    assert.equal(view.includes('昨夜'), false)
+    assert.equal(view.includes('请存活玩家依次发言'), false)
+    assert.match(view, /3 号出局/)
+  }
+})
+
+test('猎人开枪与终局都有播报台词', () => {
+  let state = werewolf.create(SEED)
+  state = playNight(state, { kill: 1, check: 3, potion: 'pass' })
+  assert.equal(state.phase, 'hunter')
+  assert.match(state.narration.at(-1).text, /猎人出局，可以开枪带走一名玩家/)
+  state = step(state, 0, { type: 'shoot', target: 3 })
+  assert.equal(state.winner, 'wolf')
+  assert.match(state.narration.at(-1).text, /猎人开枪带走了 3 号/)
 })
 
 test('night order is wolf, seer, witch who sees the knife, then dawn', () => {

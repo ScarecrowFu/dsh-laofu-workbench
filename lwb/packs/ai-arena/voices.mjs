@@ -1,6 +1,7 @@
 /**
  * 选手音色与 logo。素材随包分发，运行时不读个人目录。
  * 匹配看模型 id、供应商和选手名；未命中的选手用通用音色，两名选手不共用同一条。
+ * 主持人另有一条固定音色（`assets/voices/host.mp3`），不参与选手匹配。
  */
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -25,6 +26,10 @@ export const VOICE_PROFILES = Object.freeze([
 export const GENERIC_VOICES = Object.freeze([1, 2, 3, 4, 5, 6].map(index => Object.freeze({
   key: `generic-${index}`, file: `voices/generic-${index}.mp3`, mediaType: 'audio/mpeg',
 })))
+
+/** 主持人音色：固定一条，不参与选手匹配，也不与任何选手共用（见 voices 文档与 TTS 缓存键）。 */
+export const HOST_VOICE_KEY = 'host'
+const HOST_VOICE = Object.freeze({ key: HOST_VOICE_KEY, file: 'voices/host.mp3', mediaType: 'audio/mpeg' })
 
 /** logo 文件名与音色键不完全相同：gpt 的图标文件是 chatgpt。 */
 const LOGO_FILE = Object.freeze({
@@ -66,6 +71,7 @@ export function assignVoices(players = []) {
 }
 
 export function voiceProfile(key) {
+  if (key === HOST_VOICE_KEY) return HOST_VOICE
   return VOICE_PROFILES.find(profile => profile.key === key) || GENERIC_VOICES.find(profile => profile.key === key) || null
 }
 

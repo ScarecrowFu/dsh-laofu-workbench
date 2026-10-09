@@ -58,12 +58,13 @@ test('export runs once, snapshots config and downloads in bounded chunks', async
   const store = await new ArenaStore(root).init(), jobs = [], signal = new AbortController()
   const match = await store.create({ ...fixture, id: undefined })
   await store.update(match.id, value => { value.status = 'finished'; value.events = fixture.events })
-  let release
+  let release, renders = 0
   const pending = new Promise(resolve => { release = resolve })
-  const exporter = new ArenaExport({ store, scope: { signal: signal.signal, background: promise => jobs.push(promise) }, render: async (snapshot, directory, options) => { await pending; await writeFile(join(directory, `${options.orientation}.mp4`), Buffer.alloc(600000, 1)) } })
+  const exporter = new ArenaExport({ store, scope: { signal: signal.signal, background: promise => jobs.push(promise) }, render: async (snapshot, directory, options) => { renders += 1; await pending; await writeFile(join(directory, options.fileName), Buffer.alloc(600000, 1)) } })
   await exporter.start({ id: match.id })
   await assert.rejects(exporter.start({ id: match.id }), /正在导出/)
   release(); await jobs[0]
+  assert.equal(renders, 1)
   const first = await exporter.chunk({ id: match.id })
   assert.equal(Buffer.from(first.data, 'base64').length, 512 * 1024)
   assert.equal(first.done, false)
@@ -71,6 +72,13 @@ test('export runs once, snapshots config and downloads in bounded chunks', async
   await assert.rejects(exporter.chunk({ id: match.id, offset: -1 }))
   await assert.rejects(exporter.chunk({ id: match.id, offset: 600001 }))
   await assert.rejects(exporter.chunk({ id: match.id, exportId: 'previous-export' }), /版本已变化/)
+  /* 同一组设置再点一次：直接复用上一次的成片，不再渲染，下载照旧可用。 */
+  const again = await exporter.start({ id: match.id })
+  assert.equal(renders, 1, '键没变就不该重渲染')
+  assert.equal(again.export.cached, true)
+  assert.equal(again.export.status, 'succeeded')
+  assert.equal(again.export.file, (await store.get(match.id)).export.file)
+  assert.equal((await exporter.chunk({ id: match.id })).bytes, 600000)
 })
 
 test('voiced replay is refused without an LWB login and reuses a cached clip', async t => {
@@ -118,12 +126,30 @@ test('voiced replay is refused without an LWB login and reuses a cached clip', a
   assert.equal(settings.voiceAssets && Object.values(settings.voiceAssets)[0], 'asset-1')
   const again = await synthesizeSpeech(saved, directory, { scope, fetch, signal: scope.signal })
   assert.equal(posts, 1)
-  assert.equal(again.get(1).file, first.get(1).file)
-  assert.match(first.get(1).file, /v1-/u)
-  const leveled = await readFile(first.get(1).file)
+  assert.equal(again.get(1).speech.file, first.get(1).speech.file)
+  assert.match(first.get(1).speech.file, /v1-/u)
+  assert.equal(first.get(1).host, undefined, '非狼人杀没有主持人播报')
+  const leveled = await readFile(first.get(1).speech.file)
   assert.notEqual(leveled.equals(clip), true)
-  const html = replayHtml(saved, new Map([[1, { seconds: 1.2, src: await clipDataUrl(first.get(1).file) }]]))
+  /* 旧的单轨形状（只给选手发言）继续可用，离线回放照样内联音频 */
+  const html = replayHtml(saved, new Map([[1, { seconds: 1.2, src: await clipDataUrl(first.get(1).speech.file) }]]))
   assert.match(html, /data:audio\/mpeg;base64,/u)
+  /* 成功路径：有声回放落账的 export.bytes 是客户端体积提示的唯一来源 —— 客户端不再
+     从下载分片里取（循环里的 part 出了 while 体只会抛 ReferenceError）。 */
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = fetch
+  try {
+    const voicedJobs = []
+    await new ArenaExport({ store, scope: { ...scope, background: promise => voicedJobs.push(promise) } }).startReplay({ id: saved.id })
+    await voicedJobs[0]
+  } finally { globalThis.fetch = originalFetch }
+  const voiced = await store.get(saved.id)
+  const artifact = await readFile(join(directory, voiced.export.file), 'utf8')
+  assert.equal(voiced.export.status, 'succeeded')
+  assert.equal(voiced.export.kind, 'html')
+  assert.equal(voiced.export.cached, false)
+  assert.equal(voiced.export.bytes, Buffer.byteLength(artifact), '客户端体积提示读的就是这个字段')
+  assert.match(artifact, /data:audio\/mpeg;base64,/u)
 })
 
 test('成片自检：静音音轨不算配音，尺寸、时长、配音音轨各自判定', () => {

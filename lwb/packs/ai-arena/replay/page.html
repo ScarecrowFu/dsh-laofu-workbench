@@ -41,6 +41,18 @@
           <header class="top">
             <div class="brand"><b>AI竞技台</b><span class="game">{{GAME_LABEL}}</span></div>
           </header>
+          <div class="turn" id="turn" data-phase="move">
+            <i class="turn-bar" id="turnBar"></i>
+            <img class="turn-logo" id="turnLogo" src="" alt="">
+            <div class="turn-body">
+              <div class="turn-top">
+                <small class="turn-kicker" id="turnKicker">本手执行</small>
+                <span id="turnTag"></span>
+                <span class="turn-meta" id="turnMove"></span>
+              </div>
+              <b class="turn-name" id="turnName"></b>
+            </div>
+          </div>
           <div class="hero">
             <em class="hlbl" id="heroLbl">当前手数</em>
             <b class="n" id="heroNum">0</b>

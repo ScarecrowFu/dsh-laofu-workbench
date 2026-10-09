@@ -11,6 +11,10 @@
   --brand:#378ADD;--brand-ink:#185FA5;--brand-soft:#E6F1FB;--brand-edge:#B5D4F4;
   --gold:#BA7517;--gold-soft:#FAEEDA;--gold-ink:#854F0B;--gold-edge:#EFCF9A;
   --panel:#fff;--bg:#F4F5F3;
+  /* 席位强调色：目前只表示「本手执行」，两名选手共用同一个蓝色，
+     身份由 logo + 模型名承载。将来要按席位分色时改这两个变量即可，
+     但必须绕开金（关键手/胜局）与红（将军/出局）这两组语义色。 */
+  --seat:var(--brand);--seat-soft:var(--brand-soft);--seat-edge:var(--brand-edge);
   --pad:20px;
   position:relative;flex:none;overflow:hidden;
   width:1280px;height:720px;
@@ -67,14 +71,43 @@
 .game{font-size:12px;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .stage[data-layout="portrait"] .top{display:none}
 
-/* 手数：状态信息，放大为主角之一 */
-.hero{flex:none;display:flex;align-items:center;gap:10px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+/* --------------------------------------------------------------- 当前执行者卡
+   整场画面里「谁在执行」的唯一大号常驻元素：席位强调条 + 圆形 logo + 模型名。
+   竖屏里它接管记分条与字幕之间的闲置空白，是手机上唯一读得清的身份信息；
+   视频侧随时间的量由 markup.mjs 算成内联样式，离线 HTML 用下面同名的关键帧。 */
+.turn{
+  flex:none;position:relative;display:flex;align-items:center;gap:14px;
+  padding:13px 16px 13px 22px;border-radius:12px;overflow:hidden;
+  background:var(--seat-soft);border:1px solid var(--seat-edge);
+}
+.turn-bar{position:absolute;left:0;top:0;bottom:0;width:6px;background:var(--seat);transform-origin:top}
+.turn-logo{flex:none;width:52px;height:52px;border-radius:50%;object-fit:cover;background:#fff;box-shadow:0 2px 8px rgba(20,24,26,.16)}
+.turn-logo[hidden]{display:none}
+.turn-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+/* 元数据（席位 / 步数）跟小标题同一行靠右：模型名因此拿到卡片整行宽度，
+   长 id 不会和它抢位置而折成两行。 */
+.turn-top{display:flex;align-items:center;gap:8px;min-width:0}
+.turn-kicker{font-size:12px;font-weight:800;letter-spacing:.16em;color:var(--brand-ink);white-space:nowrap}
+.turn-name{font-size:30px;font-weight:800;line-height:1.16;color:var(--ink);overflow-wrap:anywhere}
+.turn-meta{margin-left:auto;flex:none;font-size:12px;font-weight:700;color:var(--ink2);white-space:nowrap}
+.turn-meta b{font-size:15px;color:var(--ink)}
+/* 终局换成胜局口径的金色，与「本手执行」的蓝分开，一个颜色不再兼两义 */
+.turn[data-phase="finale"]{background:var(--gold-soft);border-color:var(--gold-edge)}
+.turn[data-phase="finale"] .turn-bar{background:var(--gold)}
+.turn[data-phase="finale"] .turn-kicker{color:var(--gold-ink)}
+.stage[data-layout="portrait"] .turn{padding:12px 14px 12px 20px;gap:13px}
+.stage[data-layout="portrait"] .turn-logo{width:56px;height:56px}
+.stage[data-layout="portrait"] .turn-name{font-size:32px}
+
+/* 手数：状态信息，降级为执行者卡下的元数据行 */
+.hero{flex:none;display:flex;align-items:center;gap:10px;padding-bottom:9px;border-bottom:1px solid var(--line)}
+.hero[hidden]{display:none}
 .hlbl{flex:none;font-size:12px;font-style:normal;color:var(--ink3)}
-.hero .n{font-size:46px;font-weight:800;line-height:1;color:var(--brand-ink);letter-spacing:-.015em}
-.hero .t{font-size:13px;color:var(--ink3)}
+.hero .n{font-size:22px;font-weight:800;line-height:1.1;color:var(--brand-ink);letter-spacing:-.015em}
+.hero .t{font-size:12px;color:var(--ink3)}
 .heroTag{margin-left:auto;flex:none;display:flex;align-items:center;gap:6px}
-.stage[data-layout="portrait"] .hero{padding-bottom:10px}
-.stage[data-layout="portrait"] .hero .n{font-size:34px}
+.stage[data-layout="portrait"] .hero{padding-bottom:8px}
+.stage[data-layout="portrait"] .hero .n{font-size:20px}
 
 .pill{display:inline-flex;align-items:center;height:24px;padding:0 11px;border-radius:999px;font-size:12px;font-weight:800;white-space:nowrap;border:1px solid transparent}
 .pill.cap{background:var(--gold-soft);color:var(--gold-ink);border-color:var(--gold-edge)}
@@ -82,16 +115,16 @@
 .pill.win{background:var(--gold);color:#fff;border-color:var(--gold)}
 .pill.plain{background:#EBEFEC;color:var(--ink);border-color:#DCE3DF}
 
-/* 记分板：压成两条 28px 紧凑行，去掉填充色块 */
+/* 记分板：执行者卡之下的常驻名册，压成两条紧凑行 */
 .score{flex:none;display:flex;flex-direction:column;gap:6px}
 .pcard{
   display:flex;align-items:center;gap:9px;height:28px;padding:0 9px;border-radius:7px;
   border-left:3px solid transparent;
   transition:background .25s ease,border-color .25s ease;
 }
-.pcard[data-active="true"]{background:var(--brand-soft);border-left-color:var(--brand)}
-.pcard .nm{font-size:13px;font-weight:700;color:var(--ink2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pcard[data-active="true"] .nm{color:var(--ink)}
+.pcard[data-active="true"]{background:var(--brand-soft);border-left-color:var(--brand);box-shadow:inset 0 0 0 1px var(--brand-edge)}
+.pcard .nm{font-size:14px;font-weight:700;color:var(--ink2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pcard[data-active="true"] .nm{color:var(--ink);font-weight:800}
 .pcard .sd{margin-left:auto;flex:none;font-size:12px;color:var(--ink3)}
 .pcard .bd{flex:none;padding:1px 8px;border-radius:999px;background:var(--gold);color:#fff;font-size:11px;font-weight:800;font-style:normal}
 .pcard .bd:empty{display:none}
@@ -103,7 +136,7 @@
 .xq-black{background:#29362e;border-color:#c98a5a}
 .stage[data-layout="portrait"] .score{flex-direction:row;gap:8px}
 .stage[data-layout="portrait"] .pcard{flex:1;min-width:0;height:26px;padding:0 8px}
-.stage[data-layout="portrait"] .pcard .nm{font-size:12px}
+.stage[data-layout="portrait"] .pcard .nm{font-size:13px}
 .stage[data-layout="portrait"] .pcard .logo{width:18px;height:18px}
 .stage[data-layout="portrait"] .pcard .sd{display:none}
 
@@ -117,13 +150,18 @@
 /* 竖屏下部富余空间更多，字幕垂直居中避免「上挤下空」 */
 .stage[data-layout="portrait"] .speech{justify-content:center}
 .sinner{align-self:flex-start;max-width:100%;display:flex;flex-direction:column;gap:8px;border-left:3px solid var(--brand);padding-left:16px}
+/* 署名挂在画面最大的那句字幕上：名字抬到与小标题同级，观众不必回头找「谁说的」 */
 .shead{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;color:var(--ink3)}
-.shead span{display:flex;align-items:center;gap:6px;min-width:0;overflow-wrap:anywhere}
-.shead .logo{width:18px;height:18px}
+.shead span{display:flex;align-items:center;gap:9px;min-width:0;overflow-wrap:anywhere}
+.shead .logo{width:26px;height:26px}
+.sn{font-size:20px;font-weight:800;color:var(--ink);overflow:hidden;text-overflow:ellipsis}
+.stag{flex:none;font-size:11px;font-weight:800;font-style:normal;letter-spacing:.1em;color:var(--brand-ink);background:var(--brand-soft);border:1px solid var(--brand-edge);border-radius:999px;padding:2px 8px}
 .coord{flex:none;padding:2px 9px;border-radius:999px;background:#F1F4F2;color:var(--ink2);font-size:11px;font-style:normal;font-weight:700;white-space:nowrap}
 .coord[hidden]{display:none}
 #text{margin-top:2px;font-size:24px;font-weight:700;line-height:1.5;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:5;overflow:hidden}
 .stage[data-layout="portrait"] #text{-webkit-line-clamp:4}
+.stage[data-layout="portrait"] .shead .logo{width:28px;height:28px}
+.stage[data-layout="portrait"] .sn{font-size:22px}
 
 /* 记录块可收缩：发言很长时由它让位（rlist 已 overflow:hidden，从最旧一条开始裁），
    避免 speech 被挤压后文字与记录重叠。 */
@@ -170,8 +208,9 @@
 .stage[data-layout="portrait"] .safe-bottom{display:block;flex:none;height:140px}
 
 /* ===============================================================
-   狼人杀六席舞台（隐藏身份游戏没有棋盘）
-   主画面 = 满幅昼夜场景 + 六张立绘席卡；侧栏 = 天数/阶段、身份榜、发言、进度。
+   狼人杀席位舞台（隐藏身份游戏没有棋盘，6 / 8 / 9 人共用同一套画面）
+   主画面 = 满幅昼夜场景 + N 张立绘席卡 + 主持人播报；侧栏 = 天数/阶段、身份榜、发言、进度。
+   列数由 markup.mjs 按人数写进 --ww-cols / --ww-cols-portrait。
    所有随时间变化的量在 markup.mjs 里算成内联样式（视频逐帧），
    离线 HTML 用下面同名的关键帧（.stage.animate 触发）。
    =============================================================== */
@@ -195,18 +234,24 @@
 .stage[data-scene="day"] .ww-phase{color:#FFF7E6}
 .stage[data-act="death"] .ww-phase{color:#FFD9D3}
 
-/* 出局播报 */
-.ww-deaths{position:absolute;left:50%;bottom:232px;transform:translateX(-50%);padding:7px 18px;border-radius:999px;background:rgba(150,32,26,.82);border:1px solid rgba(255,160,150,.55);color:#FFF2EF;font-size:16px;font-weight:800;letter-spacing:.05em;white-space:nowrap;box-shadow:0 8px 26px rgba(120,20,16,.42)}
+/* 主持人播报：出局与阶段由它一起说出，不再单独挂一条出局横幅 */
+.ww-host{position:absolute;left:30px;top:112px;max-width:min(64%,760px);display:flex;flex-direction:column;align-items:flex-start;gap:5px}
+.ww-host em{display:inline-flex;align-items:center;height:20px;padding:0 10px;border-radius:999px;background:rgba(224,163,46,.2);border:1px solid rgba(224,163,46,.55);color:#F4DFAE;font-size:11px;font-weight:800;font-style:normal;letter-spacing:.14em;backdrop-filter:blur(3px)}
+.ww-host p{margin:0;padding:7px 15px;border-radius:10px;background:rgba(8,12,19,.68);border:1px solid rgba(255,255,255,.16);color:#F6F1E4;font-size:15px;font-weight:700;line-height:1.45;backdrop-filter:blur(3px);text-shadow:0 1px 6px rgba(0,0,0,.6)}
 
-/* 六席 */
-.ww-cast{position:absolute;left:22px;right:22px;bottom:22px;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;align-items:end}
+/* N 席 */
+.ww-cast{position:absolute;left:22px;right:22px;bottom:22px;display:grid;grid-template-columns:repeat(var(--ww-cols,6),minmax(0,1fr));gap:10px;align-items:end}
 .ww-seat{position:relative;display:flex;flex-direction:column;align-items:center;gap:5px;transform-origin:center bottom}
 .ww-no{position:absolute;left:50%;top:-9px;transform:translateX(-50%);z-index:3;display:flex;width:21px;height:21px;align-items:center;justify-content:center;border-radius:50%;background:rgba(10,14,22,.86);border:1px solid rgba(255,255,255,.34);color:#F2F6FB;font-size:11px;font-weight:800}
 .ww-face{position:relative;display:block;width:100%;height:158px;border-radius:12px 12px 9px 9px;overflow:hidden;background:linear-gradient(180deg,rgba(24,34,48,.5),rgba(10,15,22,.72));border:1px solid rgba(255,255,255,.16);box-shadow:0 12px 26px rgba(3,6,12,.5);transition:border-color .25s ease,box-shadow .25s ease}
 .ww-face img{position:absolute;left:0;right:0;bottom:0;width:100%;height:100%;object-fit:contain;object-position:center bottom;transition:filter .3s ease}
 .ww-veil{position:absolute;inset:0;background:linear-gradient(180deg,rgba(6,10,16,0) 46%,rgba(6,10,16,.55) 100%)}
-.ww-seat[data-active="true"] .ww-face{border-color:var(--wolf-gold);box-shadow:0 0 0 2px rgba(224,163,46,.55),0 16px 34px rgba(3,6,12,.6)}
-.ww-seat[data-active="true"] .ww-face img{filter:brightness(1.08) saturate(1.06)}
+/* 当前行动席位：蓝色环（本手执行），金色只留给胜方 —— 一个颜色不再兼两义。
+   金框此前既是「正在动」又是「赢了」，终局两者还会同时出现，观众分不出来。 */
+.ww-seat[data-active="true"] .ww-face{border-color:var(--brand);box-shadow:0 0 0 3px rgba(55,138,221,.7),0 18px 38px rgba(3,6,12,.62)}
+.ww-seat[data-active="true"] .ww-face img{filter:brightness(1.14) saturate(1.08)}
+.ww-seat[data-active="true"] .ww-no{background:var(--brand);border-color:#FFF;color:#FFF}
+.ww-seat[data-active="true"] .ww-name{color:#FFF;font-weight:800;text-shadow:0 1px 5px rgba(0,0,0,.9),0 0 10px rgba(55,138,221,.9)}
 .ww-seat[data-alive="false"] .ww-face img{filter:grayscale(1) brightness(.46) contrast(1.05)}
 .ww-seat[data-alive="false"] .ww-face{border-color:rgba(180,52,42,.6)}
 .ww-seat[data-win="true"] .ww-face{border-color:var(--wolf-gold);box-shadow:0 0 0 2px rgba(224,163,46,.5),0 14px 30px rgba(3,6,12,.55)}
@@ -234,10 +279,15 @@
 /* 侧栏叙事：狼人杀的发言是主角，居中并做成字幕卡 */
 .stage[data-game="werewolf"] .narrative .speech{justify-content:center}
 .stage[data-game="werewolf"] .sinner{padding:14px 16px;border-radius:12px;background:#F7F9FB;border-left:3px solid var(--wolf-gold)}
-.stage[data-game="werewolf"] .shead span{font-weight:700;color:var(--ink2)}
+.stage[data-game="werewolf"] .shead .stag{color:var(--gold-ink);background:var(--gold-soft);border-color:var(--gold-edge)}
 
 /* 身份榜（侧栏） */
 .stage[data-game="werewolf"] .hero .n{font-size:26px;letter-spacing:0}
+.stage[data-game="werewolf"] .turn{padding:11px 14px 11px 20px;gap:12px}
+.stage[data-game="werewolf"] .turn-logo{width:42px;height:42px}
+.stage[data-game="werewolf"] .turn-name{font-size:26px}
+.stage[data-game="werewolf"][data-layout="portrait"] .turn-logo{width:52px;height:52px}
+.stage[data-game="werewolf"][data-layout="portrait"] .turn-name{font-size:30px}
 .stage[data-game="werewolf"] .ww-chip{display:inline-flex;width:18px;height:18px;align-items:center;justify-content:center;border-radius:5px;border:0;font-size:10px;font-weight:800;background:#E7ECEA;color:#1B232C}
 .stage[data-game="werewolf"] .ww-chip[data-role="werewolf"]{background:#D9534A;color:#FFF}
 .stage[data-game="werewolf"] .ww-chip[data-role="seer"]{background:#5B93E0;color:#FFF}
@@ -253,34 +303,37 @@
 .stage[data-game="werewolf"] .finale p{color:#7A4A08}
 .stage[data-game="werewolf"][data-scene="day"] .finale p{color:#0C447C}
 .stage[data-game="werewolf"] .pcard{height:30px}
+/* 8 / 9 人时身份榜多出 2—3 行，压一点行高，别把侧栏的发言区挤没 */
+.stage[data-game="werewolf"][data-seats="8"] .pcard,.stage[data-game="werewolf"][data-seats="9"] .pcard{height:26px;padding:0 8px}
+.stage[data-game="werewolf"][data-seats="8"] .ww-face,.stage[data-game="werewolf"][data-seats="9"] .ww-face{height:138px}
 .stage[data-game="werewolf"] .score{gap:5px}
 .stage[data-game="werewolf"] .recent{gap:5px}
 
-/* 竖屏：场景在上，六席按 3×2 排，身份榜也走栅格 */
+/* 竖屏：场景在上，席位按 --ww-cols-portrait 排，身份榜也走栅格 */
 .stage[data-game="werewolf"][data-layout="portrait"] .board-card{width:100%;height:auto;flex:none;aspect-ratio:16/14}
 .stage[data-game="werewolf"][data-layout="portrait"] .side{flex:1 1 auto;width:100%}
-.stage[data-game="werewolf"][data-layout="portrait"] .ww-cast{grid-template-columns:repeat(3,minmax(0,1fr));bottom:16px;left:16px;right:16px;gap:8px}
+.stage[data-game="werewolf"][data-layout="portrait"] .ww-cast{grid-template-columns:repeat(var(--ww-cols-portrait,3),minmax(0,1fr));bottom:16px;left:16px;right:16px;gap:8px}
 .stage[data-game="werewolf"][data-layout="portrait"] .ww-face{height:132px}
+/* 9 人竖屏是 3 列 × 3 行：席位栅格顶到主持人台词上（台词到 140px，栅格原本从 131px 起），
+   压一档席卡高度把栅格推下去，台词与第一排席卡不再叠在一起。
+   8 人是 4 列 × 2 行，本来就有富余，不受这条影响。 */
+.stage[data-game="werewolf"][data-layout="portrait"][data-seats="9"] .ww-face{height:124px}
 .stage[data-game="werewolf"][data-layout="portrait"] .ww-phase{font-size:26px}
 .stage[data-game="werewolf"][data-layout="portrait"] .ww-head{left:18px;top:18px}
-.stage[data-game="werewolf"][data-layout="portrait"] .ww-deaths{bottom:auto;top:64px;font-size:14px}
+.stage[data-game="werewolf"][data-layout="portrait"] .ww-host{left:18px;top:86px;max-width:80%}
+.stage[data-game="werewolf"][data-layout="portrait"] .ww-host p{font-size:14px;padding:6px 12px}
 .stage[data-game="werewolf"][data-layout="portrait"] .ww-win b{font-size:34px}
 .stage[data-game="werewolf"][data-layout="portrait"] .score{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
 .stage[data-game="werewolf"][data-layout="portrait"] .pcard{height:26px;padding:0 8px}
 
 /* 狼人杀动效（与 markup.mjs 的同名轨道对齐） */
-.stage.animate.ww-enter .ww-seat{animation:wwSeatIn .34s cubic-bezier(.2,.8,.3,1) both}
-.stage.animate.ww-enter .ww-seat:nth-child(2){animation-delay:.05s}
-.stage.animate.ww-enter .ww-seat:nth-child(3){animation-delay:.1s}
-.stage.animate.ww-enter .ww-seat:nth-child(4){animation-delay:.15s}
-.stage.animate.ww-enter .ww-seat:nth-child(5){animation-delay:.2s}
-.stage.animate.ww-enter .ww-seat:nth-child(6){animation-delay:.25s}
+.stage.animate.ww-enter .ww-seat{animation:wwSeatIn .34s cubic-bezier(.2,.8,.3,1) both;animation-delay:calc(var(--ww-i,0) * .05s)}
 @keyframes wwSeatIn{from{opacity:0;transform:translateY(18px) scale(.96)}to{opacity:1;transform:none}}
-.stage.animate .ww-seat[data-active="true"] .ww-face{animation:wwLift .26s cubic-bezier(.2,.8,.3,1) both}
-@keyframes wwLift{from{transform:translateY(0)}to{transform:translateY(-12px)}}
+.stage.animate .ww-seat[data-active="true"] .ww-face{animation:wwLift .3s cubic-bezier(.2,.8,.3,1) both}
+@keyframes wwLift{from{transform:translateY(0) scale(1)}to{transform:translateY(-14px) scale(1.06)}}
 .stage.animate .ww-head{animation:wwHeadIn .38s cubic-bezier(.2,.8,.3,1) both}
 @keyframes wwHeadIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
-.stage.animate .ww-deaths{animation:wwTagIn .44s cubic-bezier(.2,.8,.3,1) both}
+.stage.animate .ww-host{animation:fadeUp .28s ease-out both}
 @keyframes wwTagIn{from{opacity:0;transform:translate(-50%,12px)}to{opacity:1;transform:translate(-50%,0)}}
 .stage.animate .ww-strike{animation:wwStrike .5s cubic-bezier(.3,.7,.4,1) both}
 @keyframes wwStrike{from{opacity:1;transform:translate(-50%,-50%) scale(1.7)}62%{opacity:.95;transform:translate(-50%,-50%) scale(1)}to{opacity:.72;transform:translate(-50%,-50%) scale(1)}}
@@ -304,12 +357,24 @@
 .stage[data-phase="finale"] .board-card{transform:scale(1.03)}
 .stage.paused .board-card{animation-play-state:paused}
 
-/* 落子入场 + 文字入场（仅在播放推进时加 .animate） */
-.stage.animate .board svg g.is-new{animation:stoneIn .26s cubic-bezier(.2,.8,.3,1) both}
+/* 落子入场 + 文字入场（仅在播放推进时加 .animate）
+   换手节拍：执行者卡先到 → 落子随后（+.12s）→ 台词最后（+.22s）。
+   与 markup.mjs 的 TURN_IN / STONE_DELAY / SPEECH_DELAY 是同一套数值，
+   视频侧靠内联样式复刻，这里靠 animation-delay，两边必须一起改。 */
+.stage.animate .board svg g.is-new{animation:stoneIn .26s cubic-bezier(.2,.8,.3,1) .12s both}
 @keyframes stoneIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:none}}
-.stage.animate .speech{animation:fadeUp .2s ease-out both}
+.stage.animate .speech{animation:fadeUp .2s ease-out .22s both}
 .stage.animate .finale{animation:fadeUp .28s ease-out both}
 @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+/* 换手本身要会动：手机上静态的底色切换不会被看见 */
+.stage.animate .turn{animation:turnIn .34s cubic-bezier(.2,.8,.3,1) both}
+@keyframes turnIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+.stage.animate .turn-bar{animation:turnBar .32s cubic-bezier(.2,.8,.3,1) both}
+@keyframes turnBar{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+.stage.animate .turn-logo{animation:turnLogo .3s cubic-bezier(.2,.8,.3,1) both}
+@keyframes turnLogo{from{transform:scale(.86)}to{transform:scale(1)}}
+.stage.paused .turn,.stage.paused .turn-bar,.stage.paused .turn-logo{animation-play-state:paused}
 
 /* 吃子：被吃棋子原位碎裂淡出 + 落点震屏 */
 .board svg g.ghost{animation:shatter .36s cubic-bezier(.3,.7,.4,1) both}

@@ -76,12 +76,50 @@ test('每局狼人杀按种子重新发牌，并把种子记进配置以便复�
   const seats = models.map(model => ({ provider: 'test', model: model.id }))
   const fresh = await env.host.start({ gameId: 'werewolf', players: seats })
   assert.ok(Number.isInteger(fresh.config.seed) && fresh.config.seed >= 0 && fresh.config.seed < 2 ** 32, '不传 seed 时必须生成 32 位整数种子')
+  assert.equal(fresh.config.seats, 6, '不传 seats 时按选手数推断档位，旧客户端照旧')
   assert.deepEqual(fresh.state.players.map(player => player.role), dealRoles(fresh.config.seed), '发牌必须与该局种子一致，才能离线复现')
   const pinned = await env.host.start({ gameId: 'werewolf', seed: 0x574f4c46, players: seats })
   assert.equal(pinned.config.seed, 0x574f4c46)
   assert.deepEqual(pinned.state.players.map(player => player.role), ['hunter', 'werewolf', 'villager', 'werewolf', 'seer', 'witch'])
   /* 这里只验证发牌，不打算打完：把两场都停在回合边界再等后台收尾。 */
   for (const id of [fresh.id, pinned.id]) {
+    const current = await env.store.get(id)
+    if (['running', 'pausing'].includes(current.status)) await env.host.control({ id, action: 'pause' })
+  }
+  await env.settle()
+})
+
+test('人数档位：seats 必须受支持且与选手数一致，config.seats 落盘供回放复现', async t => {
+  const models = Array.from({ length: 9 }, (_, index) => ({ id: `m${index}`, name: `M${index}` }))
+  const env = await setup(t, async () => ({ text: JSON.stringify({ action: { type: 'speak' }, speech: '开局。' }), finish: { kind: 'stop' }, usage: { inputTokens: 1, outputTokens: 1 } }), models)
+  const seat = index => ({ provider: 'test', model: `m${index}` })
+  const eight = await env.host.start({ gameId: 'werewolf', seed: 0x574f4c46, seats: 8, players: Array.from({ length: 8 }, (_, index) => seat(index)) })
+  assert.equal(eight.config.seats, 8)
+  assert.equal(eight.state.players.length, 8)
+  assert.match(eight.title, /狼人杀（8 人）/u)
+  assert.deepEqual(eight.state.players.map(player => player.role), dealRoles(0x574f4c46, 8))
+  await assert.rejects(env.host.start({ gameId: 'werewolf', seats: 7, players: Array.from({ length: 7 }, (_, index) => seat(index)) }), /本游戏需要 6 \/ 8 \/ 9 名选手/u)
+  await assert.rejects(env.host.start({ gameId: 'werewolf', seats: 8, players: Array.from({ length: 6 }, (_, index) => seat(index)) }), /本游戏需要/u)
+  /* 旧客户端只发 players：6 人照旧，牌型与 1.0.0 逐元素一致 */
+  const legacy = await env.host.start({ gameId: 'werewolf', seed: 0x574f4c46, players: Array.from({ length: 6 }, (_, index) => seat(index)) })
+  assert.equal(legacy.config.seats, 6)
+  assert.deepEqual(legacy.state.players.map(player => player.role), ['hunter', 'werewolf', 'villager', 'werewolf', 'seer', 'witch'])
+  for (const id of [eight.id, legacy.id]) {
+    const current = await env.store.get(id)
+    if (['running', 'pausing'].includes(current.status)) await env.host.control({ id, action: 'pause' })
+  }
+  await env.settle()
+})
+
+test('新记录的标题自带游戏名：棋类不再是裸的「A vs B」', async t => {
+  const models = [{ id: 'black', name: '黑模型' }, { id: 'white', name: '白模型' }]
+  const env = await setup(t, async () => ({ text: JSON.stringify({ action: { row: 8, col: 8 }, speech: '开局。' }), finish: { kind: 'stop' }, usage: { inputTokens: 1, outputTokens: 1 } }), models)
+  const gomoku = await env.start({ gameId: 'gomoku' })
+  assert.equal(gomoku.title, '五子棋 · 黑模型 vs 白模型')
+  const xiangqi = await env.start({ gameId: 'xiangqi' })
+  assert.equal(xiangqi.title, '中国象棋 · 黑模型 vs 白模型')
+  /* 只验证标题：两场都停在回合边界再等后台收尾。 */
+  for (const id of [gomoku.id, xiangqi.id]) {
     const current = await env.store.get(id)
     if (['running', 'pausing'].includes(current.status)) await env.host.control({ id, action: 'pause' })
   }

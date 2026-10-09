@@ -1,5 +1,6 @@
 /**
- * 把每手选手发言合成语音。只走已声明的 LWB TTS：先查登录与最低积分，再上传参考音色、提交任务。
+ * 把每手选手发言与主持人播报合成语音。只走已声明的 LWB TTS：
+ * 先查登录与最低积分，再上传参考音色、提交任务。
  * 同一句、同一音色的文件留在比赛目录，重导时不再请求，避免重复扣费。
  */
 import { createHash } from 'node:crypto'
@@ -9,24 +10,49 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { movesOf } from './presentation.mjs'
-import { assignVoices, voiceFile } from './voices.mjs'
+import { HOST_VOICE_KEY, assignVoices, voiceFile } from './voices.mjs'
+import { hostNarrationLines } from './replay/data.mjs'
 
 const exec = promisify(execFile)
 const ASSET_ID = /^[A-Za-z0-9_-]{1,128}$/u
 /** 成片与参考音色共用的响度。改目标就要改缓存名，否则旧文件会被当成已拉齐。 */
 const LOUDNESS_TARGET = -16
 const TRUE_PEAK = -1.5
-const LOUDNESS_VERSION = 'v1'
+/** 配音缓存名与成片复用键都带它：响度口径变了，旧 mp3 和旧成片一起失效。 */
+export const LOUDNESS_VERSION = 'v1'
 
+/** 选手发言：一手一句，用该座位的音色。 */
 function speechLines(match) {
   const voices = assignVoices(match.players || [])
   return movesOf(match)
     .filter(move => String(move.speech || '').trim())
     .map(move => ({
       n: move.moveNumber,
+      kind: 'speech',
       voice: voices[move.player] || voices[0],
       text: String(move.speech).trim().slice(0, 800),
     }))
+}
+
+/** 主持人播报：一手至多一段，用固定音色；同一句不重复合成（见 hostNarrationLines）。 */
+function hostLines(match) {
+  return hostNarrationLines(match).map(line => ({
+    n: line.n,
+    kind: 'host',
+    voice: HOST_VOICE_KEY,
+    text: String(line.text).trim().slice(0, 800),
+  }))
+}
+
+/** 给导出进度与界面用：这一场会说几句，选手与主持人分开数。 */
+export function countSpeechLines(match) {
+  const speech = speechLines(match).length
+  const host = hostLines(match).length
+  return { speech, host, total: speech + host }
+}
+
+function speechQueue(match) {
+  return [...speechLines(match), ...hostLines(match)]
 }
 
 function clipName(voice, text) {
@@ -132,7 +158,8 @@ async function synthesize(request, assetId, text, signal) {
 }
 
 /**
- * @returns {Promise<Map<number, { seconds: number, file: string }>>}
+ * @returns {Promise<Map<number, { host?: { seconds: number, file: string }, speech?: { seconds: number, file: string } }>>}
+ *   手数 → 该手的配音分段（主持人先说，选手后说）。
  */
 export async function synthesizeSpeech(match, directory, { scope, fetch = globalThis.fetch, signal, onProgress }) {
   const status = await scope.account.status('tts')
@@ -142,7 +169,7 @@ export async function synthesizeSpeech(match, directory, { scope, fetch = global
   const available = Number(points?.availablePoints)
   const minimum = Number(status.minimumPoints || 0)
   if (Number.isFinite(available) && available < minimum) throw new Error('积分不足，请购买积分后重试。')
-  const lines = speechLines(match)
+  const lines = speechQueue(match)
   if (!lines.length) return new Map()
   const service = await scope.account.open('tts')
   const settings = () => scope.settings('arena-voices', value => ({ voiceAssets: value?.voiceAssets && typeof value.voiceAssets === 'object' ? value.voiceAssets : {} }))
@@ -169,10 +196,12 @@ export async function synthesizeSpeech(match, directory, { scope, fetch = global
       if (!response.ok) throw new Error('配音下载失败。')
       const bytes = Buffer.from(await response.arrayBuffer())
       if (!bytes.length || bytes.length > 8 * 1024 * 1024) throw new Error('配音文件无效。')
-      const leveled = await normalizeLoudness(bytes, { signal, label: `第 ${line.n} 手配音` })
+      const label = line.kind === 'host' ? `第 ${line.n} 手主持人播报` : `第 ${line.n} 手配音`
+      const leveled = await normalizeLoudness(bytes, { signal, label })
       await writeFile(file, leveled, { mode: 0o600 })
     }
-    clips.set(line.n, { seconds: await probeSeconds(file, signal), file })
+    const clip = { seconds: await probeSeconds(file, signal), file }
+    clips.set(line.n, { ...(clips.get(line.n) || {}), [line.kind]: clip })
     done += 1
     await onProgress?.({ done, total: lines.length })
     await next()

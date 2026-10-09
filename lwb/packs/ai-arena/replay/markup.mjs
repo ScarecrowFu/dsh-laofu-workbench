@@ -7,7 +7,7 @@
  *
  * 只在浏览器/打包环境使用（不依赖 node:fs，不依赖 xiangui 规则）。
  */
-import { boardSvg, actionLabel, playerSide, ROLE_MARK, ROLE_NAME, werewolfPhaseLabel, werewolfSideName } from '../presentation.mjs'
+import { boardSvg, actionLabel, playerSide, ROLE_MARK, ROLE_NAME, werewolfPhaseLabel, werewolfSideName, werewolfCastColumns } from '../presentation.mjs'
 import { WEREWOLF_ART } from '../werewolf-art.mjs'
 
 const esc = v => String(v ?? '').replace(/[&<>"']/gu, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -118,6 +118,48 @@ const checkDim = t => track([[0, [1]], [1, [.42]]], t, .28, LINEAR)[0]
 /** 终局棋盘推近：0.5s 过渡到 1.03。 */
 const finaleScale = t => track([[0, [1]], [1, [1.03]]], t, .5, cubicBezier(.2, .7, .2, 1))[0]
 
+/* ---------------------------------------------------------------- 换手节拍
+   执行者卡先到 → 落子随后 → 台词最后。手机上看视频时「谁在执行」主要靠这一拍：
+   三处数值必须与 scene.css 的同名关键帧（animation-delay）保持一致。 */
+const TURN_IN = .34
+const STONE_DELAY = .12
+const SPEECH_DELAY = .22
+const turnIn = t => track([[0, [0, 14]], [1, [1, 0]]], t, TURN_IN, EASE_OUT)
+const turnBar = t => track([[0, [0]], [1, [1]]], t, .32, EASE_OUT)[0]
+const turnLogo = t => track([[0, [.86]], [1, [1]]], t, .3, EASE_OUT)[0]
+/** 把一条动效轨道往后推 delay 秒：排队用，t<delay 时停在起始值。 */
+const after = (delay, run) => t => run(Math.max(0, t - delay))
+
+/* ---------------------------------------------------------------- 当前执行者卡
+   整场画面里「谁在执行」的唯一大号常驻元素。视频侧随时间的量在这里内联，
+   离线 HTML 用 scene.css 的同名关键帧；两边的入场节奏由上面的节拍常量对齐。 */
+function turnHtml({ player = null, kicker, name, meta = '', tag = '', phase = 'move', t = 0, animate = true }) {
+  const [opacity, shift] = animate ? turnIn(t) : [1, 0]
+  const bar = animate ? turnBar(t) : 1
+  const logo = animate ? turnLogo(t) : 1
+  return `<div class="turn" data-phase="${phase}" style="opacity:${round(opacity)};transform:translateY(${round(shift)}px)">` +
+    `<i class="turn-bar" style="transform:scaleY(${round(bar)})"></i>` +
+    (player?.logo ? `<img class="turn-logo" src="${player.logo}" alt="" style="transform:scale(${round(logo)})">` : '') +
+    `<div class="turn-body"><div class="turn-top"><small class="turn-kicker">${esc(kicker)}</small>${tag}` +
+    (meta ? `<span class="turn-meta">${meta}</span>` : '') + `</div>` +
+    `<b class="turn-name">${esc(name)}</b></div>` +
+    `</div>`
+}
+
+/** 棋类的执行者卡口径：开局指先手，逐手指本手，终局指胜方。
+    右侧顺带标出席位（红/黑方、先后手），让观众能把「这个模型」对上盘上的颜色。 */
+function chessTurn(data, { index, isFinale, isDraw, winner, active, t, animate }) {
+  const seat = isFinale ? winner : active
+  const player = seat === null || seat < 0 ? null : (data.players[seat] || null)
+  const name = player ? (player.name || '') : (isFinale ? (isDraw ? '和棋' : '比赛结束') : '')
+  const meta = player ? `${esc(playerSide(data.game, seat))} · ${seat === 0 ? '先手' : '后手'}` : ''
+  return turnHtml({
+    player, name, meta, t, animate,
+    kicker: isFinale ? (isDraw ? '终局' : '胜方') : (index >= 1 ? '本手执行' : '先手'),
+    phase: isFinale ? 'finale' : 'move',
+  })
+}
+
 /* ---------------------------------------------------------------- 棋盘 */
 function boardMarkup(data, index, { key, t }) {
   const M = data.moves.length
@@ -144,11 +186,12 @@ function boardMarkup(data, index, { key, t }) {
   }
 
   /* 落子入场：只动本手落点那一颗 —— 必须按坐标判定，
-     boardSvg 是按当前局面整体重绘的，<g> 顺序是位置序而非落子序。 */
+     boardSvg 是按当前局面整体重绘的，<g> 顺序是位置序而非落子序。
+     排在执行者卡之后（STONE_DELAY），先把「谁」推给观众再看「落在哪」。 */
   if (last) {
     const centre = centreOf(data.game.id, last.a)
     if (centre) {
-      const [opacity, shift] = stoneIn(t)
+      const [opacity, shift] = after(STONE_DELAY, stoneIn)(t)
       svg = stylePieceAt(svg, centre.x, centre.y, `opacity:${round(opacity)};transform:translateY(${round(shift)}px)`)
     }
   }
@@ -227,8 +270,8 @@ function progressHtml(data, index, keyMode, label = '关键手') {
     `<span class="cur" style="left:calc(${round(pct)}% - ${round(pct * 0.065)}px)"></span></div>`
 }
 
-/* ---------------------------------------------------------------- 狼人杀六席舞台
-   隐藏身份游戏没有棋盘：主画面是一块满幅昼夜场景 + 六张立绘席卡。
+/* ---------------------------------------------------------------- 狼人杀席位舞台
+   隐藏身份游戏没有棋盘：主画面是一块满幅昼夜场景 + N 张立绘席卡，头顶是主持人的确定性播报。
    逐帧渲染时所有随时间变化的量都在这里算成内联样式，离线 HTML 用 scene.css 里的同名关键帧。 */
 const WOLF_SIDE = role => role === 'werewolf' ? 'wolf' : 'village'
 const artPortrait = key => WEREWOLF_ART.portraits[key] || WEREWOLF_ART.portraits.generic || ''
@@ -250,7 +293,7 @@ function werewolfFrame(data, index) {
   const steps = wolf.steps || []
   const step = index >= 1 && index <= M ? steps[index - 1] || null : null
   const last = index >= 1 && index <= M ? data.moves[index - 1] : null
-  const seatTotal = wolf.seats.length || 6
+  const seatTotal = wolf.seats.length || (data.players || []).length || 6
   const finalStep = steps.at(-1) || null
   const phase = step?.phase || last?.phase || 'night-wolf'
   const initial = Array.from({ length: seatTotal }, (_, i) => i + 1)
@@ -275,7 +318,7 @@ function werewolfSeatHtml(seat, index_, frame, options, order) {
   const [enterOpacity, enterShift, enterScale] = animate && order >= 0 ? wwSeatIn(t, order) : [1, 0, 1]
   const lift = animate && active ? wwLift(t) : 0
   const winning = frame.isFinale && frame.winnerSide && seat.role && WOLF_SIDE(seat.role) === frame.winnerSide
-  const style = `opacity:${round(enterOpacity)};transform:translateY(${round(enterShift - lift * 12)}px) scale(${round(enterScale + lift * .045)})`
+  const style = `--ww-i:${index_};opacity:${round(enterOpacity)};transform:translateY(${round(enterShift - lift * 14)}px) scale(${round(enterScale + lift * .06)})`
   const strike = animate && dying ? (() => { const [scale, opacity] = wwStrike(t); return `<span class="ww-strike" style="opacity:${round(opacity)};transform:translate(-50%,-50%) scale(${round(scale)})"></span>` })() : ''
   const [tagOpacity, tagShift] = animate && dying ? wwTagIn(t) : [1, 0]
   const out = !alive ? `<span class="ww-out" style="opacity:${round(tagOpacity)};transform:translateX(-50%) translateY(${round(tagShift)}px)">出局</span>` : ''
@@ -314,27 +357,50 @@ function werewolfStageHtml(data, index, options = {}) {
   const { layout = 'landscape', t = 0, animate = true } = options
   const frame = werewolfFrame(data, index)
   const M = data.moves.length
-  const seats = data.werewolf?.seats || []
+  const wolf = data.werewolf || {}
+  const seats = wolf.seats || []
+  const columns = wolf.columns || {}
+  const cols = (layout === 'portrait' ? columns.portrait : columns.landscape) || werewolfCastColumns(seats.length || 6, layout)
   const order = index > 1 ? -1 : 0
   const sceneFade = animate ? wwSceneFade(t) : 1
   const [headOpacity, headShift] = animate ? wwHeadIn(t) : [1, 0]
   const [winOpacity, winScale] = animate ? wwVictory(t) : [1, 1]
-  const [speechOpacity, speechShift] = fadeUp(t, .2)
+  const [speechOpacity, speechShift] = after(SPEECH_DELAY, v => fadeUp(v, .2))(t)
   const [finaleOpacity, finaleShift] = fadeUp(t, .28)
   const body = frame.last ? frame.last.s : (index === 0 ? '天黑请闭眼。' : '')
-  const narrator = frame.last
-    ? `<img class="logo" src="${seats[frame.last.p]?.logo || ''}" alt="">${esc(data.players[frame.last.p]?.name || '')} · 本手发言`
-    : '开局'
+  const actor = frame.last ? (data.players[frame.last.p] || null) : null
+  const narrator = actor
+    ? `<img class="logo" src="${seats[frame.last.p]?.logo || ''}" alt=""><b class="sn">${esc(actor.name || '')}</b><em class="stag">本手发言</em>`
+    : '<b class="sn">开局</b>'
   const coord = frame.last ? esc(actionLabel(frame.last.a, data.game)) : ''
-  /* 侧栏比棋类窄，且身份榜占掉六行：回合记录收到最近 3 手，不跟本手发言抢高度。 */
+  /* 执行者卡：狼人杀没有棋盘，「谁在执行」由它承担。
+     席位舞台上的金框已经只表示胜方，蓝色环才是本手执行。 */
+  const turn = frame.isFinale
+    ? turnHtml({
+        kicker: '终局', name: frame.winnerSide ? werewolfSideName(frame.winnerSide) : '比赛结束',
+        meta: `共 <b>${M}</b> 步`, tag: werewolfPill(data, index, frame), phase: 'finale', t, animate,
+      })
+    : actor
+      ? turnHtml({
+          player: actor, kicker: '本手执行', name: actor.name || '',
+          meta: `<b>${index}</b> / ${M} 步`, tag: werewolfPill(data, index, frame), t, animate,
+        })
+      : turnHtml({ kicker: '开局', name: '天黑请闭眼', meta: `<b>0</b> / ${M} 步`, t, animate })
+  /* 侧栏比棋类窄，且身份榜占掉 N 行：回合记录收到最近 3 手，不跟本手发言抢高度。 */
   const entries = data.moves.slice(0, index).slice(-4, -1).reverse()
   const cast = seats.map((seat, i) => werewolfSeatHtml(seat, i, frame, { t, animate }, order >= 0 ? i : -1)).join('')
   const backgrounds = ['night', 'day'].map(scene => {
     const on = scene === frame.scene
     return `<img class="ww-bg" data-scene="${scene}" src="${WEREWOLF_ART.scenes[scene] || ''}" alt="" style="opacity:${on ? round(sceneFade) : 0}">`
   }).join('')
-  const deathTag = frame.deaths.length
-    ? (() => { const [opacity, shift] = animate ? wwTagIn(t) : [1, 0]; return `<p class="ww-deaths" style="opacity:${round(opacity)};transform:translateX(-50%) translateY(${round(shift)}px)">${frame.deaths.map(s => `${s} 号出局`).join('、')}</p>` })()
+  /* 主持人播报：终局用裁决文案，其余用规则层这一手的播报（开局用开局播报）。
+     出局不再单独挂一条横幅——台词里已经说了谁出局，画面只保留席卡上的红叉与出局标记。 */
+  const hostLine = frame.isFinale
+    ? (wolf.finale || '')
+    : (frame.step?.host || (index === 0 ? wolf.host || '' : ''))
+  const [hostOpacity, hostShift] = animate ? fadeUp(t, .3) : [1, 0]
+  const hostTag = hostLine
+    ? `<div class="ww-host" style="opacity:${round(hostOpacity)};transform:translateY(${round(hostShift)}px)"><em>主持人</em><p>${esc(hostLine)}</p></div>`
     : ''
   const narrative = frame.isFinale
     ? `<div class="finale" data-kind="${frame.winnerSide ? 'win' : 'draw'}" style="opacity:${round(finaleOpacity)};transform:translateY(${round(finaleShift)}px)">` +
@@ -347,13 +413,13 @@ function werewolfStageHtml(data, index, options = {}) {
     entries.map(m => `<div class="rentry"><b>${m.n} · ${esc(data.players[m.p]?.name || '')}</b><span>${esc(m.s)}</span></div>`).join('') +
     `</div></div>`
 
-  return `<div class="stage ww" data-layout="${layout}" data-phase="${frame.isFinale ? 'finale' : 'move'}" data-game="werewolf" data-scene="${frame.scene}" data-act="${frame.isFinale ? 'finale' : (frame.deaths.length ? 'death' : 'move')}">` +
+  return `<div class="stage ww" data-layout="${layout}" data-phase="${frame.isFinale ? 'finale' : 'move'}" data-game="werewolf" data-scene="${frame.scene}" data-act="${frame.isFinale ? 'finale' : (frame.deaths.length ? 'death' : 'move')}" data-seats="${seats.length}" style="--ww-cols:${cols};--ww-cols-portrait:${cols}">` +
     `<section class="board-card" style="transform:scale(${round(frame.isFinale ? finaleScale(t) : 1)})">` +
     `<div class="ww-scene">${backgrounds}<div class="ww-mask"></div>` +
     `<header class="ww-head" style="opacity:${round(headOpacity)};transform:translateY(${round(headShift)}px)">` +
     `<span class="ww-day">第 ${frame.day} 天 · ${frame.scene === 'day' ? '白天' : '夜间'}</span>` +
     `<b class="ww-phase">${esc(frame.label)}</b></header>` +
-    deathTag +
+    hostTag +
     `<div class="ww-cast">${cast}</div>` +
     (frame.isFinale ? `<div class="ww-win" data-side="${frame.winnerSide || 'draw'}" style="opacity:${round(winOpacity)};transform:translate(-50%,-50%) scale(${round(winScale)})">` +
       `<b>${frame.winnerSide === 'wolf' ? '狼人获胜' : frame.winnerSide ? '好人获胜' : '比赛结束'}</b>` +
@@ -361,9 +427,7 @@ function werewolfStageHtml(data, index, options = {}) {
     `</div></section>` +
     `<aside class="side">` +
     `<header class="top"><div class="brand"><b>AI竞技台</b><span class="game">${esc(data.game.name)} · 规则 ${esc(data.game.version)}</span></div></header>` +
-    `<div class="hero"><em class="hlbl">${frame.isFinale ? '终局' : `第 ${frame.day} 天`}</em>` +
-    `<b class="n">${esc(frame.label)}</b><span class="t">${frame.isFinale ? `共 ${M} 手` : `${index} / ${M} 手`}</span>` +
-    `<div class="heroTag">${werewolfPill(data, index, frame)}</div></div>` +
+    turn +
     `<div class="score">${werewolfScoreHtml(data, frame)}</div>` +
     `<div class="narrative">${narrative}${recent}</div>` +
     `<footer class="progress">${progressHtml(data, index, options.keyMode || 'major', '出局 / 终局')}</footer>` +
@@ -396,22 +460,25 @@ export function stageHtml(data, index, options = {}) {
 
   const cardScale = isFinale ? finaleScale(t) : (pushOn ? pushScale(t) : 1)
   const boardStyle = fxOn && key.kind === 'capture' ? `transform:translate(0,${round(shake(t))}px)` : ''
-  const [speechOpacity, speechShift] = fadeUp(t, .2)
+  const [speechOpacity, speechShift] = after(SPEECH_DELAY, v => fadeUp(v, .2))(t)
   const [finaleOpacity, finaleShift] = fadeUp(t, .28)
+  const turn = chessTurn(data, { index, isFinale, isDraw, winner, active, t, animate })
 
   const narrative = isFinale
     ? `<div class="finale" data-kind="${isDraw ? 'draw' : 'win'}" style="opacity:${round(finaleOpacity)};transform:translateY(${round(finaleShift)}px)">` +
       `<small>终局</small><p>${esc(data.result?.message || '比赛已结束。')}</p></div>`
     : (() => {
-        const entries = data.moves.slice(0, index).slice(-6, -1).reverse()
+        /* 侧栏高度被执行者卡让位，回合记录收到最近 4 手（超出由 rlist 的 overflow 裁），
+           本手发言永远优先保留完整高度。 */
+        const entries = data.moves.slice(0, index).slice(-5, -1).reverse()
         const recent = entries.length
           ? `<div class="recent"><div class="rtitle">回合记录</div><div class="rlist">` +
             entries.map(m => `<div class="rentry"><b>${m.n} · ${esc(data.players[m.p].name)}</b><span>${esc(m.s)}</span></div>`).join('') +
             `</div></div>`
           : ''
         const who = last
-          ? `<img class="logo" src="${data.players[last.p].logo || ''}" alt="">${esc(data.players[last.p].name)} · 本手发言`
-          : '开局'
+          ? `<img class="logo" src="${data.players[last.p].logo || ''}" alt=""><b class="sn">${esc(data.players[last.p].name)}</b><em class="stag">本手发言</em>`
+          : '<b class="sn">开局</b>'
         const coord = last ? `<em class="coord">${esc(actionLabel(last.a, data.game))}</em>` : ''
         const body = last ? last.s : '比赛开始'
         return `<div class="speech" style="opacity:${round(speechOpacity)};transform:translateY(${round(speechShift)}px)">` +
@@ -424,6 +491,7 @@ export function stageHtml(data, index, options = {}) {
     `<div class="board"${boardStyle ? ` style="${boardStyle}"` : ''}>${boardMarkup(data, index, { key: fxOn ? key : null, t })}</div></section>` +
     `<aside class="side">` +
     `<header class="top"><div class="brand"><b>AI竞技台</b><span class="game">${esc(data.game.name)} · 规则 ${esc(data.game.version)}</span></div></header>` +
+    turn +
     `<div class="hero"><em class="hlbl">${isFinale ? '终局' : '当前手数'}</em>` +
     `<b class="n">${isFinale ? M : index}</b><span class="t">/ ${M} 手</span>` +
     `<div class="heroTag">${pillHtml(key, isFinale, isDraw)}</div></div>` +
