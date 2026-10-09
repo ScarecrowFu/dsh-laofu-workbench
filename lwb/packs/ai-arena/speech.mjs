@@ -6,7 +6,7 @@
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { movesOf } from './presentation.mjs'
@@ -15,11 +15,15 @@ import { hostNarrationLines } from './replay/data.mjs'
 
 const exec = promisify(execFile)
 const ASSET_ID = /^[A-Za-z0-9_-]{1,128}$/u
-/** 成片与参考音色共用的响度。改目标就要改缓存名，否则旧文件会被当成已拉齐。 */
+/** 成片与参考音色共用的响度。改对齐链路（目标、限幅、滤镜）就要同步改 `LOUDNESS_VERSION`，
+    否则旧口径的片段会被当成已对齐、旧成片也会被复用。 */
 const LOUDNESS_TARGET = -16
 const TRUE_PEAK = -1.5
+/** 限幅天花板比真峰值上限再低 1 dB：MP3 编码会把真峰值抬高（实测最多 0.6 dB），
+    留出余量后成片实测才真的不超过 -1.5 dBTP。 */
+const LIMITER_CEILING = TRUE_PEAK - 1
 /** 配音缓存名与成片复用键都带它：响度口径变了，旧 mp3 和旧成片一起失效。 */
-export const LOUDNESS_VERSION = 'v1'
+export const LOUDNESS_VERSION = 'v2'
 
 /** 选手发言：一手一句，用该座位的音色。 */
 function speechLines(match) {
@@ -55,38 +59,107 @@ function speechQueue(match) {
   return [...speechLines(match), ...hostLines(match)]
 }
 
+function clipDigest(voice, text) {
+  return createHash('sha256').update(`${voice}\u0000${text}`).digest('hex').slice(0, 24)
+}
+
 function clipName(voice, text) {
-  return `${LOUDNESS_VERSION}-${createHash('sha256').update(`${voice}\u0000${text}`).digest('hex').slice(0, 24)}.mp3`
+  return `${LOUDNESS_VERSION}-${clipDigest(voice, text)}.mp3`
 }
 
-async function integratedLoudness(path, signal) {
-  const { stderr = '' } = await exec('ffmpeg', ['-hide_banner', '-i', path, '-af', 'ebur128', '-f', 'null', '-'], { signal }).catch(error => error)
-  const matched = String(stderr).match(/Integrated loudness:\s*\n\s*I:\s*(-?\d+(?:\.\d+)?)/u)
-  const value = matched ? Number(matched[1]) : NaN
-  return Number.isFinite(value) && value > -70 ? value : null
+/**
+ * 扫一遍配音目录，按「音色 + 文本」摘要索引旧口径的片段：`v1-<摘要>.mp3`，更早的一版没有前缀。
+ * 响度口径升级后重导时先拿这些旧片段重新对齐 —— 既不重复调用 TTS 计费，
+ * 也顺带把旧口径留下的偏小片段修好。带当前版本号的片段不算旧片段。
+ * 只扫一次目录：逐句 readdir 会把这个循环拖成「句数 × 目录项数」。
+ */
+async function legacyClips(directory) {
+  const index = new Map()
+  for (const name of await readdir(directory).catch(() => [])) {
+    const digest = /^(?:v\d+-)?([0-9a-f]{24})\.mp3$/u.exec(name)?.[1]
+    if (digest && !name.startsWith(`${LOUDNESS_VERSION}-`)) index.set(digest, name)
+  }
+  return index
 }
 
-/** 尽量拉到同一综合响度。对不齐时返回已有音频，不中断导出。 */
+/** 旧口径的同一句。找不到返回 null；大小按同一口径复核，免得把半截文件当成片段。 */
+async function legacyClip(directory, index, voice, text) {
+  const name = index.get(clipDigest(voice, text))
+  if (!name) return null
+  const bytes = await readFile(join(directory, name)).catch(() => null)
+  return bytes?.length && bytes.length <= 8 * 1024 * 1024 ? bytes : null
+}
+
+/**
+ * 量一段音频的综合响度与真峰值。用 loudnorm 自己的统计，而不是单独的 ebur128 / volumedetect：
+ * 一次调用拿齐口径，结果是 JSON（不必猜 ffmpeg 日志的排版），而且这些值正是 loudnorm
+ * 两遍模式要喂回去的输入。量不出来（近乎静音、构建缺滤镜、文件损坏）时返回 null。
+ */
+async function measureLoudness(path, signal) {
+  let stderr = ''
+  try {
+    ({ stderr = '' } = await exec('ffmpeg', ['-hide_banner', '-i', path, '-af', `loudnorm=I=${LOUDNESS_TARGET}:TP=${TRUE_PEAK}:LRA=11:print_format=json`, '-f', 'null', '-'], { signal }))
+  } catch (error) {
+    /* 取消要往外传：静默吞掉会让导出在半途继续跑下去。 */
+    if (signal?.aborted) throw error
+    stderr = error?.stderr || ''
+  }
+  const matched = String(stderr).match(/\{[\s\S]*\}/u)
+  if (!matched) return null
+  let report
+  try { report = JSON.parse(matched[0]) } catch { return null }
+  const numeric = value => (Number.isFinite(Number(value)) ? Number(value) : null)
+  const integrated = numeric(report.input_i), peak = numeric(report.input_tp)
+  if (integrated === null || integrated <= -70 || peak === null) return null
+  return {
+    integrated, peak,
+    lra: numeric(report.input_lra) ?? 0,
+    threshold: numeric(report.input_thresh) ?? integrated - 10,
+    offset: numeric(report.target_offset) ?? 0,
+  }
+}
+
+/** 跑一遍滤镜写文件。产不出文件就返回 null，好让调用方换一条路，而不是把脏数据当成结果。 */
+async function renderAudio(input, output, filter, signal) {
+  try {
+    await exec('ffmpeg', ['-y', '-i', input, '-af', filter, '-ar', '44100', '-q:a', '4', output], { signal })
+  } catch (error) { if (signal?.aborted) throw error }
+  const bytes = await readFile(output).catch(() => null)
+  return bytes?.length ? bytes : null
+}
+
+/**
+ * 增益 + 前瞻限幅。语音的波峰因数常在 15 dB 上下：-16 LUFS 配 -1.5 dBTP 本来就装不下，
+ * 必须把越过天花板的峰压住，而不是把增益砍回去 —— 砍增益正是旧实现让句子小声 13 dB 的原因。
+ */
+function levelWithLimiter(input, output, gain, signal) {
+  const filter = `volume=${gain.toFixed(2)}dB,alimiter=limit=${LIMITER_CEILING}dB:attack=5:release=50:level=disabled`
+  return renderAudio(input, output, filter, signal)
+}
+
+/** 少数 FFmpeg 构建裁掉了 alimiter：退回两遍 loudnorm。它只会贴到真峰值上限为止
+    （波峰因数高的句子因此低 2–3 LU），但方向永远正确，而且只用得到 loudnorm。 */
+function levelWithLoudnorm(input, output, measured, signal) {
+  const filter = [
+    `loudnorm=I=${LOUDNESS_TARGET}:TP=${TRUE_PEAK}:LRA=11`,
+    `measured_I=${measured.integrated.toFixed(2)}`, `measured_TP=${measured.peak.toFixed(2)}`,
+    `measured_LRA=${measured.lra.toFixed(2)}`, `measured_thresh=${measured.threshold.toFixed(2)}`,
+    `offset=${measured.offset.toFixed(2)}`, 'linear=true',
+  ].join(':')
+  return renderAudio(input, output, filter, signal)
+}
+
+/** 尽量拉到同一综合响度。量不出来或两条路都产不出文件时返回已有音频，不中断导出。 */
 export async function normalizeLoudness(bytes, { signal } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'arena-loud-'))
-  const input = join(dir, 'in'), output = join(dir, 'out.mp3')
-  const readOutput = async () => readFile(output).catch(() => null)
+  const input = join(dir, 'in'), output = join(dir, 'out.mp3'), fallback = join(dir, 'fallback.mp3')
   try {
     await writeFile(input, bytes)
     signal?.throwIfAborted()
-    await exec('ffmpeg', ['-y', '-i', input, '-af', `loudnorm=I=${LOUDNESS_TARGET}:TP=${TRUE_PEAK}:LRA=11`, '-ar', '44100', '-q:a', '4', output], { signal }).catch(() => {})
-    const leveled = await readOutput()
-    const loudness = leveled?.length ? await integratedLoudness(output, signal).catch(() => null) : null
-    if (leveled?.length && loudness !== null && Math.abs(loudness - LOUDNESS_TARGET) <= 2) return leveled
-    const { stderr = '' } = await exec('ffmpeg', ['-hide_banner', '-i', input, '-af', 'volumedetect', '-f', 'null', '-'], { signal }).catch(error => ({ stderr: error.stderr || '' }))
-    const peak = Number(String(stderr).match(/max_volume:\s*(-?\d+(?:\.\d+)?)/u)?.[1])
-    if (Number.isFinite(peak)) {
-      const gain = Math.min(LOUDNESS_TARGET - (peak - 3), TRUE_PEAK - peak)
-      await exec('ffmpeg', ['-y', '-i', input, '-af', `volume=${gain.toFixed(2)}dB`, '-ar', '44100', '-q:a', '4', output], { signal }).catch(() => {})
-      const peaked = await readOutput()
-      if (peaked?.length) return peaked
-    }
-    return leveled?.length ? leveled : bytes
+    const measured = await measureLoudness(input, signal)
+    if (!measured) return bytes
+    const leveled = await levelWithLimiter(input, output, LOUDNESS_TARGET - measured.integrated, signal)
+    return leveled || await levelWithLoudnorm(input, fallback, measured, signal) || bytes
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -157,6 +230,16 @@ async function synthesize(request, assetId, text, signal) {
   throw new Error('配音任务超时。')
 }
 
+/** 向 LWB TTS 要一句并下载。大小按同一口径复核，不把半截响应写进缓存。 */
+async function downloadClip(service, fetch, assets, line, signal) {
+  const url = await synthesize(service.request, assets.get(line.voice), line.text, signal)
+  const response = await fetch(url, { signal, redirect: 'error' })
+  if (!response.ok) throw new Error('配音下载失败。')
+  const bytes = Buffer.from(await response.arrayBuffer())
+  if (!bytes.length || bytes.length > 8 * 1024 * 1024) throw new Error('配音文件无效。')
+  return bytes
+}
+
 /**
  * @returns {Promise<Map<number, { host?: { seconds: number, file: string }, speech?: { seconds: number, file: string } }>>}
  *   手数 → 该手的配音分段（主持人先说，选手后说）。
@@ -177,6 +260,7 @@ export async function synthesizeSpeech(match, directory, { scope, fetch = global
   for (const key of new Set(lines.map(line => line.voice))) assets.set(key, await uploadVoice(service.request, voiceFile(key), settings))
   const audioDir = join(directory, 'audio')
   await mkdir(audioDir, { recursive: true, mode: 0o700 })
+  const legacyIndex = await legacyClips(audioDir)
   const clips = new Map()
   let done = 0
   const queue = [...lines]
@@ -191,14 +275,15 @@ export async function synthesizeSpeech(match, directory, { scope, fetch = global
       try { await probeSeconds(file, signal) } catch { exists = false }
     }
     if (!exists) {
-      const url = await synthesize(service.request, assets.get(line.voice), line.text, signal)
-      const response = await fetch(url, { signal, redirect: 'error' })
-      if (!response.ok) throw new Error('配音下载失败。')
-      const bytes = Buffer.from(await response.arrayBuffer())
-      if (!bytes.length || bytes.length > 8 * 1024 * 1024) throw new Error('配音文件无效。')
       const label = line.kind === 'host' ? `第 ${line.n} 手主持人播报` : `第 ${line.n} 手配音`
-      const leveled = await normalizeLoudness(bytes, { signal, label })
-      await writeFile(file, leveled, { mode: 0o600 })
+      const carry = async source => {
+        await writeFile(file, await normalizeLoudness(source, { signal, label }), { mode: 0o600 })
+        return probeSeconds(file, signal).catch(() => null)
+      }
+      /* 旧口径的同一句先拿来重新对齐：省一次 TTS，也顺带修好旧口径留下的偏小片段。
+         旧片段自己可能是坏的（上次写到一半），量不出时长就照旧向 TTS 要一句。 */
+      const previous = await legacyClip(audioDir, legacyIndex, line.voice, line.text)
+      if (!previous || await carry(previous) === null) await carry(await downloadClip(service, fetch, assets, line, signal))
     }
     const clip = { seconds: await probeSeconds(file, signal), file }
     clips.set(line.n, { ...(clips.get(line.n) || {}), [line.kind]: clip })

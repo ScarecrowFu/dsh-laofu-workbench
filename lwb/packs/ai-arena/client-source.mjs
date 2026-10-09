@@ -1,8 +1,10 @@
 import React from 'react'
 import { Trophy, Settings2, Play, Pause, Square, SkipBack, ChevronDown, ChevronLeft, ChevronRight, ArrowLeft, Download, FileText, Film, RefreshCw, MessageCircle, Radio, Eye, Minus, Info } from 'lucide-react'
-import { boardSvg, frameAt, movesOf, gameName, matchTitle, matchOutcome, playerSide, actionLabel, werewolfStage, winningRun, finaleInfo, forfeitDetail, seatBadge, gameCard, gameCoverSvg, werewolfCoverSeats } from './presentation.mjs'
+import { boardSvg, frameAt, movesOf, gameName, matchTitle, matchOutcome, playerSide, actionLabel, werewolfStage, winningRun, finaleInfo, forfeitDetail, seatBadge, seatIdentity, gameCard, gameCoverSvg, werewolfCoverSeats, assignPortraits } from './presentation.mjs'
 import { werewolfTimeline, werewolfStageState } from './werewolf-projection.mjs'
 import { WEREWOLF_ART } from './werewolf-art.mjs'
+import { MODEL_ART } from './model-art.mjs'
+import { logoKey } from './models.mjs'
 import { CSS } from './styles.mjs'
 import { activeMatchCount, useConfirmation } from './confirmation.mjs'
 import { turnRecords, turnUsage } from './turn-records.mjs'
@@ -27,6 +29,17 @@ const api = async (method, request) => {
 function IconButton({ icon, title, onClick, disabled, ...rest }) { return h('button', { type: 'button', className: 'ar-icon', title, 'aria-label': title, onClick, disabled, ...rest }, h(icon)) }
 function Button({ icon, children, primary, className, ...rest }) { return h('button', { type: 'button', className: ['ar-button', primary && 'ar-primary', className].filter(Boolean).join(' '), ...rest }, icon && h(icon), children) }
 function Status({ status }) { return h('span', { className: 'ar-tag', 'data-status': status }, h('i'), statusLabel[status] || status) }
+/* 狼人杀的席位与身份：观众侧取落盘那一份牌（seatIdentity），与舞台席卡同源。
+   棋类没有身份，两个元素都渲染成 null，署名与回合记录与从前一字不差。
+   「几号 + 徽记 + 中文名」缺一不可：同名模型靠席号区分，不熟悉图例的观众靠中文名。 */
+function SeatNo({ match, index }) {
+  const identity = seatIdentity(match, index)
+  return identity ? h('span', { className: 'ar-seat' }, `${identity.seat} 号`) : null
+}
+function RoleTag({ match, index }) {
+  const identity = seatIdentity(match, index)
+  return identity?.mark ? h('em', { className: 'ar-role', 'data-role': identity.role, title: identity.roleName }, h('i', null, identity.mark), identity.roleName) : null
+}
 function Frame({ tone, kicker, title, subtitle, actions, children }) {
   return h('main', { className: 'ar-page', 'data-tone': tone },
     h('header', { className: 'ar-top' }, h('div', { className: 'ar-top-copy' }, h('p', { className: 'ar-kicker' }, h('i'), kicker), h('h1', null, title), subtitle && h('p', null, subtitle)), actions && h('div', { className: 'ar-top-actions' }, actions)), children)
@@ -216,7 +229,16 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
   const seek = value => { setPlaying(false); setStep(value) }
   if (!match) return h('div', { className: 'ar-empty' }, data.error || '正在读取比赛…')
   const live = step === null && ['running', 'pausing'].includes(match.status), thinking = live && match.activeTurn?.turnId
-  const currentPlayer = thinking ? match.activeTurn.player : frame.current?.player ?? 0
+  /* 没有行动者时不要退回 0 号：开局那一刻 activeTurn 还没落上，退回 0 会把署名写成 1 号选手
+     （首手常常不是他），补上身份之后还会连带显示错的身份。 */
+  const currentPlayer = thinking ? match.activeTurn.player : frame.current?.player ?? null
+  const actor = Number.isInteger(currentPlayer) ? match.players[currentPlayer] : null
+  /* 整局形象分配只算一次：侧栏的形象与舞台席卡必须同一张（与 replay/data.mjs 同一口径）。 */
+  const portraits = React.useMemo(() => assignPortraits(match.players || []), [match.players])
+  const actorPortrait = Number.isInteger(currentPlayer) ? portraits[currentPlayer] : null
+  /* 逐手条件：本手有发言才画人。思考中还没有发言，因此这时只显示 logo。 */
+  const actorSpeaks = !thinking && Boolean(String(frame.current?.speech || '').trim())
+  const idleHint = match.game?.id === 'werewolf' ? '等待第一步行动' : '等待第一步落子'
   const elapsedSeconds = thinking ? Math.max(0, (clock - Date.parse(match.activeTurn.startedAt)) / 1000) : 0
   const phaseLabel = { waiting: '等待模型响应', reasoning: '思考中', answering: '正在生成落子与发言' }[match.activeTurn?.phase] || '等待模型响应'
   /* 会说话的句数：选手发言按手数，主持人按规则播报条数（一手至多一段，同一句不重复）。 */
@@ -267,8 +289,14 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
           h(IconButton, { icon: Radio, title: '跟随最新回合', onClick: () => { setPlaying(false); setStep(null) }, className: `ar-icon${step === null ? ' ar-live' : ''}` })),
       ),
       h('aside', { className: 'ar-commentary' },
-        h('div', { className: 'ar-commentary-head' }, h('h2', { className: 'ar-section-title' }, '选手发言'), h('span', { className: 'ar-chip' }, thinking ? '决策中' : `第 ${currentStep} 手`), finale?.label ? h('span', { className: 'ar-pill', 'data-tone': finale.tone }, finale.label) : null),
-        h('div', { className: 'ar-speaking', 'data-thinking': !!thinking }, h('div', { className: 'ar-speaking-name' }, h(MessageCircle), match.players[currentPlayer].name), h('p', { role: thinking ? 'status' : undefined }, thinking ? phaseLabel : frame.current?.speech || '等待第一步走子'), thinking ? h('div', { className: 'ar-generation' }, h('div', null, h('small', null, match.players[currentPlayer].reasoningEffort ? `推理强度：${match.players[currentPlayer].reasoningEffort}` : '模型默认推理'), h('small', null, `已用 ${elapsedSeconds.toFixed(1)} 秒`))) : frame.current && h('small', null, `${actionLabel(frame.current.action, match.game)} · ${(frame.current.elapsedMs / 1000).toFixed(1)} 秒`)),
+        h('div', { className: 'ar-commentary-head' }, h('h2', { className: 'ar-section-title' }, '选手发言'), h('span', { className: 'ar-chip' }, thinking ? '决策中' : `第 ${currentStep} ${stepWord}`), finale?.label ? h('span', { className: 'ar-pill', 'data-tone': finale.tone }, finale.label) : null),
+        /* 署名回答「谁在说、是什么身份」：席号 + 模型名 + 徽记与身份名，与舞台席卡同一个口径。 */
+        h('div', { className: 'ar-speaking', 'data-thinking': !!thinking },
+          h(SpeakingFigure, { player: actor, portrait: actorPortrait, speaks: actorSpeaks }),
+          h('div', { className: 'ar-speaking-body' },
+            h('div', { className: 'ar-speaking-name' }, h(MessageCircle), actor ? h(React.Fragment, null, h(SeatNo, { match, index: currentPlayer }), actor.name, h(RoleTag, { match, index: currentPlayer })) : '等待选手行动'),
+            h('p', { role: thinking ? 'status' : undefined }, thinking ? phaseLabel : frame.current?.speech || idleHint),
+            thinking ? h('div', { className: 'ar-generation' }, h('div', null, h('small', null, actor?.reasoningEffort ? `推理强度：${actor.reasoningEffort}` : '模型默认推理'), h('small', null, `已用 ${elapsedSeconds.toFixed(1)} 秒`))) : frame.current && h('small', null, `${actionLabel(frame.current.action, match.game)} · ${(frame.current.elapsedMs / 1000).toFixed(1)} 秒`))),
         frame.result && h('div', { className: 'ar-result', 'data-tone': finale?.tone || 'win' }, h(finale?.tone === 'win' ? Trophy : finale?.tone === 'draw' ? Minus : Info), frame.result.message),
         /* 判罚明细：把「第几手、连续几次、每次为什么、盘面停在哪」说全。原始回复折进 details，
            首屏只留结论，谁要追证再展开——与 DSH 官方对话里的「实际请求参数与原始结果」同规矩。 */
@@ -285,9 +313,10 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
         /* 被判负的那一手没有落子，但必须在记录里占一行：否则观众只看到「记到第 18 手」然后判负。
            这一行不是可点的发言（那句话从未生效），所以用 div + data-invalid，样式与发言区分开。 */
         h('div', { className: 'ar-transcript' }, frame.speech.length || forfeit ? [
-          ...frame.speech.map(event => h('button', { key: event.turnId, className: 'ar-speech', onClick: () => seek(event.moveNumber), 'aria-label': `查看第 ${event.moveNumber} 手` }, h('div', { className: 'ar-speech-head' }, h('span', { className: 'ar-speech-num' }, event.moveNumber), h('strong', null, match.players[event.player].name), h('small', null, actionLabel(event.action, match.game))), h('p', null, event.speech))),
+          /* 每一行同样带席号与身份：夜刀、查验、投票这些动作由谁说出来的，看行内就知道。 */
+          ...frame.speech.map(event => h('button', { key: event.turnId, className: 'ar-speech', onClick: () => seek(event.moveNumber), 'aria-label': `查看第 ${event.moveNumber} ${stepWord}` }, h('div', { className: 'ar-speech-head' }, h('span', { className: 'ar-speech-num' }, event.moveNumber), h(SeatNo, { match, index: event.player }), h('strong', null, match.players[event.player].name), h(RoleTag, { match, index: event.player }), h('small', null, actionLabel(event.action, match.game))), h('p', null, event.speech))),
           forfeit && h('div', { key: 'forfeit', className: 'ar-speech', 'data-invalid': 'true' },
-            h('div', { className: 'ar-speech-head' }, h('span', { className: 'ar-speech-num' }, forfeit.moveNumber ?? moves.length + 1), h('strong', null, forfeit.name), h('small', null, actionWord)),
+            h('div', { className: 'ar-speech-head' }, h('span', { className: 'ar-speech-num' }, forfeit.moveNumber ?? moves.length + 1), h(SeatNo, { match, index: forfeit.seat }), h('strong', null, forfeit.name), h(RoleTag, { match, index: forfeit.seat }), h('small', null, actionWord)),
             h('p', null, `连续 ${forfeit.attempts.length} 次回复未被接受：${forfeit.reasons.join('；')}`)),
         ] : h('div', { className: 'ar-empty' }, '暂无回合记录')),
       ),
@@ -307,34 +336,66 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
     match.export?.status === 'failed' && h('p', { className: 'ar-error' }, match.export.error), notice && h('p', { className: 'ar-notice', role: 'status' }, notice), videoUrl && h('video', { className: 'ar-video', src: videoUrl, controls: true }),
     h(Conversation, { match, turnId: step === null ? match.events.findLast(event => event.type === 'request')?.turnId : frame.current?.turnId, renderConversation, focusSession }), confirmation)
 }
+/* 席位舞台：从上到下依次是抬头、主持人播报（终局换成胜负卡）、场景留白、本手台词、
+   席位条带。全都参与布局流，没有只对 6 人局成立的绝对定位数值：席位条带高度由行数
+   （--ar-cast-band）决定，席卡高度由行高决定、立绘按原比例居中，所以 8 / 9 人是
+   「卡片变小一档」，而不是「把 8 张卡撑出画幅、裁掉第一排的头」。 */
 function WerewolfStage({ players, state, active, speech }) {
   const stage = werewolfStage({ players, state, active, speech })
   const act = stage.winnerSide ? 'finale' : stage.deaths.length ? 'death' : 'move'
-  return h('div', { className: 'ar-stage', 'data-scene': stage.scene, 'data-act': act, 'data-seats': stage.seatCount, 'data-ar-stage': 'werewolf' },
+  return h('div', {
+    className: 'ar-stage', 'data-scene': stage.scene, 'data-act': act, 'data-seats': stage.seatCount,
+    'data-rows': stage.rows, 'data-ar-stage': 'werewolf',
+    /* 列数 / 行数写进自定义属性：条带的行模板与高度都从这两个量推，CSS 不再写死 6 列。 */
+    style: { '--ar-cast-cols': String(stage.columns), '--ar-cast-rows': String(stage.rows) },
+  },
     h('img', { className: 'ar-stage-scene', alt: '', src: WEREWOLF_ART.scenes[stage.scene] }),
     h('div', { className: 'ar-stage-mask', 'aria-hidden': true }),
     h('header', { className: 'ar-stage-head' },
       h('span', { className: 'ar-stage-day' }, `第 ${stage.day} 天 · ${stage.slot}`),
       h('b', { className: 'ar-stage-phase' }, stage.phaseLabel)),
-    /* 主持人播报：出局与阶段由它一起说出，不再单独挂一条出局横幅。 */
-    stage.host ? h('div', { className: 'ar-stage-host' }, h('em', { className: 'ar-host-badge' }, '主持人'), h('p', null, stage.host)) : null,
-    h('div', { className: 'ar-stage-cast', style: { gridTemplateColumns: `repeat(${stage.columns},minmax(0,1fr))` } }, stage.seats.map(seat => h('figure', {
+    /* 终局卡占据主持人那一格：最后一条结算播报就是它的正文，不再飘在画面中间压住席卡。
+       正文取 `stage.host`（werewolfHostLine 的 finale 口径＝结算播报 + 裁决），与离线回放 /
+       视频的胜负卡、以及终局那一格的配音读同一条；`stage.result` 只是裁决那一句，排在后面兜底。
+       其余时候是主持人播报——出局与阶段由它一起说出，画面上最多两行（样式用 line-clamp
+       兜住），整句留在 title 里。 */
+    stage.winnerSide ? h('div', { className: 'ar-stage-win', 'data-side': stage.winnerSide },
+      h('b', null, stage.winnerSide === 'wolf' ? '狼人获胜' : '好人获胜'),
+      (stage.host || stage.result) ? h('span', null, stage.host || stage.result) : null)
+      : stage.host ? h('div', { className: 'ar-stage-host' }, h('em', { className: 'ar-host-badge' }, '主持人'), h('p', { title: stage.host }, stage.host)) : null,
+    /* 场景留白：唯一可伸缩的一段。抬头、台词与席位条带都是 flex:none，任何人数都不会
+       把它们挤出画幅；终局卡占了台词位，所以也不会盖在席卡上。 */
+    h('div', { className: 'ar-stage-center', 'aria-hidden': true }),
+    speech && !stage.winnerSide ? h('p', { className: 'ar-stage-line' }, speech) : null,
+    h('div', { className: 'ar-stage-cast' }, stage.seats.map(seat => h('figure', {
       key: seat.seat, className: 'ar-cast', 'data-alive': seat.alive ? 'true' : 'false',
       'data-active': seat.active ? 'true' : 'false', 'data-role': seat.role,
       'data-win': seat.winning ? 'true' : undefined,
     },
       h('span', { className: 'ar-cast-no' }, seat.seat),
       h('span', { className: 'ar-cast-face' },
-        h('img', { alt: seat.name, src: WEREWOLF_ART.portraits[`${seat.portrait}${seat.alive ? '' : '-dead'}`] || WEREWOLF_ART.portraits.generic }),
+        h('img', { alt: seat.name, src: MODEL_ART.full[`${seat.portrait}${seat.alive ? '' : '-dead'}`] || MODEL_ART.full.generic }),
         h('i', { className: 'ar-cast-veil' }),
         seat.alive ? null : h('span', { className: 'ar-cast-out' }, '出局')),
       h('figcaption', null, h('b', null, seat.name), h('em', { className: 'ar-role-mark', 'data-role': seat.role }, seat.mark), seat.badge ? h('em', { className: 'ar-cast-badge', 'data-badge': seat.badge }, seat.badge) : null))),
-    ),
-    speech ? h('p', { className: 'ar-stage-line' }, speech) : null,
-    stage.winnerSide ? h('div', { className: 'ar-stage-win', 'data-side': stage.winnerSide },
-      h('b', null, stage.winnerSide === 'wolf' ? '狼人获胜' : '好人获胜'),
-      h('span', null, stage.result)) : null)
+    ))
 }
+/**
+ * 观战页的「模型形象」：与离线回放、视频同源——只有人物、没有底板，logo 贴在人物左上角，
+ * **本手有发言才画人**；没有发言时这一格里只留 logo，盒子仍然占位（侧栏高度不跳）。
+ *
+ * 观战页与导出侧的唯一差别是尺寸来源：导出是固定画布（66×86 / 紧凑档 46×58），
+ * 观战页是响应式窗口，所以这一格按容器宽度（cqw）缩放，窄窗口先让形象变小。
+ */
+function SpeakingFigure({ player, portrait, speaks }) {
+  const face = speaks && portrait ? (MODEL_ART.full[portrait] || MODEL_ART.full.generic) : ''
+  const logo = player ? MODEL_ART.logos[logoKey(player)] : ''
+  if (!player) return null
+  return h('span', { className: 'ar-speaking-figure', 'data-quiet': face ? 'false' : 'true' },
+    face ? h('img', { className: 'ar-speaking-face', src: face, alt: '' }) : null,
+    logo ? h('img', { className: 'ar-speaking-mark', src: logo, alt: '' }) : null)
+}
+
 function Player({ player, index, gameId = 'gomoku', badge = '' }) { return h('div', { className: 'ar-player', 'data-game': gameId }, h('i', { className: 'ar-stone', 'data-player': index }), h('div', null, h('strong', null, player.name), h('small', null, `${sideLabel(gameId, index)} / ${player.providerName}`)), badge ? h('em', { className: 'ar-player-badge', 'data-badge': badge }, badge) : null) }
 function Arena({ renderConversation, focusSession }) {
   const [freshEntry] = React.useState(() => arenaEntryMode === 'fresh')
@@ -393,7 +454,7 @@ function GameCover({ game }) {
     h('div', { className: 'ar-wf-head' }, h('span', null, '第 1 夜'), h('strong', null, '狼人行动')),
     h('div', { className: 'ar-wf-cast', role: 'img', 'aria-label': '狼人杀六席舞台：2 狼人、预言家、女巫、猎人、村民' }, werewolfCoverSeats().map(seat => h('figure', { key: seat.seat, className: 'ar-wf-seat', 'data-active': seat.active ? 'true' : undefined },
       h('span', { className: 'ar-wf-no' }, seat.seat),
-      h('img', { alt: '', src: WEREWOLF_ART.portraits[seat.portrait] }),
+      h('img', { alt: '', src: MODEL_ART.full[seat.portrait] || MODEL_ART.full.generic }),
       h('em', { className: 'ar-wf-mark', 'data-role': seat.role, title: seat.roleName }, seat.mark)))))
   return h('div', { className: 'ar-game-cover-art' }, svg
     ? h('div', { className: 'ar-game-board', dangerouslySetInnerHTML: { __html: svg } })

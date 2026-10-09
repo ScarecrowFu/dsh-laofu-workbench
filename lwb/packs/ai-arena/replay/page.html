@@ -43,7 +43,6 @@
           </header>
           <div class="turn" id="turn" data-phase="move">
             <i class="turn-bar" id="turnBar"></i>
-            <img class="turn-logo" id="turnLogo" src="" alt="">
             <div class="turn-body">
               <div class="turn-top">
                 <small class="turn-kicker" id="turnKicker">本手执行</small>
@@ -52,6 +51,8 @@
               </div>
               <b class="turn-name" id="turnName"></b>
             </div>
+            <!-- 形象与 markup.mjs 同构：一个格子一个 logo；本手无发言时只留 logo（同高占位） -->
+            <span class="turn-figure" id="turnFigure" data-quiet="true"></span>
           </div>
           <div class="hero">
             <em class="hlbl" id="heroLbl">当前手数</em>

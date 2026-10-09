@@ -15,7 +15,7 @@
      身份由 logo + 模型名承载。将来要按席位分色时改这两个变量即可，
      但必须绕开金（关键手/胜局）与红（将军/出局）这两组语义色。 */
   --seat:var(--brand);--seat-soft:var(--brand-soft);--seat-edge:var(--brand-edge);
-  --pad:20px;
+  --pad:16px;
   position:relative;flex:none;overflow:hidden;
   width:1280px;height:720px;
   display:flex;
@@ -57,7 +57,7 @@
   flex:1;min-width:0;min-height:0;
   margin:20px 20px 20px 18px;padding:var(--pad);
   background:var(--panel);border:1px solid var(--line);border-radius:14px;
-  display:flex;flex-direction:column;gap:14px;
+  display:flex;flex-direction:column;gap:11px;
 }
 .stage[data-layout="portrait"] .side{
   margin:0;padding:16px 20px 0;border:0;border-radius:0;gap:10px;
@@ -66,7 +66,7 @@
 /* 顶栏：竖屏收起（竖屏交给平台账号区，画幅内只留给棋盘与字幕） */
 .top{flex:none;display:flex;align-items:baseline;justify-content:space-between;gap:12px}
 .brand{display:flex;align-items:baseline;gap:9px;min-width:0}
-.brand b{position:relative;padding-left:13px;font-size:18px;font-weight:800;letter-spacing:.01em;white-space:nowrap}
+.brand b{position:relative;padding-left:13px;font-size:17px;font-weight:800;letter-spacing:.01em;white-space:nowrap}
 .brand b::before{content:"";position:absolute;left:0;top:50%;width:4px;height:15px;border-radius:2px;background:var(--brand);transform:translateY(-50%)}
 .game{font-size:12px;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .stage[data-layout="portrait"] .top{display:none}
@@ -83,6 +83,25 @@
 .turn-bar{position:absolute;left:0;top:0;bottom:0;width:6px;background:var(--seat);transform-origin:top}
 .turn-logo{flex:none;width:52px;height:52px;border-radius:50%;object-fit:cover;background:#fff;box-shadow:0 2px 8px rgba(20,24,26,.16)}
 .turn-logo[hidden]{display:none}
+/* ---------------------------------------------------------------
+   执行者卡里的「模型形象」：只有人物、没有底板；logo 贴在人物左上角，与人物一起出场。
+   素材是带 alpha 的 WebP（assets/models/*.webp），所以**不要**给这里加背景色/圆角卡片，
+   否则又会变成「一块黑底」（原 JPEG 的背景是纯黑，那正是第一版示意图被否定掉的原因）。
+
+   高度契约（三档，由 presentation.isCompactTurn 判定，不按每手字幕长短动态判断）：
+     标准档（全部横屏 + 五子棋/狼人杀竖屏）：卡片 min-height 112px，形象 66×86 在模型名左侧；
+     紧凑档（象棋竖屏，侧栏只剩 484px、叙事区 95px）：卡片保持自然高度，形象 46×58 在右侧。
+   两种档位下 `.turn-figure` 的盒子都在——本手没有发言时只留 logo 徽标（同高占位，侧栏不跳）。 */
+.turn{min-height:112px}
+.turn-figure{order:-1;position:relative;flex:none;width:66px;height:86px}
+.turn-face{position:absolute;left:0;bottom:0;width:100%;height:100%;object-fit:contain;object-position:center bottom;filter:drop-shadow(0 7px 15px rgba(20,24,26,.30))}
+/* logo 徽标：贴人物左上角。没有人物时它就是这一格里唯一的东西，位置与大小都不变。 */
+.turn-mark{position:absolute;left:-5px;top:-5px;width:28px;height:28px;border-radius:50%;background:#fff;box-shadow:0 2px 8px rgba(20,24,26,.32);outline:1.5px solid #fff}
+/* 本手没有发言：这一格里只有 logo，它就是主标（与人物同一落点，右下角对齐）。 */
+.turn-figure[data-quiet="true"] .turn-mark{left:0;bottom:0;top:auto;width:52px;height:52px;outline-width:0;box-shadow:0 2px 8px rgba(20,24,26,.16)}
+.turn[data-compact="true"]{min-height:0}
+.turn[data-compact="true"] .turn-figure{order:0;margin-left:auto;width:46px;height:58px}
+.turn[data-compact="true"] .turn-mark{left:-6px;top:-5px;width:23px;height:23px}
 .turn-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
 /* 元数据（席位 / 步数）跟小标题同一行靠右：模型名因此拿到卡片整行宽度，
    长 id 不会和它抢位置而折成两行。 */
@@ -139,36 +158,72 @@
 .stage[data-layout="portrait"] .pcard .nm{font-size:13px}
 .stage[data-layout="portrait"] .pcard .logo{width:18px;height:18px}
 .stage[data-layout="portrait"] .pcard .sd{display:none}
+/* 竖屏同样是「胜 / 负」徽标进流会把长名挤成省略号：徽标改绝对定位，行右留出空位。 */
+.stage[data-game="werewolf"][data-layout="portrait"] .pcard{position:relative;padding:0 24px 0 8px}
+.stage[data-game="werewolf"][data-layout="portrait"] .pcard .bd{position:absolute;right:4px;top:50%;transform:translateY(-50%);padding:1px 6px}
 
-/* --------------------------------------------------------------- 叙事（降调为字幕） */
-.narrative{flex:1;min-height:0;display:flex;flex-direction:column;gap:14px}
-.narrative .speech{order:0}
-.narrative .finale{order:1}
-.narrative .recent{order:2}
+/* --------------------------------------------------------------- 叙事（降调为字幕）
+   安全区契约（和观战页席位舞台同一套思路）：叙事区是两行栅格 —— 本手发言 auto、
+   回合记录 1fr 且带最小高度。发言拿到它需要的高度（钳制见 --ww-lines），记录吃掉剩下的、
+   并在不够时从最旧一条裁掉；两块都 overflow:hidden，所以谁也不可能画到别人的地盘上。
 
-.speech{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-start}
+   此前这里是两个 flex 项，弹性角色正好设反：.speech 是 flex:1（basis 0）只拿到剩余空间，
+   .recent 是 flex:0 1 auto 反而按内容拿满 151px；两者又都不裁剪，于是发言的内容（最多 5 行
+   ≈222px）从 23px 的盒子里溢出来。狼人杀还给发言加了 justify-content:center，溢出上下对半，
+   往上盖住身份榜最后 2—3 行、往下盖住回合记录前两条（8 人局横屏每一帧都中）。 */
+.narrative{flex:1;min-height:0;display:grid;grid-template-rows:minmax(0,auto) minmax(66px,1fr);gap:14px}
+.narrative .speech{grid-row:1;min-height:0;overflow:hidden}
+.narrative .recent{grid-row:2;align-self:end;max-height:100%}
+.narrative .finale{grid-row:1/-1}
+
+.speech{min-height:0;display:flex;flex-direction:column;justify-content:flex-start}
 /* 竖屏下部富余空间更多，字幕垂直居中避免「上挤下空」 */
 .stage[data-layout="portrait"] .speech{justify-content:center}
+/* 竖屏没有回合记录（.recent 整块收起），叙事区回到单行：发言卡仍旧垂直居中，
+   不会因为第二行的 66px 下限把卡片顶到上面去。 */
+.stage[data-layout="portrait"] .narrative{grid-template-rows:minmax(0,1fr)}
 .sinner{align-self:flex-start;max-width:100%;display:flex;flex-direction:column;gap:8px;border-left:3px solid var(--brand);padding-left:16px}
 /* 署名挂在画面最大的那句字幕上：名字抬到与小标题同级，观众不必回头找「谁说的」 */
 .shead{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;color:var(--ink3)}
 .shead span{display:flex;align-items:center;gap:9px;min-width:0;overflow-wrap:anywhere}
 .shead .logo{width:26px;height:26px}
-.sn{font-size:20px;font-weight:800;color:var(--ink);overflow:hidden;text-overflow:ellipsis}
+/* 名称是单行归属信息：署名一行现在还要放席号与身份，模型名必须截断而不是折行，
+   否则最长的那个模型名会把自己折成三行，把回合记录挤出画面（同名可在身份榜看全）。 */
+.sn{font-size:20px;font-weight:800;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .stag{flex:none;font-size:11px;font-weight:800;font-style:normal;letter-spacing:.1em;color:var(--brand-ink);background:var(--brand-soft);border:1px solid var(--brand-edge);border-radius:999px;padding:2px 8px}
+/* 席位与身份：狼人杀的署名与回合记录要回答「这个模型是什么身份」。
+   从前只有模型名——同供应商的不同模型经常同名，观众得自己把名字对到舞台席卡上。
+   只给狼人杀渲染（棋类不产出这两个元素）。两个都是 flex:none：模型名可以先省略，
+   席号与身份不能被压掉；长名在 .sn 上截断，同名信息在身份榜与执行者卡上都还有。 */
+.sseat{flex:none;font-size:15px;font-weight:700;color:var(--ink3);font-variant-numeric:tabular-nums}
+.srole{display:inline-flex;align-items:center;gap:6px;flex:none;font-size:15px;font-weight:800;font-style:normal;color:var(--ink2)}
+.srole i{display:inline-flex;width:19px;height:19px;align-items:center;justify-content:center;border-radius:5px;background:#E7ECEA;color:#1B232C;font-size:11px;font-weight:800;font-style:normal}
+.srole[data-role=werewolf] i{background:#D9534A;color:#FFF}
+.srole[data-role=seer] i{background:#5B93E0;color:#FFF}
+.srole[data-role=witch] i{background:#9A6BD6;color:#FFF}
+.srole[data-role=hunter] i{background:#E0A32E;color:#3A2A08}
 .coord{flex:none;padding:2px 9px;border-radius:999px;background:#F1F4F2;color:var(--ink2);font-size:11px;font-style:normal;font-weight:700;white-space:nowrap}
 .coord[hidden]{display:none}
-#text{margin-top:2px;font-size:24px;font-weight:700;line-height:1.5;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:5;overflow:hidden}
-.stage[data-layout="portrait"] #text{-webkit-line-clamp:4}
+/* 发言正文的行数钳制：条数由人数给（--ww-lines），而不是写死 5 行。
+   5 行只在 6 人局放得下：8 人的身份榜占 4 行、9 人占 5 行，9 人因此收到 4 行。
+   选择器用 .sinner p 而不是 #text：视频侧 markup.mjs 产出的 <p> 没有 id，
+   从前离线有钳制、MP4 没有，同一句话在成片里会多出一行、压得更深。 */
+.narrative .sinner p{margin-top:2px;font-size:24px;font-weight:700;line-height:1.5;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--ww-lines,5);overflow:hidden}
+/* 竖屏没有回合记录、下部也更宽裕，按旧口径收到 4 行 */
+.stage[data-layout="portrait"]{--ww-lines:4}
 .stage[data-layout="portrait"] .shead .logo{width:28px;height:28px}
 .stage[data-layout="portrait"] .sn{font-size:22px}
 
-/* 记录块可收缩：发言很长时由它让位（rlist 已 overflow:hidden，从最旧一条开始裁），
-   避免 speech 被挤压后文字与记录重叠。 */
-.recent{flex:0 1 auto;min-height:0;display:flex;flex-direction:column;gap:7px;padding-top:12px;border-top:1px solid var(--line)}
+/* 回合记录：席位条带让出的余量归它，不够就从最旧一条裁。
+   rlist 的底部渐隐把「还有更多」说出来，而不是把一条记录拦腰切断。 */
+.recent{min-height:0;display:flex;flex-direction:column;gap:7px;padding-top:12px;border-top:1px solid var(--line);overflow:hidden}
 .rtitle{font-size:11px;font-weight:800;line-height:1.2;letter-spacing:.16em;color:var(--ink3)}
-.rlist{display:flex;flex-direction:column;gap:7px;min-height:0;overflow:hidden}
+.rlist{display:flex;flex-direction:column;gap:7px;min-height:0;overflow:hidden;-webkit-mask-image:linear-gradient(180deg,#000 calc(100% - 14px),transparent);mask-image:linear-gradient(180deg,#000 calc(100% - 14px),transparent)}
 .rentry b{display:block;font-size:11px;font-weight:700;line-height:1.2;color:var(--ink3);margin-bottom:2px}
+/* 回合记录是 11px 的次级信息，身份标签按同一档缩小，避免把每条记录撑成两行。 */
+.rentry b .sseat{display:inline;margin-right:3px;font-size:11px}
+.rentry b .srole{margin-left:4px;gap:4px;font-size:11px}
+.rentry b .srole i{width:14px;height:14px;border-radius:4px;font-size:9px}
 .rentry span{display:block;font-size:12px;line-height:1.4;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .stage[data-layout="portrait"] .recent{display:none}
 .recent[hidden]{display:none}
@@ -186,7 +241,7 @@
 .stage[data-layout="portrait"] .finale p{font-size:25px}
 
 /* --------------------------------------------------------------- 进度条：关键手锚点 + 当前手指针 */
-.progress{flex:none;display:flex;flex-direction:column;gap:9px;padding-top:12px;border-top:1px solid var(--line)}
+.progress{flex:none;display:flex;flex-direction:column;gap:9px;padding-top:8px;border-top:1px solid var(--line)}
 .prow{display:flex;align-items:baseline;justify-content:space-between;gap:12px;font-size:12px;color:var(--ink3)}
 .prow b{font-weight:800;color:var(--ink)}
 .track{position:relative;height:8px;border-radius:4px;background:#EAEDEB}
@@ -214,11 +269,30 @@
    所有随时间变化的量在 markup.mjs 里算成内联样式（视频逐帧），
    离线 HTML 用下面同名的关键帧（.stage.animate 触发）。
    =============================================================== */
-.stage[data-game="werewolf"]{--wolf-red:#B4342A;--wolf-red-soft:#FBE9E7;--wolf-gold:#E0A32E;--wolf-moon:#7FA8DE}
+.stage[data-game="werewolf"]{--wolf-red:#B4342A;--wolf-red-soft:#FBE9E7;--wolf-gold:#E0A32E;--wolf-moon:#7FA8DE;
+  /* 发言正文的行数上限：6 / 8 人 5 行，9 人身份榜多一行、收到 4 行（见 .narrative 的预算）。 */
+  --ww-lines:5}
+.stage[data-game="werewolf"][data-seats="9"]{--ww-lines:4}
+/* 席位条带的行数与高度：横屏 6 人一行、8 / 9 人两行；竖屏 6 / 8 人两行、9 人三行
+   （与 presentation.werewolfCastLayout 同一个口径）。高度按画幅百分比给，
+   因为主画面在横屏是 720 高、竖屏是 720×16/14 = 630 高，两个画幅的绝对值不同。
+   条带是舞台上唯一可收缩的一段（见 .ww-cast），所以这份预算是上限而不是硬约束。
+   竖屏 9 人（3 行）压到 57%：胜负卡最长会到两行（结算播报 + 裁决 ≈152px），
+   加上抬头 77px 与 10px 间距后，条带顶边要留在 246px 以下才躲得开席号徽标
+   （`.ww-no` 挂在 `top:-9px`，会伸到条带上方 9px）。实测 57% 时徽标净空 7.3px。 */
+.stage[data-game="werewolf"]:not([data-layout="portrait"]){--ww-rows:2;--ww-band:46%}
+.stage[data-game="werewolf"]:not([data-layout="portrait"])[data-seats="6"]{--ww-rows:1;--ww-band:25%}
+.stage[data-game="werewolf"][data-layout="portrait"]{--ww-rows:2;--ww-band:50%}
+.stage[data-game="werewolf"][data-layout="portrait"][data-seats="9"]{--ww-rows:3;--ww-band:57%}
 .stage[data-game="werewolf"] .board-card{flex:1;width:auto;min-width:0;height:100%;transform-origin:center center}
-.stage[data-game="werewolf"] .side{flex:none;width:404px}
+/* 狼人杀的侧栏比棋类宽 96px（棋类 404px）：横屏身份榜是两列，一列 404 会把 `deepseek-v4.1-flash`
+   截成 `deepseek…`——同供应商的 max / flash 正是靠后缀区分，截断等于把身份榜的意义抹掉。 */
+.stage[data-game="werewolf"] .side{flex:none;width:500px}
 
-.ww-scene{position:absolute;inset:0;overflow:hidden;background:#0B1119}
+/* 席位舞台的版面是「安全区契约」：抬头 → 主持人播报（终局换成胜负卡）→ 场景留白 → 席位条带，
+   每一段都参与布局流。此前抬头 / 主持人 / 胜负卡各自绝对定位，胜局横幅的 `top:50%` 正好压在
+   8 / 9 人第一排席卡的脸上；现在余量收在条带的 margin-top:auto 里，谁也不许画到别人的地盘上。 */
+.ww-scene{position:absolute;inset:0;overflow:hidden;background:#0B1119;display:flex;flex-direction:column}
 .ww-bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 32%;transition:opacity .5s ease}
 .ww-mask{position:absolute;inset:0;background:
   linear-gradient(180deg,rgba(6,10,16,.72) 0%,rgba(6,10,16,.12) 26%,rgba(6,10,16,.18) 52%,rgba(6,10,16,.86) 100%),
@@ -227,23 +301,32 @@
   linear-gradient(180deg,rgba(12,18,26,.46) 0%,rgba(12,18,26,.04) 26%,rgba(12,18,26,.12) 52%,rgba(10,16,24,.82) 100%),
   radial-gradient(120% 78% at 50% 46%,rgba(0,0,0,0) 44%,rgba(20,26,18,.42) 100%)}
 
-/* 场景抬头：第 N 天 · 昼夜 + 阶段名 */
-.ww-head{position:absolute;left:30px;top:26px;display:flex;flex-direction:column;gap:6px}
+/* 场景抬头：第 N 天 · 昼夜 + 阶段名。align-self:flex-start 保住「贴左、盒子按内容宽」的原样：
+   让它撑满一行会把日期胶囊拉成一条通栏。 */
+.ww-head{position:relative;flex:none;align-self:flex-start;padding:26px 30px 0;display:flex;flex-direction:column;gap:6px}
 .ww-day{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 11px;border-radius:999px;background:rgba(9,13,20,.55);border:1px solid rgba(255,255,255,.22);color:#E8EEF6;font-size:12px;font-weight:700;letter-spacing:.04em;backdrop-filter:blur(3px)}
 .ww-phase{font-size:34px;font-weight:800;line-height:1.1;color:#FFF;letter-spacing:.01em;text-shadow:0 3px 16px rgba(0,0,0,.75)}
 .stage[data-scene="day"] .ww-phase{color:#FFF7E6}
 .stage[data-act="death"] .ww-phase{color:#FFD9D3}
 
-/* 主持人播报：出局与阶段由它一起说出，不再单独挂一条出局横幅 */
-.ww-host{position:absolute;left:30px;top:112px;max-width:min(64%,760px);display:flex;flex-direction:column;align-items:flex-start;gap:5px}
+/* 主持人播报：出局与阶段由它一起说出，不再单独挂一条出局横幅。
+   它占的是「抬头之下、条带之上」这一格，终局那一帧整格让给胜负卡（见 .ww-win）。
+   `[hidden]` 必须显式收掉：这里的 display 会压过浏览器默认的 [hidden]{display:none}，
+   否则没有播报的那一帧会留下一个空胶囊。 */
+.ww-host{position:relative;flex:none;align-self:flex-start;margin:18px 30px 0;max-width:min(64%,760px);display:flex;flex-direction:column;align-items:flex-start;gap:5px}
+.ww-host[hidden]{display:none}
 .ww-host em{display:inline-flex;align-items:center;height:20px;padding:0 10px;border-radius:999px;background:rgba(224,163,46,.2);border:1px solid rgba(224,163,46,.55);color:#F4DFAE;font-size:11px;font-weight:800;font-style:normal;letter-spacing:.14em;backdrop-filter:blur(3px)}
 .ww-host p{margin:0;padding:7px 15px;border-radius:10px;background:rgba(8,12,19,.68);border:1px solid rgba(255,255,255,.16);color:#F6F1E4;font-size:15px;font-weight:700;line-height:1.45;backdrop-filter:blur(3px);text-shadow:0 1px 6px rgba(0,0,0,.6)}
 
-/* N 席 */
-.ww-cast{position:absolute;left:22px;right:22px;bottom:22px;display:grid;grid-template-columns:repeat(var(--ww-cols,6),minmax(0,1fr));gap:10px;align-items:end}
-.ww-seat{position:relative;display:flex;flex-direction:column;align-items:center;gap:5px;transform-origin:center bottom}
+/* N 席。条带高度按行数取（--ww-band），行高由行模板均分，席卡吃行高 —— 与观战页同一套契约。
+   margin-top:auto 把它压到画面底部，富余的留白落在场景中间而不是条带里；
+   条带是唯一可收缩的一段（flex:0 1 auto + min-height:0），窄画幅先让席卡变小。 */
+.ww-cast{position:relative;flex:0 1 auto;min-height:0;height:var(--ww-band,46%);margin:auto 22px 22px;display:grid;grid-template-columns:repeat(var(--ww-cols,6),minmax(0,1fr));grid-template-rows:repeat(var(--ww-rows,1),minmax(0,1fr));gap:10px}
+.ww-seat{position:relative;display:flex;flex-direction:column;align-items:center;gap:5px;height:100%;min-height:0;transform-origin:center bottom}
 .ww-no{position:absolute;left:50%;top:-9px;transform:translateX(-50%);z-index:3;display:flex;width:21px;height:21px;align-items:center;justify-content:center;border-radius:50%;background:rgba(10,14,22,.86);border:1px solid rgba(255,255,255,.34);color:#F2F6FB;font-size:11px;font-weight:800}
-.ww-face{position:relative;display:block;width:100%;height:158px;border-radius:12px 12px 9px 9px;overflow:hidden;background:linear-gradient(180deg,rgba(24,34,48,.5),rgba(10,15,22,.72));border:1px solid rgba(255,255,255,.16);box-shadow:0 12px 26px rgba(3,6,12,.5);transition:border-color .25s ease,box-shadow .25s ease}
+/* 席卡吃「行高 − 署名」那一段，宽度填满单元格、立绘按原比例居中留边（不裁脸）：
+   高度不再由列宽或人数推，8 / 9 人才是「卡片变小一档」而不是把画面撑破。 */
+.ww-face{position:relative;display:block;flex:1 1 auto;min-height:0;width:100%;border-radius:12px 12px 9px 9px;overflow:hidden;background:linear-gradient(180deg,rgba(24,34,48,.5),rgba(10,15,22,.72));border:1px solid rgba(255,255,255,.16);box-shadow:0 12px 26px rgba(3,6,12,.5);transition:border-color .25s ease,box-shadow .25s ease}
 .ww-face img{position:absolute;left:0;right:0;bottom:0;width:100%;height:100%;object-fit:contain;object-position:center bottom;transition:filter .3s ease}
 .ww-veil{position:absolute;inset:0;background:linear-gradient(180deg,rgba(6,10,16,0) 46%,rgba(6,10,16,.55) 100%)}
 /* 当前行动席位：蓝色环（本手执行），金色只留给胜方 —— 一个颜色不再兼两义。
@@ -261,7 +344,7 @@
   linear-gradient(-45deg,transparent 45.5%,rgba(226,60,48,.86) 48.5%,rgba(226,60,48,.86) 51.5%,transparent 54.5%),
   radial-gradient(60% 60% at 50% 50%,rgba(120,18,12,.42),rgba(120,18,12,0) 72%);
   filter:drop-shadow(0 0 8px rgba(226,60,48,.6))}
-.ww-seat figcaption{display:flex;align-items:center;justify-content:center;gap:5px;max-width:100%}
+.ww-seat figcaption{display:flex;align-items:center;justify-content:center;gap:5px;flex:none;max-width:100%}
 .ww-name{font-size:12px;font-weight:700;color:#F3F7FC;text-shadow:0 1px 4px rgba(0,0,0,.85);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ww-role{display:inline-flex;width:18px;height:18px;flex:none;align-items:center;justify-content:center;border-radius:5px;background:rgba(255,255,255,.86);color:#1B232C;font-size:10px;font-weight:800;font-style:normal}
 .ww-role[data-role="werewolf"]{background:#D9534A;color:#FFF}
@@ -269,8 +352,9 @@
 .ww-role[data-role="witch"]{background:#9A6BD6;color:#FFF}
 .ww-role[data-role="hunter"]{background:#E0A32E;color:#3A2A08}
 
-/* 终局横幅 */
-.ww-win{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:none;flex-direction:column;align-items:center;gap:10px;padding:22px 40px;border-radius:16px;background:rgba(8,12,19,.72);border:1px solid rgba(224,163,46,.6);box-shadow:0 24px 60px rgba(2,5,10,.6);backdrop-filter:blur(4px);text-align:center}
+/* 终局横幅：占主持人那一格（不再绝对定位飘在画面正中压住席卡）。
+   抬头 → 胜负卡 → 留白 → 条带，胜负卡在流里，席位条带从它下面开始，两者不可能相交。 */
+.ww-win{position:relative;flex:none;align-self:center;display:none;flex-direction:column;align-items:center;gap:10px;margin:18px 0 0;max-width:82%;padding:22px 40px;border-radius:16px;background:rgba(8,12,19,.72);border:1px solid rgba(224,163,46,.6);box-shadow:0 24px 60px rgba(2,5,10,.6);backdrop-filter:blur(4px);text-align:center}
 .stage[data-act="finale"] .ww-win{display:flex}
 .ww-win b{font-size:44px;font-weight:900;letter-spacing:.06em;color:var(--wolf-gold);text-shadow:0 4px 22px rgba(224,163,46,.4)}
 .ww-win span{font-size:16px;font-weight:600;color:#EAF0F7;max-width:520px;line-height:1.5}
@@ -305,23 +389,31 @@
 .stage[data-game="werewolf"] .pcard{height:30px}
 /* 8 / 9 人时身份榜多出 2—3 行，压一点行高，别把侧栏的发言区挤没 */
 .stage[data-game="werewolf"][data-seats="8"] .pcard,.stage[data-game="werewolf"][data-seats="9"] .pcard{height:26px;padding:0 8px}
-.stage[data-game="werewolf"][data-seats="8"] .ww-face,.stage[data-game="werewolf"][data-seats="9"] .ww-face{height:138px}
+/* 身份榜在横屏改两列：8 人一列要 243px、9 人 274px，而侧栏内容区只有 638px，
+   一列时「发言 5 行 + 回合记录」根本放不下（这正是发言溢出压住身份榜与记录的成因之一）。
+   两列把行数减半（6 人 3 行 / 8 人 4 行 / 9 人 5 行），中文身份名让位给徽记与模型名——
+   徽记（民 / 巫 / 狼 / 猎 / 预）已经说明身份，中文身份名在发言署名里也有。 */
+.stage[data-game="werewolf"]:not([data-layout="portrait"]) .score{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 8px}
+.stage[data-game="werewolf"]:not([data-layout="portrait"]) .pcard .logo{width:20px;height:20px}
+.stage[data-game="werewolf"]:not([data-layout="portrait"]) .pcard .nm{font-size:13px}
+.stage[data-game="werewolf"]:not([data-layout="portrait"]) .pcard .sd{display:none}
+/* 终局徽标（胜 / 负）改成贴在行右缘的绝对定位：它进流会把 `deepseek-v4.1-flash`
+   这类长名挤成省略号，而名字必须完整（同供应商的 max / flash 只差后缀）。
+   行右侧因此统一留 26px 空位，徽标出现与否都不影响模型名的宽度。 */
+.stage[data-game="werewolf"]:not([data-layout="portrait"]) .pcard{position:relative;height:26px;padding:0 24px 0 8px;gap:6px}
+.stage[data-game="werewolf"]:not([data-layout="portrait"]) .pcard .bd{position:absolute;right:4px;top:50%;transform:translateY(-50%);padding:1px 6px}
 .stage[data-game="werewolf"] .score{gap:5px}
 .stage[data-game="werewolf"] .recent{gap:5px}
 
 /* 竖屏：场景在上，席位按 --ww-cols-portrait 排，身份榜也走栅格 */
 .stage[data-game="werewolf"][data-layout="portrait"] .board-card{width:100%;height:auto;flex:none;aspect-ratio:16/14}
 .stage[data-game="werewolf"][data-layout="portrait"] .side{flex:1 1 auto;width:100%}
-.stage[data-game="werewolf"][data-layout="portrait"] .ww-cast{grid-template-columns:repeat(var(--ww-cols-portrait,3),minmax(0,1fr));bottom:16px;left:16px;right:16px;gap:8px}
-.stage[data-game="werewolf"][data-layout="portrait"] .ww-face{height:132px}
-/* 9 人竖屏是 3 列 × 3 行：席位栅格顶到主持人台词上（台词到 140px，栅格原本从 131px 起），
-   压一档席卡高度把栅格推下去，台词与第一排席卡不再叠在一起。
-   8 人是 4 列 × 2 行，本来就有富余，不受这条影响。 */
-.stage[data-game="werewolf"][data-layout="portrait"][data-seats="9"] .ww-face{height:124px}
+.stage[data-game="werewolf"][data-layout="portrait"] .ww-cast{grid-template-columns:repeat(var(--ww-cols-portrait,3),minmax(0,1fr));margin:auto 16px 16px;gap:8px}
 .stage[data-game="werewolf"][data-layout="portrait"] .ww-phase{font-size:26px}
-.stage[data-game="werewolf"][data-layout="portrait"] .ww-head{left:18px;top:18px}
-.stage[data-game="werewolf"][data-layout="portrait"] .ww-host{left:18px;top:86px;max-width:80%}
+.stage[data-game="werewolf"][data-layout="portrait"] .ww-head{padding:18px 18px 0}
+.stage[data-game="werewolf"][data-layout="portrait"] .ww-host{margin:10px 18px 0;max-width:80%}
 .stage[data-game="werewolf"][data-layout="portrait"] .ww-host p{font-size:14px;padding:6px 12px}
+.stage[data-game="werewolf"][data-layout="portrait"] .ww-win{margin:10px 0 0}
 .stage[data-game="werewolf"][data-layout="portrait"] .ww-win b{font-size:34px}
 .stage[data-game="werewolf"][data-layout="portrait"] .score{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
 .stage[data-game="werewolf"][data-layout="portrait"] .pcard{height:26px;padding:0 8px}
@@ -339,8 +431,10 @@
 @keyframes wwStrike{from{opacity:1;transform:translate(-50%,-50%) scale(1.7)}62%{opacity:.95;transform:translate(-50%,-50%) scale(1)}to{opacity:.72;transform:translate(-50%,-50%) scale(1)}}
 .stage.animate .ww-out{animation:wwOutIn .44s cubic-bezier(.2,.8,.3,1) .1s both}
 @keyframes wwOutIn{from{opacity:0;transform:translate(-50%,12px)}to{opacity:1;transform:translate(-50%,0)}}
-.stage[data-act="finale"] .ww-win{animation:wwVictory .55s cubic-bezier(.2,.8,.3,1) both}
-@keyframes wwVictory{from{opacity:0;transform:translate(-50%,-50%) scale(.82)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+/* 终局横幅只在播放推进时入场（拖进度条不触发，与其余动效同一道闸）。位移已经进流，
+   只剩淡入 + 缩放，transform-origin 就是卡片自身中心，不再需要 translate(-50%,-50%)。 */
+.stage.animate[data-act="finale"] .ww-win{animation:wwVictory .55s cubic-bezier(.2,.8,.3,1) both}
+@keyframes wwVictory{from{opacity:0;transform:scale(.82)}to{opacity:1;transform:none}}
 .stage.paused .ww-seat,.stage.paused .ww-strike,.stage.paused .ww-win{animation-play-state:paused}
 
 /* --------------------------------------------------------------- 动效 */
@@ -374,7 +468,10 @@
 @keyframes turnBar{from{transform:scaleY(0)}to{transform:scaleY(1)}}
 .stage.animate .turn-logo{animation:turnLogo .3s cubic-bezier(.2,.8,.3,1) both}
 @keyframes turnLogo{from{transform:scale(.86)}to{transform:scale(1)}}
-.stage.paused .turn,.stage.paused .turn-bar,.stage.paused .turn-logo{animation-play-state:paused}
+/* 形象与执行者卡一起到场，比卡片本身晚一点点、从略小处放大（与 markup.mjs 的 turnFigure 同数值） */
+.stage.animate .turn-face{animation:turnFigure .42s cubic-bezier(.2,.8,.3,1) .06s both}
+@keyframes turnFigure{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:scale(1)}}
+.stage.paused .turn,.stage.paused .turn-bar,.stage.paused .turn-logo,.stage.paused .turn-face{animation-play-state:paused}
 
 /* 吃子：被吃棋子原位碎裂淡出 + 落点震屏 */
 .board svg g.ghost{animation:shatter .36s cubic-bezier(.3,.7,.4,1) both}

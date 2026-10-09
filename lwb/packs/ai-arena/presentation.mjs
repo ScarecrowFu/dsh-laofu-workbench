@@ -1,3 +1,5 @@
+import { FALLBACK_FAMILIES, matchFamily } from './models.mjs'
+
 export const escapeHtml = value => String(value ?? '').replace(/[&<>"']/gu, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char])
 export const movesOf = match => (match.events || []).filter(event => event.type === 'move')
 export const gameName = game => game?.name || (game?.id === 'xiangqi' ? '中国象棋' : game?.id === 'werewolf' ? '狼人杀' : '五子棋')
@@ -47,11 +49,39 @@ const WEREWOLF_SIDE = Object.freeze({ village: '好人阵营', wolf: '狼人阵�
 export const werewolfSideName = side => WEREWOLF_SIDE[side] || ''
 /** 身份 → 阵营。终局给胜方席位打金框、给席卡算「胜 / 负」都用这一处口径。 */
 export const werewolfSide = role => role === 'werewolf' ? 'wolf' : 'village'
+/**
+ * 观众侧的席位身份：座位下标 → `{ seat, role, mark, roleName }`，没有身份时返回 null。
+ *
+ * 观战页的发言署名与回合记录要回答「这个模型是什么身份」——只给模型名时，观众得自己把
+ * 名字映射到舞台席卡上，而同供应商的不同模型经常同名（9 人局里出现过两席都叫
+ * `deepseek-v4.1-flash`），连名字都不足以定位。身份一律取落盘那一份牌（`state.players`），
+ * 与舞台席卡、离线回放的 `werewolf.seats` 同源；棋类没有身份，返回 null，
+ * 调用处据此完全不渲染，棋盘画面与署名一字不变。
+ */
+export function seatIdentity(match, index) {
+  if (match?.game?.id !== 'werewolf' || !Number.isInteger(index) || index < 0) return null
+  const role = match.state?.players?.[index]?.role
+  if (!role) return null
+  return { seat: index + 1, role, mark: ROLE_MARK[role] || '', roleName: ROLE_NAME[role] || '' }
+}
+/**
+ * 席位舞台的几何契约：人数 → `{ seats, columns, rows }`。
+ *
+ * 三个画面（观战页、离线回放、视频）共用这一处，避免「列数一套、行数另一套」。
+ * 行数是两侧共同的约束：8 / 9 人必须折成两行。观战页据此把席位条带高度放在
+ * `--ar-cast-band`（见 styles.mjs 的 `data-rows` 规则），离线回放/视频据此压席卡高度
+ * （见 replay/scene.css 的 `data-seats` 规则）。只给列数、不给行数，正是 8 / 9 人局
+ * 在观战页把画面撑破的那次回归：列数从 6 变成 4 / 5，行数从 1 变成 2，没人算这笔账。
+ */
+export function werewolfCastLayout(count = 6, layout = 'landscape') {
+  const seats = Number.isFinite(count) ? Math.max(1, Math.floor(count)) : 6
+  const columns = layout === 'portrait' ? (seats <= 6 ? 3 : seats <= 8 ? 4 : 3) : (seats <= 6 ? seats : seats <= 8 ? 4 : 5)
+  return { seats, columns, rows: Math.ceil(seats / columns) }
+}
 /* 席卡栅格列数：横屏 6 人一列排开，8 / 9 人折行；竖屏 3 列起。
-   观战页、离线回放、视频三处共用，避免各写一套列数。 */
+   列数口径不变，需要行数的调用处读 werewolfCastLayout。 */
 export function werewolfCastColumns(count = 6, layout = 'landscape') {
-  if (layout === 'portrait') return count <= 6 ? 3 : count <= 8 ? 4 : 3
-  return count <= 6 ? count : count <= 8 ? 4 : 5
+  return werewolfCastLayout(count, layout).columns
 }
 /* 主持人播报：确定性推导，只吃规则的观众侧播报与终局信息，不读任何私有局面。
    台词由规则层写进 state.narration；离线回放/视频按规则重放，因此与直播逐字一致。 */
@@ -71,36 +101,36 @@ export function werewolfHostLine({ narration = [], publicLog = [], winnerSide = 
   const lastEvent = [...publicLog].at(-1)
   return (typeof lastEvent === 'string' ? lastEvent : lastEvent?.text) || ''
 }
-const PORTRAIT_KEY = Object.freeze([
-  ['chatgpt', ['chatgpt', 'openai', 'gpt']],
-  ['claude', ['claude']],
-  ['deepseek', ['deepseek']],
-  ['doubao', ['doubao', '豆包']],
-  ['kimi', ['kimi', 'moonshot']],
-  ['mimo', ['mimo']],
-  ['minimax', ['minimax']],
-  ['qwen', ['qwen', '千问']],
-  ['zhipu', ['zhipu', '智谱', 'glm']],
-])
-const PORTRAIT_FILES = Object.freeze(['chatgpt', 'claude', 'deepseek', 'doubao', 'kimi', 'mimo', 'minimax', 'qwen', 'zhipu', 'generic'])
-/* 每个家族随包分发几套立绘：槽位 0 是 `<家族>.jpg`，其后是 `<家族>-2.jpg` … `<家族>-N.jpg`。
-   这是「随包素材的事实值」，不是「保证不重复」的目标值：同一供应商下的不同模型
-   （例如 qwen3.8-max 与 qwen-3.8-flash）会命中同一个家族，逐席独立取图就会撞成两张一样的形象，
-   所以按家族成池分配。保证任意局面零重复需要 `变体数 >= 最大席位数`（现为 9），
-   当前先铺 3 套，超出部分按确定性回绕复用；补素材即可收紧，不需要改这里的逻辑。 */
-export const WEREWOLF_PORTRAIT_VARIANTS = 3
-/** 单席立绘：按模型名匹配家族；没命中时按座位错开，避免六席都拿到同一张通用图。
+/* 模型形象（立绘）：家族匹配只有 `models.mjs` 一处，音色、logo 与形象因此必然同家族。
+   槽位 0 是 `<家族>`，其后是 `<家族>-2` … `<家族>-N`；兜底轮转顺序见 FALLBACK_FAMILIES。 */
+const PORTRAIT_FILES = FALLBACK_FAMILIES
+/* 每个家族随包分发几套形象：这是「随包素材的事实值」，不是「保证不重复」的目标值。
+   同一供应商下的不同模型（例如 qwen3.8-max 与 qwen-3.8-flash）会命中同一个家族，
+   逐席独立取图就会撞成两张一样的形象，所以按家族成池分配。
+   保证任意局面零重复需要「变体数 >= 最大席位数」（现为 9），当前铺 3 套，
+   超出部分按确定性回绕复用；补素材即可收紧，不需要改这里的逻辑。 */
+export const MODEL_PORTRAIT_VARIANTS = 3
+/**
+ * 竖屏执行者卡走「紧凑档」的游戏：侧栏叙事区装不下标准档的那些。
+ *
+ * 实测（画布 720×1280）：五子棋侧栏 560px、狼人杀 650px，长高到 112px 后字幕仍完整；
+ * 象棋棋盘在竖屏是 **720×796**（`.board{aspect-ratio:508/562}`），侧栏只剩 484px、
+ * 叙事区 95px，长高 30px 会把 2 行字幕裁掉一行。所以象棋竖屏保持卡片 84px、
+ * 形象缩到 46×58 放卡片右侧。
+ *
+ * 档位由「游戏 × 画幅」一次性定下，**不按每手字幕长短动态判断**——否则卡片高度会跟着
+ * 发言长短跳，和「本手无发言时保留同高占位」的初衷冲突。
+ * `test/replay-sidebar.test.mjs` 逐档断言叙事区预算，新增游戏会被迫先做这个决定。
+ */
+export const COMPACT_TURN_GAMES = Object.freeze(['xiangqi'])
+export const isCompactTurn = (gameId, layout) => layout === 'portrait' && COMPACT_TURN_GAMES.includes(gameId)
+/** 单席形象：按模型名匹配家族；没命中时按座位错开，避免六席都拿到同一张通用图。
     整局分配请用 `assignPortraits`，它在此基础上保证同家族多席不重复。 */
 export function portraitKey(player, seat = 0) {
-  const text = [player?.model, player?.provider, player?.providerName, player?.name].filter(Boolean).join(' ').toLowerCase()
-  const matched = PORTRAIT_KEY.find(([, needles]) => needles.some(needle => text.includes(needle)))?.[0]
+  const matched = matchFamily(player)
   if (matched) return matched
   const slot = Number.isInteger(player?.id) ? player.id : seat
   return PORTRAIT_FILES[slot % PORTRAIT_FILES.length]
-}
-function portraitFamily(player) {
-  const text = [player?.model, player?.provider, player?.providerName, player?.name].filter(Boolean).join(' ').toLowerCase()
-  return PORTRAIT_KEY.find(([, needles]) => needles.some(needle => text.includes(needle)))?.[0] || null
 }
 /** 模型身份的稳定排序键（FNV-1a）：只吃 provider/model，不吃座位，所以同一组模型跨局排序一致。 */
 function portraitRank(player) {
@@ -125,18 +155,18 @@ const portraitVariant = (family, slot) => slot === 0 ? family : `${family}-${slo
 export function assignPortraits(players = []) {
   const ranked = new Map()
   players.forEach((player, seat) => {
-    const family = portraitFamily(player)
+    const family = matchFamily(player)
     if (!family) return
     ranked.set(family, [...(ranked.get(family) || []), { seat, rank: portraitRank(player) }])
   })
   const slots = new Map()
   for (const list of ranked.values()) {
     list.sort((left, right) => left.rank - right.rank || left.seat - right.seat)
-    list.forEach((entry, index) => slots.set(entry.seat, index % WEREWOLF_PORTRAIT_VARIANTS))
+    list.forEach((entry, index) => slots.set(entry.seat, index % MODEL_PORTRAIT_VARIANTS))
   }
   const claimed = new Set(ranked.keys())
   return players.map((player, seat) => {
-    const family = portraitFamily(player)
+    const family = matchFamily(player)
     if (family) return portraitVariant(family, slots.get(seat))
     let index = (Number.isInteger(player?.id) ? player.id : seat) % PORTRAIT_FILES.length
     for (let step = 0; step < PORTRAIT_FILES.length && claimed.has(PORTRAIT_FILES[index]); step += 1) {
@@ -154,6 +184,8 @@ export function werewolfStage({ players = [], state = {}, active = null, speech 
   const winnerSide = typeof state.winner === 'string' ? state.winner : null
   /* 一次整局分配，各席按同一份 players 顺序取图——逐席独立取图会让同家族多模型撞成同一张。 */
   const portraits = assignPortraits(players)
+  /* 列数与行数一起给：观战页的席位条带高度按行数取，缺了行数就会把 8 / 9 人撑出画幅。 */
+  const layout = werewolfCastLayout((state.players || []).length)
   const seats = (state.players || []).map((seat, index) => {
     const alive = seat.alive !== false
     const winning = Boolean(winnerSide) && Boolean(seat.role) && werewolfSide(seat.role) === winnerSide
@@ -175,7 +207,7 @@ export function werewolfStage({ players = [], state = {}, active = null, speech 
     scene, phase, day: state.day || 1,
     phaseLabel: werewolfPhaseLabel(phase, hunterCause),
     slot: werewolfPhase(phase).slot,
-    seats, seatCount: seats.length, columns: werewolfCastColumns(seats.length),
+    seats, seatCount: seats.length, columns: layout.columns, rows: layout.rows,
     speech, deaths: [...(state.lastNightDeaths || [])],
     winnerSide,
     result: state.winner ? state.terminalReason : '',

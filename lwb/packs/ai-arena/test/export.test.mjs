@@ -2,12 +2,12 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { ArenaStore } from '../store.mjs'
 import { ArenaExport, replayHtml, reportMarkdown, verifyVideoProbe } from '../export.mjs'
-import { clipDataUrl } from '../speech.mjs'
+import { LOUDNESS_VERSION, clipDataUrl } from '../speech.mjs'
 import { boardSvg, frameAt } from '../presentation.mjs'
 
 const fixture = { id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', title: '</script><img onerror=alert(1)>', game: { description: 'Rules', version: '1' }, players: [{ name: '<b>Black</b>', provider: 'test', model: 'black' }, { name: 'White', provider: 'test', model: 'white' }], calls: 1, tokens: 20, state: { moves: [{ row: 8, col: 8, player: 0 }] }, events: [{ type: 'move', turnId: 'turn', moveNumber: 1, player: 0, action: { row: 8, col: 8 }, speech: '</script><img onerror=alert(1)>', elapsedMs: 100 }], result: { message: 'Done', winner: null }, status: 'finished' }
@@ -127,8 +127,17 @@ test('voiced replay is refused without an LWB login and reuses a cached clip', a
   const again = await synthesizeSpeech(saved, directory, { scope, fetch, signal: scope.signal })
   assert.equal(posts, 1)
   assert.equal(again.get(1).speech.file, first.get(1).speech.file)
-  assert.match(first.get(1).speech.file, /v1-/u)
+  assert.match(first.get(1).speech.file, new RegExp(`/${LOUDNESS_VERSION}-[0-9a-f]{24}\\.mp3$`, 'u'))
   assert.equal(first.get(1).host, undefined, '非狼人杀没有主持人播报')
+  /* 响度口径升级后，盘上那份旧口径的同一句要能被重新对齐，而不是再向 TTS 要一次：
+     把 v2 片段改名成 v1 口径，下一次导出必须自己补齐 v2 文件，且不发 POST。 */
+  const digest = basename(first.get(1).speech.file).slice(LOUDNESS_VERSION.length + 1)
+  const legacy = join(dirname(first.get(1).speech.file), `v1-${digest}`)
+  await rename(first.get(1).speech.file, legacy)
+  const migrated = await synthesizeSpeech(saved, directory, { scope, fetch, signal: scope.signal })
+  assert.equal(posts, 1, '旧片段重新对齐不能重复调用 TTS')
+  assert.notEqual(migrated.get(1).speech.file, legacy)
+  assert.match(migrated.get(1).speech.file, new RegExp(`/${LOUDNESS_VERSION}-`, 'u'))
   const leveled = await readFile(first.get(1).speech.file)
   assert.notEqual(leveled.equals(clip), true)
   /* 旧的单轨形状（只给选手发言）继续可用，离线回放照样内联音频 */

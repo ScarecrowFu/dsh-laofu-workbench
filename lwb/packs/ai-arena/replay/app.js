@@ -35,7 +35,7 @@
   const heroTot = $('heroTot')
   const heroTag = $('heroTag')
   const turnEl = $('turn')
-  const turnLogo = $('turnLogo')
+  const turnFigure = $('turnFigure')
   const turnKicker = $('turnKicker')
   const turnName = $('turnName')
   const turnMove = $('turnMove')
@@ -63,20 +63,37 @@
   /* ---------------- 当前执行者卡（与 replay/markup.mjs 同源） ----------------
      整场画面里「谁在执行」的唯一大号常驻元素。视频侧由 markup 算成内联样式，
      这里只换文本与状态，入场节奏交给 scene.css 的 .stage.animate 关键帧。 */
-  function renderTurn({ player = null, kicker, name, meta = '', tag = '', phase = 'move' }) {
+  /* 形象口径与 replay/markup.mjs 同构：只有人物、没有底板；logo 贴在人物左上角；
+     本手有发言才画人，没有发言时这一格里只留 logo（同高占位，侧栏不跳）。
+     离线侧不做内联样式，入场节奏交给 scene.css 的 .stage.animate 关键帧。 */
+  function renderTurn({ player = null, kicker, name, meta = '', tag = '', phase = 'move', speaks = false, compact = false }) {
     turnEl.dataset.phase = phase
+    if (compact) turnEl.dataset.compact = 'true'; else delete turnEl.dataset.compact
     turnKicker.textContent = kicker
     turnName.textContent = name
     turnMove.innerHTML = meta
     turnTag.innerHTML = tag
-    if (player && player.logo) { turnLogo.src = player.logo; turnLogo.hidden = false }
-    else { turnLogo.hidden = true; turnLogo.removeAttribute('src') }
+    const art = globalThis.__ARENA_ART__ || { portraits: {}, busts: {} }
+    const key = player && player.portrait
+    /* 紧凑档用胸像（46×58 的框里半身缩下去脸就没了），与 markup.mjs 的 artBust 同一口径。 */
+    const face = speaks && key
+      ? (compact ? (art.busts?.[key] || art.portraits?.[key]) : art.portraits?.[key])
+      : ''
+    if (face) { turnFigure.dataset.quiet = 'false' } else { turnFigure.dataset.quiet = 'true' }
+    turnFigure.innerHTML =
+      (face ? `<img class="turn-face" src="${face}" alt="">` : '') +
+      (player && player.logo ? `<img class="turn-mark" src="${player.logo}" alt="">` : '')
   }
 
   /* ---------------- 狼人杀：六席舞台 ---------------- */
   const WOLF = D.game.id === 'werewolf'
   const WOLF_SEATS = (D.werewolf && D.werewolf.seats) || []
   const WOLF_STEPS = (D.werewolf && D.werewolf.steps) || []
+  /* 席位与身份：与观战页同一个口径（席号 + 徽记 + 中文名），身份取 data.werewolf.seats 里
+     已经投影好的那一份（replay/data.mjs 用 presentation 的 ROLE_MARK / ROLE_NAME 生成）。
+     棋类没有 seats，两个函数都返回空串，署名与回合记录与从前一字不变。 */
+  const wolfSeatNo = i => WOLF_SEATS[i] ? `<span class="sseat">${WOLF_SEATS[i].seat} 号</span>` : ''
+  const wolfRoleTag = i => WOLF_SEATS[i] && WOLF_SEATS[i].mark ? `<em class="srole" data-role="${esc(WOLF_SEATS[i].role)}"><i>${esc(WOLF_SEATS[i].mark)}</i>${esc(WOLF_SEATS[i].roleName || '')}</em>` : ''
   const ART = globalThis.__ARENA_ART__ || { scenes: {}, portraits: {} }
   const artPortrait = key => ART.portraits[key] || ART.portraits.generic || ''
   const seatFace = (seat, alive) => alive ? artPortrait(seat.portrait) : (ART.portraits[`${seat.portrait}-dead`] || artPortrait(seat.portrait))
@@ -90,8 +107,8 @@
     const fallbackScene = String(phase).indexOf('day') === 0 ? 'day' : 'night'
     return {
       step,
-      alive: new Set(isFinale ? ((last && last.alive) || initial) : (step ? step.alive : initial)),
-      deaths: step ? step.deaths : [],
+      alive: new Set(isFinale ? (((D.werewolf && D.werewolf.finalAlive) || (last && last.alive)) || initial) : (step ? step.alive : initial)),
+      deaths: step ? step.deaths : (isFinale ? ((D.werewolf && D.werewolf.finalDeaths) || []) : []),
       active: step ? step.seat : null,
       scene: step ? step.scene : fallbackScene,
       day: isFinale ? ((last && last.day) || 1) : ((step && step.day) || 1),
@@ -104,20 +121,22 @@
     stage.style.setProperty('--ww-cols', String(cols.landscape || Math.min(WOLF_SEATS.length, 6)))
     stage.style.setProperty('--ww-cols-portrait', String(cols.portrait || 3))
     stage.dataset.seats = String(WOLF_SEATS.length)
+    /* 版面与 markup.mjs 逐段对齐：抬头 → 主持人播报 / 终局胜负卡（两者互斥，占同一格）
+       → 席位条带。全部参与布局流，胜负卡不可能再压到席卡上。 */
     boardCard.innerHTML =
       '<div class="ww-scene">' +
       ['night', 'day'].map(scene => `<img class="ww-bg" data-scene="${scene}" src="${ART.scenes[scene] || ''}" alt="">`).join('') +
       '<div class="ww-mask"></div>' +
       '<header class="ww-head"><span class="ww-day" id="wwDay"></span><b class="ww-phase" id="wwPhase"></b></header>' +
       '<div class="ww-host" id="wwHost" hidden><em>主持人</em><p id="wwHostText"></p></div>' +
+      '<div class="ww-win" id="wwWin" hidden></div>' +
       '<div class="ww-cast" id="wwCast">' + WOLF_SEATS.map((seat, i) =>
         `<figure class="ww-seat" data-i="${i}" data-seat="${seat.seat}" style="--ww-i:${i}">` +
         `<span class="ww-no">${seat.seat}</span>` +
         `<span class="ww-face"><img src="${seatFace(seat, true)}" alt=""><i class="ww-veil"></i></span>` +
         `<figcaption><b class="ww-name">${esc(seat.name)}</b><em class="ww-role" data-role="${esc(seat.role)}">${esc(seat.mark || '·')}</em></figcaption>` +
         `</figure>`).join('') +
-      '</div>' +
-      '<div class="ww-win" id="wwWin" hidden></div></div>'
+      '</div></div>'
   }
   const wolfSeatNodes = () => (WOLF ? [...$('wwCast').querySelectorAll('.ww-seat')] : [])
   function wolfPill(index, frame) {
@@ -129,6 +148,9 @@
   function renderWolf(index, animate) {
     const isFinale = index === FINALE
     const frame = wolfFrame(index)
+    /* 本手必须在**函数顶部**取：外层播放器有一个同名的时间戳 `last`，
+       晚声明会被它顶替，`last.s` 静默变成 undefined —— 形象就永远画不出来（且不报错）。 */
+    const last = index >= 1 ? D.moves[index - 1] : null
     const winnerSide = (D.result && D.result.side) || null
     const scene = isFinale ? (winnerSide === 'wolf' ? 'night' : 'day') : frame.scene
     const label = isFinale ? '终局' : frame.label
@@ -170,9 +192,10 @@
       }
     })
 
-    /* 主持人播报：出局与阶段由它一起说出，不再单独挂一条出局横幅。 */
+    /* 主持人播报：出局与阶段由它一起说出，不再单独挂一条出局横幅。
+       终局那一格整格让给胜负卡：最后一条结算播报就是它的正文（与 markup.mjs 同源）。 */
     const hostLine = isFinale
-      ? ((D.werewolf && D.werewolf.finale) || '')
+      ? ''
       : ((frame.step && frame.step.host) || (index === 0 ? (D.werewolf && D.werewolf.host) || '' : ''))
     const host = $('wwHost')
     host.hidden = !hostLine
@@ -182,21 +205,25 @@
     win.hidden = !isFinale
     if (isFinale) {
       win.dataset.side = winnerSide || 'draw'
-      win.innerHTML = `<b>${winnerSide === 'wolf' ? '狼人获胜' : winnerSide ? '好人获胜' : '比赛结束'}</b><span>${esc((D.result && D.result.message) || '')}</span>`
+      const body = (D.werewolf && D.werewolf.finaleBody) || (D.result && D.result.message) || ''
+      win.innerHTML = `<b>${winnerSide === 'wolf' ? '狼人获胜' : winnerSide ? '好人获胜' : '比赛结束'}</b><span>${esc(body)}</span>`
     }
 
     /* 执行者卡接管「谁在执行」：狼人杀没有棋盘，侧栏的 hero 行整块让给它
        （天数与阶段在舞台抬头里已经有了，不再重复一遍）。 */
     heroEl.hidden = true
     const actor = !isFinale && index >= 1 ? (D.players[D.moves[index - 1].p] || null) : null
+    /* 逐手条件：本手有发言才画人；终局与开局都没有「本手发言」，只留同高占位的 logo。 */
+    const wolfSpeaks = Boolean(String((last && last.s) || '').trim()) && Boolean(actor)
+    const wolfCompact = S.isCompactTurn(D.game.id, stage.dataset.layout)
     renderTurn(isFinale
       ? {
           kicker: '终局', name: winnerSide ? (winnerSide === 'wolf' ? '狼人阵营' : '好人阵营') : '比赛结束',
-          meta: `共 <b>${M}</b> 步`, tag: `<span class="pill win">${winnerSide === 'wolf' ? '狼人获胜' : '好人获胜'}</span>`, phase: 'finale',
+          meta: `共 <b>${M}</b> 步`, tag: `<span class="pill win">${winnerSide === 'wolf' ? '狼人获胜' : '好人获胜'}</span>`, phase: 'finale', compact: wolfCompact,
         }
       : actor
-        ? { player: actor, kicker: '本手执行', name: actor.name || '', meta: `<b>${index}</b> / ${M} 步`, tag: wolfPill(index, frame) }
-        : { kicker: '开局', name: '天黑请闭眼', meta: `<b>0</b> / ${M} 步` })
+        ? { player: actor, kicker: '本手执行', name: actor.name || '', speaks: wolfSpeaks, compact: wolfCompact, meta: `<b>${index}</b> / ${M} 步`, tag: wolfPill(index, frame) }
+        : { kicker: '开局', name: '天黑请闭眼', meta: `<b>0</b> / ${M} 步`, compact: wolfCompact })
 
     score.querySelectorAll('.pcard').forEach(card => {
       const i = Number(card.dataset.i)
@@ -210,16 +237,18 @@
         : (alive ? '' : '出局')
     })
 
-    /* 叙事区与进度（与棋类共用同一套侧栏元素） */
-    const last = index >= 1 ? D.moves[index - 1] : null
+    /* 叙事区与进度（与棋类共用同一套侧栏元素）；`last` 已在函数顶部取好。 */
     if (isFinale) {
       fmessage.textContent = (D.result && D.result.message) || '比赛已结束。'
       finale.dataset.kind = 'win'
       finale.querySelector('small').textContent = `终局 · ${winnerSide === 'wolf' ? '狼人阵营' : '好人阵营'}`
     } else if (last) {
-      who.innerHTML = `<img class="logo" src="${(WOLF_SEATS[last.p] || {}).logo || ''}" alt=""><b class="sn">${esc(D.players[last.p].name)}</b><em class="stag">本手发言</em>`
-      coord.textContent = S.actionLabel(last.a, D.game)
-      coord.hidden = false
+      who.innerHTML = `<img class="logo" src="${(WOLF_SEATS[last.p] || {}).logo || ''}" alt="">${wolfSeatNo(last.p)}<b class="sn">${esc(D.players[last.p].name)}</b>${wolfRoleTag(last.p)}<em class="stag">本手发言</em>`
+      /* 动作标签里的「发言」与署名上的「本手发言」胶囊重复：让位给模型名与身份。
+         夜刀 / 查验 / 投票这些带目标的标签仍然要显示。 */
+      const label = S.actionLabel(last.a, D.game)
+      coord.textContent = label
+      coord.hidden = WOLF && label === '发言'
       text.textContent = last.s
       text.style.fontSize = stepSize(last.s.length) + 'px'
     } else {
@@ -228,10 +257,11 @@
       text.textContent = '天黑请闭眼。'
       text.style.fontSize = stepSize(6) + 'px'
     }
-    const entries = visibleMoves(index).slice(-4, -1).reverse()
+    /* 回合记录 3 条 → 2 条：形象进执行者卡后卡片从 79px 长到 112px，这是让位的那一笔（与 markup.mjs 同口径）。 */
+    const entries = visibleMoves(index).slice(-3, -1).reverse()
     recentEl.hidden = isFinale || entries.length === 0
     rlist.innerHTML = entries
-      .map(m => `<div class="rentry"><b>${m.n} · ${esc(D.players[m.p].name)}</b><span>${esc(m.s)}</span></div>`).join('')
+      .map(m => `<div class="rentry"><b>${m.n} · ${wolfSeatNo(m.p)}${esc(D.players[m.p].name)}${wolfRoleTag(m.p)}</b><span>${esc(m.s)}</span></div>`).join('')
     const pct = (index / FINALE) * 100
     fill.style.width = `${pct}%`
     cursorEl.style.left = `calc(${pct}% - ${(pct * 0.065).toFixed(2)}px)`
@@ -465,6 +495,9 @@
       meta: turnPlayer ? `${esc(side(seat))} · ${seat === 0 ? '先手' : '后手'}` : '',
       kicker: isFinale ? (isDraw ? '终局' : '胜方') : (index >= 1 ? '本手执行' : '先手'),
       phase: isFinale ? 'finale' : 'move',
+      /* 开局与终局都没有「本手发言」，因此不画形象。 */
+      speaks: Boolean(turnPlayer) && Boolean(String((last && last.s) || '').trim()),
+      compact: S.isCompactTurn(D.game.id, stage.dataset.layout),
     })
 
     /* 记分板：执行者卡之下的常驻名册（active 已在上面算过） */

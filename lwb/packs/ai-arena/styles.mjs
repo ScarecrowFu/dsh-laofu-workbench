@@ -104,22 +104,41 @@ body[data-ds-dark-theme] .ar-page{
 .ar-match-view[data-game="xiangqi"] .ar-board,.ar-match[data-game="xiangqi"] .ar-board{aspect-ratio:508/562}
 .ar-board > svg{display:block;width:100%;height:100%}
 .ar-participants[data-game="werewolf"]{grid-template-columns:repeat(3,minmax(0,1fr))}
-.ar-stage{position:relative;width:calc(100% - 24px);aspect-ratio:16/9;margin:12px auto;overflow:hidden;border-radius:12px;background:#0B1119;box-shadow:0 16px 36px rgba(8,12,20,.35)}
+/* 狼人杀席位舞台：安全区契约 ------------------------------------------------------
+   舞台是固定 16:9 的画幅，从上到下依次是抬头、主持人播报（终局换成胜负卡）、场景留白、
+   本手台词、席位条带。每一段都参与布局流，不再有 top:20% / bottom:43.5% 这类只对 6 人局
+   成立的绝对定位数值：席位条带高度由行数（--ar-cast-band）决定，席卡高度由行高决定、
+   立绘按原比例居中，所以 8 / 9 人是「卡片变小一档」，不是「把 8 张卡撑出画幅、裁掉第一排」。
+   条带可收缩（flex:0 1 auto）：窄窗口下文字先保住可读下限，缺的高度由席卡让出来，
+   任何人数都不会再把抬头、台词或胜负卡挤出画面。 */
+.ar-stage{--ar-cast-band:40%;--ar-cast-cols:6;--ar-cast-rows:1;
+  position:relative;container-type:inline-size;width:calc(100% - 24px);aspect-ratio:16/9;margin:12px auto;overflow:hidden;border-radius:12px;background:#0B1119;box-shadow:0 16px 36px rgba(8,12,20,.35);
+  display:flex;flex-direction:column;padding:2.8% 3% 1.9%}
+/* 行数由人数决定（presentation.werewolfCastLayout）：8 / 9 人折成两行，条带多让一档高度。 */
+.ar-stage[data-rows="2"]{--ar-cast-band:48%}
+.ar-stage[data-rows="3"]{--ar-cast-band:52%}
 .ar-stage-scene{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 32%}
 .ar-stage-mask{position:absolute;inset:0;background:linear-gradient(180deg,rgba(6,10,16,.72),rgba(6,10,16,.12) 26%,rgba(6,10,16,.2) 50%,rgba(6,10,16,.88)),radial-gradient(120% 78% at 50% 46%,rgba(0,0,0,0) 38%,rgba(4,7,12,.66))}
 .ar-stage[data-scene="day"] .ar-stage-mask{background:linear-gradient(180deg,rgba(12,18,26,.46),rgba(12,18,26,.04) 26%,rgba(12,18,26,.14) 50%,rgba(10,16,24,.84)),radial-gradient(120% 78% at 50% 46%,rgba(0,0,0,0) 44%,rgba(20,26,18,.4))}
-.ar-stage-head{position:absolute;left:3%;top:5%;display:flex;flex-direction:column;align-items:flex-start;gap:4px}
-.ar-stage-day{display:inline-flex;align-items:center;height:20px;padding:0 9px;border-radius:999px;background:rgba(9,13,20,.55);border:1px solid rgba(255,255,255,.22);color:#E8EEF6;font-size:11px;font-weight:700;letter-spacing:.04em}
-.ar-stage-phase{font-size:clamp(14px,2.1vw,27px);font-weight:800;line-height:1.1;color:#fff;text-shadow:0 3px 16px rgba(0,0,0,.75)}
+.ar-stage-head{position:relative;z-index:2;flex:none;display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.ar-stage-day{display:inline-flex;align-items:center;height:20px;padding:0 9px;border-radius:999px;background:rgba(9,13,20,.55);border:1px solid rgba(255,255,255,.22);color:#E8EEF6;font-size:11px;font-size:clamp(9px,.92cqw,11px);font-weight:700;letter-spacing:.04em}
+.ar-stage-phase{font-size:clamp(14px,2.25cqw,27px);font-weight:800;line-height:1.1;color:#fff;text-shadow:0 3px 16px rgba(0,0,0,.75)}
 .ar-stage[data-scene="day"] .ar-stage-phase{color:#FFF7E6}
 .ar-stage[data-act="death"] .ar-stage-phase{color:#FFD9D3}
-.ar-stage-host{position:absolute;left:3%;top:20%;max-width:64%;display:flex;flex-direction:column;align-items:flex-start;gap:4px}
-.ar-host-badge{display:inline-flex;align-items:center;height:18px;padding:0 9px;border-radius:999px;background:rgba(224,163,46,.18);border:1px solid rgba(224,163,46,.55);color:#F2DCA8;font-size:10px;font-weight:800;font-style:normal;letter-spacing:.14em}
-.ar-stage-host p{margin:0;padding:5px 13px;border-radius:9px;background:rgba(8,12,18,.74);border:1px solid rgba(255,255,255,.14);color:#F6F1E4;font-size:13px;font-weight:700;line-height:1.45}
-.ar-stage-cast{position:absolute;left:2.4%;right:2.4%;bottom:3.4%;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:1.1%;align-items:end}
-.ar-cast{position:relative;margin:0;display:flex;flex-direction:column;align-items:center;gap:3px}
+.ar-stage-host{position:relative;z-index:2;flex:none;margin-top:4%;max-width:64%;display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.ar-host-badge{display:inline-flex;align-items:center;height:18px;padding:0 9px;border-radius:999px;background:rgba(224,163,46,.18);border:1px solid rgba(224,163,46,.55);color:#F2DCA8;font-size:10px;font-size:clamp(8px,.84cqw,10px);font-weight:800;font-style:normal;letter-spacing:.14em}
+/* 台词最多两行（line-clamp）：整句仍在 DOM 与 title 里，画面上不会把席位条带顶下去。 */
+.ar-stage-host p{margin:0;padding:5px 13px;border-radius:9px;background:rgba(8,12,18,.74);border:1px solid rgba(255,255,255,.14);color:#F6F1E4;font-size:13px;font-size:clamp(10px,1.08cqw,13px);font-weight:700;line-height:1.45;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+/* 场景留白：唯一可伸缩的一段。抬头、台词与席位条带都是 flex:none，谁也挤不掉谁。 */
+.ar-stage-center{position:relative;z-index:1;flex:1 1 auto;min-height:0}
+/* 席位条带：高度按行数取（可被压缩），列数 / 行数来自内联的 --ar-cast-cols / --ar-cast-rows。
+   上边距给第一排的席位号徽标（top:-8px）留位，终局没有台词时也不会压到胜负卡上。 */
+.ar-stage-cast{position:relative;z-index:2;flex:0 1 auto;min-height:0;height:var(--ar-cast-band);margin-top:1.6%;display:grid;grid-template-columns:repeat(var(--ar-cast-cols,6),minmax(0,1fr));grid-template-rows:repeat(var(--ar-cast-rows,1),minmax(0,1fr));column-gap:1.1%;row-gap:5%}
+.ar-cast{position:relative;margin:0;display:flex;flex-direction:column;align-items:center;gap:3px;height:100%;min-height:0}
 .ar-cast-no{position:absolute;left:50%;top:-8px;transform:translateX(-50%);z-index:2;display:flex;width:17px;height:17px;align-items:center;justify-content:center;border-radius:50%;background:rgba(10,14,22,.86);border:1px solid rgba(255,255,255,.34);color:#F2F6FB;font-size:10px;font-weight:800}
-.ar-cast-face{position:relative;display:block;width:100%;aspect-ratio:3/4;border-radius:9px;overflow:hidden;background:linear-gradient(180deg,rgba(24,34,48,.5),rgba(10,15,22,.72));border:1px solid rgba(255,255,255,.16);box-shadow:0 10px 22px rgba(3,6,12,.5);transition:border-color .25s ease,box-shadow .25s ease}
+/* 席卡高度由行高决定、宽度填满单元格：立绘按 2:3 居中留边。8 / 9 人是卡片变小，
+   画面预算（抬头 + 台词 + 条带）因此与人数无关，不需要为每个档位写一套魔数。 */
+.ar-cast-face{position:relative;display:block;width:100%;flex:1 1 auto;min-height:0;border-radius:9px;overflow:hidden;background:linear-gradient(180deg,rgba(24,34,48,.5),rgba(10,15,22,.72));border:1px solid rgba(255,255,255,.16);box-shadow:0 10px 22px rgba(3,6,12,.5);transition:border-color .25s ease,box-shadow .25s ease}
 .ar-cast-face img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;object-position:center bottom;transition:filter .3s ease,transform .25s ease}
 .ar-cast-veil{position:absolute;inset:0;background:linear-gradient(180deg,rgba(6,10,16,0) 48%,rgba(6,10,16,.6))}
 .ar-cast[data-active="true"] .ar-cast-face{border-color:#E0A32E;box-shadow:0 0 0 2px rgba(224,163,46,.5),0 12px 26px rgba(3,6,12,.6)}
@@ -129,8 +148,12 @@ body[data-ds-dark-theme] .ar-page{
 /* 终局：胜方阵营的席卡加金框，口径与离线回放的 data-win 一致；死掉的胜方仍保留灰化。 */
 .ar-cast[data-win="true"] .ar-cast-face{border-color:#E0A32E;box-shadow:0 0 0 2px rgba(224,163,46,.5),0 10px 22px rgba(3,6,12,.55)}
 .ar-cast-out{position:absolute;left:50%;bottom:4%;transform:translateX(-50%);padding:1px 7px;border-radius:999px;background:#B4342A;color:#fff;font-size:9px;font-weight:800;letter-spacing:.14em;white-space:nowrap}
-.ar-cast figcaption{display:flex;align-items:center;justify-content:center;gap:4px;max-width:100%}
+.ar-cast figcaption{display:flex;align-items:center;justify-content:center;gap:4px;max-width:100%;flex:none}
 .ar-cast figcaption b{font-size:10px;font-weight:700;color:#F3F7FC;text-shadow:0 1px 4px rgba(0,0,0,.85);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 窄舞台（窗口本身也窄）：两行席位每排只剩几十像素高，署名让位给立绘——姓名、身份、
+   席号在右侧「选手发言」表头与回合记录里都有，不靠这张小图。用 height:0 + overflow:hidden
+   而不是 display:none：文本留在 DOM 里，读屏与测试仍读得到。 */
+@container (max-width:600px){.ar-cast figcaption{height:0;overflow:hidden}}
 .ar-cast-badge{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 5px;border-radius:5px;background:var(--ar-green);color:#fff;font-size:9px;font-weight:800;font-style:normal;flex:none}
 .ar-cast-badge[data-badge="负"]{background:rgba(255,255,255,.22);color:#EAF0F7}
 .ar-role-mark{display:inline-flex;width:15px;height:15px;flex:none;align-items:center;justify-content:center;border-radius:4px;background:rgba(255,255,255,.86);color:#1B232C;font-size:9px;font-weight:800;font-style:normal}
@@ -138,11 +161,15 @@ body[data-ds-dark-theme] .ar-page{
 .ar-role-mark[data-role="seer"]{background:#5B93E0;color:#fff}
 .ar-role-mark[data-role="witch"]{background:#9A6BD6;color:#fff}
 .ar-role-mark[data-role="hunter"]{background:#E0A32E;color:#3A2A08}
-.ar-stage-line{position:absolute;left:8%;right:8%;bottom:43.5%;margin:0;padding:5px 12px;border-radius:8px;background:rgba(8,12,18,.72);color:#f4efe4;text-align:center;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ar-stage-win{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 26px;border-radius:14px;background:rgba(8,12,19,.74);border:1px solid rgba(224,163,46,.6);box-shadow:0 20px 50px rgba(2,5,10,.6);text-align:center}
-.ar-stage-win b{font-size:clamp(17px,2.3vw,30px);font-weight:900;letter-spacing:.06em;color:#E0A32E}
+/* 本手台词：坐在席位条带正上方（不再是写死的 bottom:43.5%，那个数值只对 6 人局成立）。
+   选择器必须带 .ar-stage 前缀：页面基线的 .ar-page p{margin:0} 是 (0,1,1)，
+   单写 .ar-stage-line 只有 (0,1,0)，左右留白会被它清成 0。 */
+.ar-stage .ar-stage-line{position:relative;z-index:2;flex:none;margin:0 5%;padding:5px 12px;border-radius:8px;background:rgba(8,12,18,.72);color:#f4efe4;text-align:center;font-size:13px;font-size:clamp(10px,1.08cqw,13px);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 终局卡：占主持人那一格，不再飘在画面正中压住席卡；条带因此永远在它下面。 */
+.ar-stage-win{position:relative;z-index:2;flex:none;align-self:center;max-width:82%;margin:2% 0;display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 24px;border-radius:14px;background:rgba(8,12,19,.74);border:1px solid rgba(224,163,46,.6);box-shadow:0 20px 50px rgba(2,5,10,.6);text-align:center}
+.ar-stage-win b{font-size:clamp(16px,2cqw,28px);font-weight:900;letter-spacing:.06em;color:#E0A32E}
 .ar-stage-win[data-side="wolf"] b{color:#FF7A6E}
-.ar-stage-win span{font-size:12px;font-weight:600;color:#EAF0F7;max-width:420px;line-height:1.5}
+.ar-stage-win span{font-size:11px;font-size:clamp(10px,.92cqw,12px);font-weight:600;color:#EAF0F7;max-width:520px;line-height:1.5}
 /* 最后一手的入场动画必须用 :last-of-type 而不是 :last-child：胜局图层会在棋子之后
    追加 <circle class="winring">，象棋本来也在棋子之后画最后一手圈，:last-child 会静默失效。 */
 .ar-board svg g:last-of-type{animation:ar-place .25s ease-out}
@@ -164,7 +191,15 @@ body[data-ds-dark-theme] .ar-page{
 .ar-pill{display:inline-flex;align-items:center;min-height:23px;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap;border:1px solid transparent;color:var(--lwb-muted);background:var(--lwb-page);border-color:var(--lwb-line)}
 .ar-pill[data-tone=win]{color:#fff;background:var(--ar-green);border-color:var(--ar-green)}
 .ar-pill[data-tone=warn]{color:var(--ar-amber);background:var(--ar-amber-soft);border-color:var(--ar-amber)}
-.ar-speaking{margin:0;padding:20px 18px;border-bottom:1px solid var(--lwb-line);min-height:180px;flex:none;background:var(--lwb-surface)}
+.ar-speaking{margin:0;padding:20px 18px;border-bottom:1px solid var(--lwb-line);min-height:180px;flex:none;background:var(--lwb-surface);display:flex;align-items:flex-start;gap:16px}
+.ar-speaking-body{flex:1;min-width:0}
+/* 观战页的模型形象：与离线回放/视频同源（只有人物、没有底板，logo 贴人物左上角）。
+   尺寸用 cqw 跟随窗口收缩——观战页是响应式窗口，而导出侧是固定画布（66×86）。 */
+.ar-speaking-figure{position:relative;flex:none;width:clamp(44px,5.4cqw,66px);aspect-ratio:66/86}
+.ar-speaking-face{position:absolute;left:0;bottom:0;width:100%;height:100%;object-fit:contain;object-position:center bottom;filter:drop-shadow(0 6px 13px rgba(20,24,26,.26))}
+.ar-speaking-mark{position:absolute;left:-4px;top:-4px;width:clamp(20px,2.3cqw,28px);aspect-ratio:1;border-radius:50%;background:#fff;box-shadow:0 2px 7px rgba(20,24,26,.28);outline:1.5px solid #fff}
+/* 本手没有发言：这一格里只有 logo，它就是主标（不画人，但盒子仍占位，高度不跳） */
+.ar-speaking-figure[data-quiet=true] .ar-speaking-mark{left:0;bottom:0;top:auto;width:clamp(34px,4.3cqw,52px);outline-width:0;box-shadow:0 2px 8px rgba(20,24,26,.16)}
 .ar-speaking-name{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:650;overflow-wrap:anywhere}
 .ar-speaking-name svg{width:16px;height:16px;flex:none;color:var(--ar-tone)}
 .ar-speaking p{font-size:18px;font-weight:600;line-height:1.75;margin:12px 0;overflow-wrap:anywhere}.ar-speaking small{font-size:12px;color:var(--lwb-muted)}
@@ -199,6 +234,26 @@ body[data-ds-dark-theme] .ar-page{
 .ar-speech-num{display:grid;place-items:center;width:24px;height:24px;flex:none;border-radius:6px;background:var(--lwb-page);color:var(--lwb-muted);font-size:11px;font-weight:650;font-variant-numeric:tabular-nums}
 .ar-speech strong{min-width:0;overflow-wrap:anywhere;font-size:12px;font-weight:600}.ar-speech small{margin-left:auto;color:var(--lwb-muted);font-size:11px;white-space:nowrap}
 .ar-speech p{margin:6px 0 0 32px;font-size:13px;line-height:1.65;overflow-wrap:anywhere}
+/* 席位与身份：狼人杀的发言署名与回合记录直接回答「几号、什么身份」。
+   从前只有模型名，观众得自己把名字对到舞台席卡上，而同供应商的不同模型经常同名。
+   村民在舞台上是白底深字（画在暗场景里），浅色侧栏照搬会看不见，所以这里自带一套
+   浅色配色，深色主题另给一档亮一点的文字色。两个元素都 flex:none：模型名可以被压行，
+   席号与身份不能被压掉。棋类不渲染它们。 */
+.ar-seat{flex:none;color:var(--lwb-muted);font-size:11px;font-weight:650;font-variant-numeric:tabular-nums}
+.ar-speech .ar-seat{margin-right:-2px}
+.ar-role{display:inline-flex;align-items:center;gap:5px;flex:none;margin-left:-2px;font-size:11px;font-weight:700;font-style:normal;color:var(--ar-role-ink,#4A555F)}
+.ar-role i{display:inline-flex;width:15px;height:15px;align-items:center;justify-content:center;border-radius:4px;background:var(--ar-role-fill,#6B7684);color:var(--ar-role-on,#fff);font-size:9px;font-weight:800;font-style:normal}
+.ar-role[data-role=werewolf]{--ar-role-fill:#D9534A;--ar-role-ink:#A93127}
+.ar-role[data-role=seer]{--ar-role-fill:#5B93E0;--ar-role-ink:#2C5FA8}
+.ar-role[data-role=witch]{--ar-role-fill:#9A6BD6;--ar-role-ink:#6B44A3}
+/* 琥珀底配白字看不清：猎人徽记与舞台席卡一样用深字。 */
+.ar-role[data-role=hunter]{--ar-role-fill:#E0A32E;--ar-role-on:#3A2A08;--ar-role-ink:#8A610F}
+.ar-role[data-role=villager]{--ar-role-fill:#6B7684;--ar-role-ink:#4A555F}
+body[data-ds-dark-theme] .ar-page .ar-role[data-role=werewolf]{--ar-role-ink:#F0A29B}
+body[data-ds-dark-theme] .ar-page .ar-role[data-role=seer]{--ar-role-ink:#A8C8F2}
+body[data-ds-dark-theme] .ar-page .ar-role[data-role=witch]{--ar-role-ink:#C6ABEC}
+body[data-ds-dark-theme] .ar-page .ar-role[data-role=hunter]{--ar-role-ink:#EBC77E}
+body[data-ds-dark-theme] .ar-page .ar-role[data-role=villager]{--ar-role-ink:#C3CCD6}
 .ar-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:14px 4px;border-top:1px solid var(--lwb-line);border-bottom:1px solid var(--lwb-line)}
 .ar-stat{display:grid;gap:5px;min-width:0;padding:0 16px;border-left:1px solid var(--lwb-line)}.ar-stat:first-child{border-left:0}
 .ar-stat span{color:var(--lwb-muted);font-size:12px}.ar-stat strong{font-size:20px;line-height:1.3;font-weight:650;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}

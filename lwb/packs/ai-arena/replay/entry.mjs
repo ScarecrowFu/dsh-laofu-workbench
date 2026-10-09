@@ -5,6 +5,6 @@
  *
  * 由 build-replay.mjs 打包成 replay/runtime.js（IIFE，无 import，可内联进单文件 HTML）。
  */
-import { boardSvg, actionLabel, playerSide, gameName } from '../presentation.mjs'
+import { boardSvg, actionLabel, playerSide, gameName, isCompactTurn } from '../presentation.mjs'
 
-globalThis.ArenaScene = { boardSvg, actionLabel, playerSide, gameName }
+globalThis.ArenaScene = { boardSvg, actionLabel, playerSide, gameName, isCompactTurn }

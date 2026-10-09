@@ -49,15 +49,20 @@ function snapshotOf(state, deaths = [], roles = null, narration = state.narratio
  *   形状与字段顺序和从前逐字一致，`replay/data.mjs` 摘掉 `snapshot` 后原样落进产物；
  * - `snapshot`：给 werewolfStage 用的那一刻公开局面，观战页往回拖时画它。
  *
- * **主持人台词锚在这一手的开场，不是这一手的结算。** `host` 取的是「这一步开始时生效的那句播报」
- * （即上一步打完之后的状态），因为回放/视频/观战都是「主持人先说、选手后说」：一帧里主持人台词与
- * 这一手的发言同时出现、配音里主持人先响。规则层却在行动推进**之后**才写 narration，所以直接取
- * `after.narration` 会让每条结算播报提前到造成它的那一手 —— 白天最后一位发言者那一帧就会先说
- * 「发言结束，请投票放逐一名玩家。」再说他自己的发言（用户报的就是这一处）。
- * 于是每一步携带的是 `state.narration`（进入这一步时），而不是 `after.narration`。
+ * **一帧只讲一个时刻：这一步开场。** `host` 取的是「这一步开始时生效的那句播报」（即上一步打完之后
+ * 的状态），存活、出局、天数与阶段也取同一刻 —— 回放/视频/观战都是「主持人先说、选手后说」：
+ * 一帧里主持人台词与这一手的发言同时出现、配音里主持人先响。规则层却在行动推进**之后**才写
+ * narration 与出局，所以直接取 `after` 会让每条结算播报提前到造成它的那一手（白天最后一位发言者
+ * 那一帧就会先说「发言结束，请投票放逐一名玩家。」再说他自己的发言）。
+ *
+ * 存活与出局同样取这一步开场，于是**宣布与出局同帧**：本手的结果出现在下一手那一帧，由主持人
+ * 当场说出来、画面同时画出来。`deaths` 因此是「相对上一帧的增量」，也就是这一步开场时刚被宣布的
+ * 那一批出局（出局动效与进度条上的关键手刻度都跟着落在宣布那一帧）。
  *
  * 代价是最后一手的结算播报没有「下一手」可挂（谁被放逐、猎人带走了谁），它交给终局卡：
- * 这里单独给出 `closing`，由 `replay/data.mjs` 拼进终局文案与终局那一手的配音。
+ * 这里单独给出 `closing`，由 `replay/data.mjs` 拼进终局文案与终局那一手的配音。**最后一手的
+ * 存活名单与出局也一样**（`finalAlive` / `finalDeaths`）：终局帧不能再从最后一手的快照里推，
+ * 否则最后一手出局的人会在终局席位上「复活」。
  *
  * 不是狼人杀返回 null（调用方本来就按 game.id 分流）；是狼人杀但档位取不到 seed 或重放中途
  * 失败时，`replayable` 为 false、`steps` 为空，画面退回「只播发言、不画身份」的旧行为。
@@ -78,6 +83,9 @@ export function werewolfTimeline(match) {
     winnerSide: typeof match.state?.winner === 'string' ? match.state.winner : null,
     terminalReason: match.state?.terminalReason || match.result?.message || '',
     host: WEREWOLF_OPENING,
+    /* 最后一手的存活与出局（终局帧用）：不可重放时为 null，调用方回落到记录自己的 state。 */
+    finalAlive: null,
+    finalDeaths: [],
     /* 整局重放到底时最后一条结算播报：没有下一手可挂，由终局卡接管。 */
     closing: '',
   }
@@ -90,16 +98,20 @@ export function werewolfTimeline(match) {
   /* 画面上的身份取落盘那一份（replay/data.mjs 的席卡也是这么取的，两处同源）。 */
   const dealt = (match.state?.players || []).map(player => player.role)
   const opening = snapshotOf(state, [], dealt), steps = []
+  /* 已经画过的出局数：每一步的 `deaths` 是相对上一帧的增量，也就是这一步开场时主持人
+     刚刚宣布完的那一批。 */
+  let shown = 0
   for (const move of movesOf(match)) {
-    /* 抬头取「动作发生在哪个阶段」，存活与出局取「这一步打完之后」——
-       与离线回放的逐手描述同一条口径（replay/app.js 的 wolfFrame 就是这么读的）。 */
+    /* 一帧 = 这一步开场时观众已经知道的局面：存活、出局、天数、阶段与台词取的都是 apply
+       之前的那一刻。规则是在行动推进**之后**才写出局与结算播报，所以本手的结果一律出现在
+       下一手那一帧 —— 由主持人当场宣布、画面同时画出（宣布与出局同帧）。
+       从前存活与出局取的是 `after`，于是「出局」永远比宣布它的那句话早一帧：
+       复投最后一票那一帧就把被放逐者画成出局，而主持人还在说「进入复投」；
+       夜里被刀的人也在夜里就灰化，天亮宣布时才第一次被说出来。 */
     const phase = state.phase, hunterCause = state.hunterCause || null, day = state.day
-    /* 台词取「这一步开场」：规则层是在行动推进之后才写 narration 的，直接读 after 会把结算播报
-       提前到造成它的那一手（见上面的说明）。 */
     const host = werewolfHostLine({ narration: state.narration })
-    let after
-    try { after = werewolf.apply(state, move.action, move.player) } catch { return timeline }
-    const deaths = after.deaths.slice(state.deaths.length).map(death => death.seat)
+    const deaths = state.deaths.slice(shown).map(death => death.seat)
+    shown = state.deaths.length
     steps.push({
       n: move.moveNumber,
       seat: move.player + 1,
@@ -107,16 +119,22 @@ export function werewolfTimeline(match) {
       label: werewolfPhaseLabel(phase, hunterCause),
       scene: werewolfScene(phase, hunterCause),
       day,
-      alive: after.players.filter(player => player.alive).map(player => player.seat),
+      alive: state.players.filter(player => player.alive).map(player => player.seat),
       deaths,
       host,
-      snapshot: { ...snapshotOf(after, deaths, dealt, state.narration), phase, hunterCause, day },
+      snapshot: { ...snapshotOf(state, deaths, dealt, state.narration), phase, hunterCause, day },
     })
+    let after
+    try { after = werewolf.apply(state, move.action, move.player) } catch { return timeline }
     state = after
   }
   timeline.opening = opening
   timeline.steps = steps
   timeline.replayable = true
+  /* 最后一手的结果没有「下一手」那一帧可挂：终局卡承接。席位名单与出局动效都要给终局的调用方，
+     否则最后一手被放逐/带走的人会在终局帧里「复活」。 */
+  timeline.finalAlive = state.players.filter(player => player.alive).map(player => player.seat)
+  timeline.finalDeaths = state.deaths.slice(shown).map(death => death.seat)
   /* 重放到底之后状态上剩下的最后一条播报：它是「整局结束」那一句，交给终局卡。 */
   timeline.closing = werewolfHostLine({ narration: state.narration })
   /* 只有整局重放到底，才敢用重放出的阵营覆盖记录自己的口径。 */
@@ -127,13 +145,16 @@ export function werewolfTimeline(match) {
 /**
  * 观战页停在 `currentStep` 时该画哪一份局面。
  *
- * 跟随最新回合（`currentStep` 已到最后一手）一律用记录自己的 state：那条路径与逐手投影无关，
- * 规则之外的现场信息（例如本手发言）不会因此丢掉，直播中的抬头、席位与终局图层照旧。
- * 只有真正往回拖，才换成第 `currentStep` 步的快照 —— 这正是「点播放从头播一次」的落点。
- *
- * 唯一例外是主持人台词：最新一帧的 `state.narration` 已经是这一手的**结算**播报，而这一帧同时
- * 还在显示本手的发言（观战页与回放/视频同一条契约：一帧里主持人先说、选手后说），所以这里换用
- * 这一手的开场播报。否则直播里最后一位发言者那一帧同样会先说「发言结束，请投票放逐一名玩家。」。
+ * 一帧只讲一个时刻（与逐手投影同一条契约）：
+ * - 往回拖（`currentStep` 小于手数）画第 `currentStep` 步的快照 —— 那一步**开场**的公开局面；
+ * - 停在最新（`currentStep` 到最后一手）分两种现场：
+ *   - 下一位选手的回合已经在飞（`activeTurn` 有值）：观众已经从上一位的结算播报里听到结果，
+ *     画面要与那句播报同一个时刻 —— 直接用记录自己的 `state`（存活与台词都是这一刻，
+ *     `state.narration` 的最后一条就是刚才那句结算）。否则会出现「主持人还在说上一步的引导，
+ *     席位却已经画出上一步的结果」。
+ *   - 空闲停在最后一手（暂停、或刚结算完还没轮到下一位）：这一帧仍是「最后一手」那一帧，
+ *     取它的开场快照 —— 台词与存活都停在那一刻，本手的结果等下一帧（结算播报）再画。
+ * - 终局（记录里已有胜负）一律用记录自己的 state：终局台词要把最后一条结算播报一起说完。
  */
 export function werewolfStageState(match, timeline, currentStep) {
   if (!timeline?.replayable) return match.state
@@ -141,8 +162,8 @@ export function werewolfStageState(match, timeline, currentStep) {
     /* 已经分出胜负时 stage 说的是裁决文案：终局那一帧的台词由 werewolfHostLine 的 finale 分支
        给出，它要把最后一条结算播报一起说完，所以这里不能把台词换成开场播报。 */
     if (typeof match.state?.winner === 'string') return match.state
-    const opening = timeline.steps.at(-1)?.snapshot?.narration
-    return Array.isArray(opening) && opening.length ? { ...match.state, narration: opening } : match.state
+    if (match.activeTurn?.turnId) return match.state
+    return timeline.steps.at(-1)?.snapshot || match.state
   }
   return currentStep <= 0 ? timeline.opening : timeline.steps[currentStep - 1].snapshot
 }

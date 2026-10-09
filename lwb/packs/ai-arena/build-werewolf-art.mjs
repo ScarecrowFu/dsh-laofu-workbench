@@ -1,5 +1,8 @@
 /**
- * 把 assets/werewolf 下的昼夜场景与六席立绘打成 werewolf-art.mjs（内联 data URL）。
+ * 把 assets/werewolf 下的昼夜场景打成 werewolf-art.mjs（内联 data URL）。
+ *
+ * **只装狼人杀专属的昼夜场景**：选手形象是跨游戏共用的模型身份资产，
+ * 已移到 assets/models 并由 build-model-art.mjs 产出 model-art.mjs。
  *
  * 观战与视频都在浏览器里跑，不能读文件系统；离线 HTML 还要自包含、零网络。
  * 所以图片一律以 data URL 形式随模块分发。素材是唯一事实源，改完必须重新执行本脚本。
@@ -27,9 +30,7 @@ async function collect(directory) {
   }))
 }
 
-/* 立绘命名约定：`<模型>.jpg` 与 `<模型>-dead.jpg`，观战按 key 取图。 */
 const scenes = Object.fromEntries(await collect('scenes'))
-const portraits = Object.fromEntries(await collect('characters'))
 
-await writeFile(OUTPUT, `/* 由 build-werewolf-art.mjs 从 assets/werewolf 生成，请勿手改。 */\nexport const WEREWOLF_ART = ${JSON.stringify({ scenes, portraits })}\n`)
-console.log(`werewolf-art.mjs 已生成：${Object.keys(scenes).length} 个场景，${Object.keys(portraits).length} 张立绘`)
+await writeFile(OUTPUT, `/* 由 build-werewolf-art.mjs 从 assets/werewolf 生成，请勿手改。 */\nexport const WEREWOLF_ART = ${JSON.stringify({ scenes })}\n`)
+console.log(`werewolf-art.mjs 已生成：${Object.keys(scenes).length} 个场景`)

@@ -196,11 +196,32 @@ test('客户端源码与产物里都没有未声明的标识符', async () => {
   }
 })
 
-/* 终局图层（五连金带 / 点亮环 / 终局胶囊 / 胜和徽标）只活在呈现层：源码改了不重建产物，
-   软件里就是「改了但没生效」。这里按产物里的字面量核对，不依赖未被压缩的标识符。 */
-test('客户端产物带上终局图层，源码与样式改动必须重新 arena:build', async () => {
+/* 终局图层（五连金带 / 点亮环 / 终局胶囊 / 胜和徽标）与席位身份（席号 + 徽记 + 中文名）
+   只活在呈现层：源码改了不重建产物，软件里就是「改了但没生效」。
+   这里按产物里的字面量核对，不依赖未被压缩的标识符。 */
+test('客户端产物带上终局图层与席位身份，源码与样式改动必须重新 arena:build', async () => {
   const bundle = await readFile(join(HERE, '..', 'client.js'), 'utf8')
-  for (const marker of ['winband', 'winring', '#F0B429', 'ar-pill', 'ar-player-badge', 'ar-cast-badge', 'ar-winring']) {
+  for (const marker of ['winband', 'winring', '#F0B429', 'ar-pill', 'ar-player-badge', 'ar-cast-badge', 'ar-winring', 'ar-seat', 'ar-role', 'ar-speaking-figure', 'ar-speaking-face']) {
     assert.ok(bundle.includes(marker), `client.js 缺少 ${marker}：改了 presentation.mjs / styles.mjs / client-source.mjs 之后必须执行 npm run arena:build`)
   }
+})
+
+/* 观战页与导出侧的形象必须同源（同一个模型标识、同一批素材、同一套逐手条件）。
+   观战页是各写一套渲染，最容易漂移的就是这里。 */
+test('观战页的模型形象与导出侧同源：同一份分配、同一批素材、同一套逐手条件', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(join(HERE, '..', 'client-source.mjs'), 'utf8')
+  /* 形象必须来自 model-art.mjs 的 full 档（与席卡同一张图），不是另取一套。 */
+  assert.match(source, /MODEL_ART\.full\[portrait\]/u, '观战页形象没有走 MODEL_ART.full')
+  assert.match(source, /MODEL_ART\.logos\[logoKey\(player\)\]/u, '观战页 logo 没有走 MODEL_ART.logos')
+  /* 整局分配只在呈现层算一次，与 replay/data.mjs 用同一个 assignPortraits。 */
+  assert.match(source, /assignPortraits\(match\.players \|\| \[\]\)/u, '观战页没有用 assignPortraits 做整局分配')
+  /* 逐手条件：本手有发言才画人。 */
+  assert.match(source, /const actorSpeaks = !thinking && Boolean\(String\(frame\.current\?\.speech \|\| ''\)\.trim\(\)\)/u, '观战页缺少逐手条件')
+  /* 版式口径：形象那一格不许有底板（否则又会变成一块黑底）。 */
+  const { CSS } = await import('../styles.mjs')
+  const figure = CSS.match(/(?:^|\n)\.ar-speaking-figure\{([^}]*)\}/u)
+  assert.ok(figure, 'styles.mjs 缺少 .ar-speaking-figure')
+  assert.doesNotMatch(figure[1], /background/u, '形象那一格不能有背景色')
+  assert.match(CSS, /\.ar-speaking-figure\[data-quiet=true\] \.ar-speaking-mark\{/u, '无发言时 logo 要变成这一格的主标')
 })

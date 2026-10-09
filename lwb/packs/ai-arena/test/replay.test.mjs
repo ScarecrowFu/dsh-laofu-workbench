@@ -8,6 +8,7 @@ import { replayData } from '../replay/data.mjs'
 import { isKeyMove, stageHtml } from '../replay/markup.mjs'
 import { AUDIO_TAIL_SECONDS, FINALE_SECONDS, frameToStep, stepSeconds, totalFrames } from '../replay/timeline.mjs'
 import { assignVoices, matchVoiceKey } from '../voices.mjs'
+import { MODEL_ART } from '../model-art.mjs'
 import { SCENE_CSS } from '../replay/styles.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -19,6 +20,17 @@ const gomoku = {
   events: [[8, 8, 0], [8, 9, 1], [9, 8, 0], [9, 9, 1], [10, 8, 0], [10, 9, 1], [11, 8, 0], [11, 9, 1], [12, 8, 0]].map(([r, c, p], i) => ({ ...move(r, c, p), moveNumber: i + 1 })),
   status: 'finished', result: { kind: 'win', winner: 0, message: '黑模型 连成五子，获胜。' },
 }
+
+/* 狼人杀夹具：只用于「形象与席卡同源」这一条，阵容与规则无关。 */
+const werewolfFixture = () => ({
+  id: 'cccccccc-cccc-cccc-cccc-cccccccccccc', title: '狼人杀演示',
+  game: { id: 'werewolf', name: '狼人杀', description: '规则', version: '1.1.0' },
+  players: ['qwen3.8-max', 'deepseek-v4.1-flash', 'glm-5.3', 'kimi-k3'].map(model => ({ name: model, provider: 'bailian', model })),
+  config: { seed: 1, seats: 4 },
+  state: { players: [{ seat: 1, role: 'werewolf' }, { seat: 2, role: 'seer' }, { seat: 3, role: 'villager' }, { seat: 4, role: 'villager' }] },
+  events: [[0, 1], [1, 2]].map(([player, row], i) => ({ type: 'move', moveNumber: i + 1, player, action: { type: 'speak' }, speech: `第 ${i + 1} 步发言`, phase: 'day-speech' })),
+  status: 'finished', result: { kind: 'win', winner: 'village', message: '好人获胜。' },
+})
 
 test('styles.mjs stays in sync with replay/scene.css', async () => {
   const css = await readFile(join(HERE, '..', 'replay', 'scene.css'), 'utf8')
@@ -103,6 +115,56 @@ test('帧驱动 markup 覆盖逐手与终局，且关键手特效按档位生效
   assert.equal((finale.match(/class="winring"/gu) || []).length, 5)
   assert.equal((finale.match(/class="pcard"/gu) || []).length, 2)
   assert.match(finale, /class="logo"/u)
+})
+
+/* ---------------------------------------------------------------- 执行者卡里的模型形象
+   口径：只有人物、没有底板；logo 贴在人物左上角；**本手有发言才画人**；
+   没有发言时只留 logo（同高占位）。三档：横屏/标准竖屏 66×86 在左，象棋竖屏 46×58 在右。 */
+test('replayData 给每一款游戏的选手都产出形象键', () => {
+  /* gomoku 夹具的模型名是 black/white，命中不了家族——所以另取一份用真实模型名的。 */
+  const named = { ...gomoku, players: [{ name: 'qwen3.8-max', provider: 'bailian', model: 'qwen3.8-max' }, { name: 'deepseek-v4.1-flash', provider: 'bailian', model: 'deepseek-v4.1-flash' }] }
+  const chess = replayData(named)
+  assert.equal(chess.players.length, 2)
+  for (const player of chess.players) assert.equal(typeof player.portrait, 'string', '棋类选手也要有形象（跨游戏共用）')
+  assert.deepEqual(chess.players.map(player => player.portrait), ['qwen', 'deepseek'], '命中家族就拿主图')
+  /* 未命中家族的选手仍按座位错开出图，而且与音色的兜底互不影响 */
+  const unknown = replayData(gomoku)
+  assert.deepEqual(unknown.players.map(player => player.portrait), ['chatgpt', 'claude'])
+  assert.deepEqual(assignVoices(gomoku.players), ['generic-1', 'generic-2'])
+  /* 狼人杀走同一次整局分配：侧栏形象与舞台席卡必须同一张 */
+  const wolf = replayData(werewolfFixture())
+  assert.deepEqual(wolf.players.map(player => player.portrait), wolf.werewolf.seats.map(seat => seat.portrait))
+})
+
+test('执行者卡：本手有发言才画人，开局与终局都只留 logo 占位', () => {
+  const data = replayData(gomoku)
+  const mid = stageHtml(data, 5, { layout: 'landscape', t: 1 })
+  assert.match(mid, /class="turn-figure">/u, '有发言时形象格在流里')
+  assert.match(mid, /class="turn-face"/u)
+  assert.match(mid, /class="turn-mark"/u, 'logo 贴在形象左上角')
+  /* 素材真进来了：形象是带 alpha 的 WebP，logo 是 PNG */
+  assert.match(mid, /class="turn-face" src="data:image\/webp;base64,UklGR/u)
+  assert.match(mid, /class="turn-mark" src="data:image\/png;base64,iVBO/u)
+  for (const [label, index] of [['开局', 0], ['终局', 10]]) {
+    const frame = stageHtml(data, index, { layout: 'landscape', t: 1 })
+    assert.equal(/class="turn-face"/u.test(frame), false, `${label}没有本手发言，不能画人`)
+    assert.match(frame, /class="turn-figure" data-quiet="true"/u, `${label}要留同高占位`)
+  }
+})
+
+test('执行者卡三档：象棋竖屏走紧凑档（形象放右、用胸像），其余档形象在左', () => {
+  const xiangqi = { ...gomoku, game: { id: 'xiangqi', name: '中国象棋', description: '规则', version: '1.0.0' }, result: { kind: 'win', winner: 0, message: 'x' } }
+  const data = replayData(xiangqi)
+  const land = stageHtml(data, 5, { layout: 'landscape', t: 1 })
+  assert.equal(/data-compact="true"/u.test(land), false, '横屏永远是标准档')
+  const port = stageHtml(data, 5, { layout: 'portrait', t: 1 })
+  assert.match(port, /class="turn" data-phase="move" data-compact="true"/u, '象棋竖屏走紧凑档')
+  /* 紧凑档用胸像（320×320 的方形图），标准档用半身（320×480）：图不一样才说明取的是不同档。 */
+  const bust = MODEL_ART.bust[data.players[0].portrait]
+  assert.ok(bust && port.includes(bust), '紧凑档必须取胸像')
+  assert.equal(land.includes(bust), false, '标准档不该用胸像')
+  /* 五子棋竖屏仍是标准档（侧栏 560px 装得下） */
+  assert.equal(/data-compact="true"/u.test(stageHtml(replayData(gomoku), 5, { layout: 'portrait', t: 1 })), false)
 })
 
 test('markup 的棋子坐标常量与 presentation.mjs 的绘制一致', () => {
@@ -201,6 +263,8 @@ test('每一手都有一张写明执行模型的执行者卡', () => {
   }
   /* 署名跟着画面最大的那句字幕走，不再是一行 12px 的元数据 */
   assert.match(stageHtml(data, 5, { layout: 'landscape', t: 0.5 }), new RegExp(`<b class="sn">${data.players[data.moves[4].p].name}</b><em class="stag">本手发言</em>`, 'u'))
+  /* 席号与身份是狼人杀专有的：棋类的署名与回合记录一个身份元素都不该有 */
+  assert.doesNotMatch(stageHtml(data, 5, { layout: 'landscape', t: 0.5 }), /class="sseat"|class="srole"/u)
 })
 
 test('换手节拍：执行者卡先到、落子随后、台词最后', async () => {
@@ -234,4 +298,7 @@ test('执行者卡与字幕署名的字号守住手机可读下限', async () =>
   assert.ok(px(/\.sn\{font-size:(\d+)px/u) >= 20, '字幕署名不小于 20px')
   assert.ok(px(/\.stage\[data-layout="portrait"\] \.sn\{font-size:(\d+)px/u) >= 20, '竖屏字幕署名不小于 20px')
   assert.ok(px(/\.shead \.logo\{width:(\d+)px/u) >= 24, '署名的 logo 不小于 24px')
+  /* 身份标签是同排的次级信息：不能小于「本手发言」胶囊与动作标签，否则加了等于没加 */
+  assert.ok(px(/\n\.sseat\{[^}]*font-size:(\d+)px/u) >= 14, '署名里的席号不小于 14px')
+  assert.ok(px(/\n\.srole\{[^}]*font-size:(\d+)px/u) >= 14, '署名里的身份标签不小于 14px')
 })

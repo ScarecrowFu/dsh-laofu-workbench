@@ -5,11 +5,12 @@ import { lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/pro
 import { createHash, randomUUID } from 'node:crypto'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { movesOf, escapeHtml, actionLabel, playerSide, matchTitle } from './presentation.mjs'
+import { movesOf, escapeHtml, actionLabel, playerSide, matchTitle, COMPACT_TURN_GAMES } from './presentation.mjs'
 import { replayData } from './replay/data.mjs'
 import { stepStarts, totalFrames } from './replay/timeline.mjs'
 import { LOUDNESS_VERSION, clipDataUrl, countSpeechLines, synthesizeSpeech } from './speech.mjs'
 import { WEREWOLF_ART } from './werewolf-art.mjs'
+import { MODEL_ART } from './model-art.mjs'
 
 const exec = promisify(execFile)
 const ROOT = dirname(fileURLToPath(import.meta.url))
@@ -31,16 +32,30 @@ function replayAssets() {
 /** 用 {{KEY}} 占位符渲染骨架；替换值按字面插入，不做 $ 转义。 */
 const fillTemplate = (template, vars) => template.replace(/\{\{(\w+)\}\}/gu, (match, key) => (key in vars ? vars[key] : match))
 
-/** 离线 HTML 要自包含：只内联这一局真正用到的场景与立绘，不把全部素材塞进去。 */
+/**
+ * 离线 HTML 要自包含：只内联这一局真正用到的素材，不把全部形象塞进去。
+ * 昼夜场景是狼人杀专属；形象是跨游戏共用的——**任何游戏**的执行者卡都要用到它，
+ * 所以这里按「选手用到的形象」内联，而不是只在狼人杀时内联。
+ */
 function replayArt(data) {
-  if (data.game.id !== 'werewolf') return 'null'
-  const portraits = {}
-  for (const seat of data.werewolf?.seats || []) {
-    for (const key of ['generic', seat.portrait, `${seat.portrait}-dead`]) {
-      if (WEREWOLF_ART.portraits[key]) portraits[key] = WEREWOLF_ART.portraits[key]
+  const full = {}, bust = {}
+  const pick = (key, dead) => {
+    if (!key) return
+    for (const name of ['generic', key, dead ? `${key}-dead` : null]) {
+      if (!name) continue
+      if (MODEL_ART.full[name]) full[name] = MODEL_ART.full[name]
     }
+    if (MODEL_ART.bust[key]) bust[key] = MODEL_ART.bust[key]
   }
-  return JSON.stringify({ scenes: WEREWOLF_ART.scenes, portraits }).replace(/</gu, '\\u003c')
+  for (const player of data.players || []) pick(player.portrait, false)
+  for (const seat of data.werewolf?.seats || []) pick(seat.portrait, true)
+  return JSON.stringify({
+    /* 昼夜场景是狼人杀专属：棋盘类产物带上它只是白拎 ~85 KB（base64）。 */
+    scenes: data.game.id === 'werewolf' ? WEREWOLF_ART.scenes : {},
+    portraits: full,
+    /* 胸像只在紧凑档用得到；离线回放可以实时切横竖屏，所以能走到紧凑档的游戏才内联。 */
+    busts: COMPACT_TURN_GAMES.includes(data.game.id) ? bust : {},
+  }).replace(/</gu, '\\u003c')
 }
 
 /* ------------------------------------------------------------------ 成片复用
@@ -56,14 +71,21 @@ function replayArt(data) {
    不再互相覆盖（旧代码里它们共用一个 `<画幅>.mp4`）。旧记录没有这份索引，
    照旧渲染一次并补写；索引与产物都留在比赛目录，重启后依然可复用。 */
 export const RENDER_INPUTS = [
-  'video.mjs', 'presentation.mjs', 'voices.mjs', 'werewolf-art.mjs', 'werewolf-projection.mjs',
+  'video.mjs', 'presentation.mjs', 'voices.mjs', 'models.mjs', 'model-art.mjs', 'werewolf-art.mjs', 'werewolf-projection.mjs',
   'replay/markup.mjs', 'replay/data.mjs', 'replay/styles.mjs', 'replay/timeline.mjs',
   /* 离线 HTML 的骨架与播放器也内联进产物，但它们不是模块（闭包走不到）：漏一份就会出现
      「修好了播放器，导出却交回旧回放」。终局配音那次改动正是靠这一条才让旧产物失效。 */
   'replay/page.html', 'replay/shell.css', 'replay/app.js',
 ]
 /** 渲染链路版本：Remotion / FFmpeg / 编码参数变了就 +1；画面源文件改动由上面的摘要兜住。 */
-const PIPELINE_VERSION = 1
+const PIPELINE_VERSION = 2
+/** 出片分辨率倍率。构图按 1280×720 / 720×1280 授权，但 1× 光栅化 + 720p 出片在 2× 屏上会被
+    播放器放大一倍：实测量化只有 VMAF 44（不足 60 即「差」），同一帧改成 2× 光栅化后到 90+。
+    这是清晰度的主旋钮 —— 只换编码参数换不回来。改它必须同步 +PIPELINE_VERSION，
+    否则旧成片会被算成同一份渲染输入而继续复用。 */
+const VIDEO_SCALE = 2
+/** 有 2× 光栅化兜底之后 CRF 才是第二位旋钮：23 → 16 实测再涨约 4 分 VMAF，代价约 ×3.2 体积。 */
+const VIDEO_CRF = 16
 /** 每场比赛最多留几份成片：模板升级后旧键再也不会被命中，留着只会占盘。 */
 const MAX_ARTIFACTS = 8
 /** 产物文件名由服务端生成，下载与清理时仍按白名单复核，不接受带路径分隔符的名字。 */
@@ -344,12 +366,13 @@ export async function renderVideo(match, directory, { orientation, secondsPerMov
     /* 视频与离线 HTML 共用同一份投影：同一组手数、关键手、连子和终局文案。 */
     const props = { data, layout: orientation, secondsPerMove, durations: audio ? durations : null }
     const silent = join(directory, `${stem}.silent.mp4`)
-    await renderMedia({ serveUrl, composition: { id: 'Arena', width, height, fps, durationInFrames: frames, defaultProps: {}, props, defaultCodec: null, defaultOutName: null, defaultVideoImageFormat: null, defaultPixelFormat: null }, inputProps: props, outputLocation: audio?.size ? silent : temporary, codec: 'h264', crf: 23, pixelFormat: 'yuv420p', browserExecutable, cancelSignal, concurrency: 2, chromiumOptions: { gl: 'swiftshader' } })
+    await renderMedia({ serveUrl, composition: { id: 'Arena', width, height, fps, durationInFrames: frames, defaultProps: {}, props, defaultCodec: null, defaultOutName: null, defaultVideoImageFormat: null, defaultPixelFormat: null }, inputProps: props, outputLocation: audio?.size ? silent : temporary, codec: 'h264', crf: VIDEO_CRF, pixelFormat: 'yuv420p', scale: VIDEO_SCALE, browserExecutable, cancelSignal, concurrency: 2, chromiumOptions: { gl: 'swiftshader' } })
     signal.throwIfAborted()
     if (spoken.length) await mixSpeech(silent, temporary, spoken, data.moves.length, secondsPerMove, signal)
     const { stdout } = await exec('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height,codec_type:format=duration', '-of', 'json', temporary], { signal })
     const probe = JSON.parse(stdout)
-    verifyVideoProbe(probe, { width, height, frames, fps, spoken })
+    /* 探针比的是成片尺寸，而成片按 VIDEO_SCALE 出片，期望值要一起放大，否则 2× 出片会被判成尺寸不符。 */
+    verifyVideoProbe(probe, { width: width * VIDEO_SCALE, height: height * VIDEO_SCALE, frames, fps, spoken })
     await rename(temporary, join(directory, output))
     await writeFile(join(directory, 'video-report.json'), `${JSON.stringify(probe, null, 2)}\n`, { mode: 0o600 })
   } finally {

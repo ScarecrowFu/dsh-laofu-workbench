@@ -29,6 +29,7 @@
 | `lwb/packs/spoken-video/assets/voices/tiffy-confident.mp3` | 随包参考音频；当前未记录可核验的来源和使用/再分发授权，需维护者补充。 |
 | `lwb/packs/ai-arena/assets/voices/host.mp3` | 狼人杀主持人参考音色，由产品负责人提供自有的语音素材（原文件 `Documents/语音备份/planA 语音.mp3`），随包作为 TTS 参考音频使用；对外再分发范围需维护者确认。 |
 | `lwb/packs/ai-arena/assets/voices/` 其余参考音频与 `assets/logos/` | 选手音色与模型 logo，随包分发；当前未逐条记录来源和使用/再分发授权，需维护者补充。 |
+| `lwb/packs/ai-arena/assets/models/{full,bust}/` | 选手的**角色形象**（跨游戏共用的模型身份资产）。不是新生成的素材，而是由 `.prototypes/arena-model-art/derive.mjs` 从 `assets/werewolf/characters/*.jpg` 抠黑底派生出的带 alpha WebP——**来源与再分发授权沿用上面那条立绘的记录，同样待维护者补充**。派生脚本本身不含第三方内容。 |
 
 以上未完成的出处记录是发布资料缺口，不表示已核验拥有开放再分发许可。贡献新的技能、音频、图片或字体时，应同时提交来源链接、版本、许可及必要署名；用户上传的素材由用户自行确认使用权限。
 

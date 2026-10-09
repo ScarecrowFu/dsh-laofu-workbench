@@ -41,6 +41,13 @@ test('xiangqi reports use red/black identities and coordinate actions', () => {
   assert.match(offline, /globalThis\.ArenaScene/u)
   assert.equal(offline.includes('https://'), false)
   assert.equal(offline.includes('{{'), false)
+  /* 素材内联按「这一局用得到」来：象棋走不到狼人杀的昼夜场景，但**形象要带**
+     （任何游戏的执行者卡都可能画人）；胸像只在紧凑档（象棋竖屏）用得到，所以象棋要带、
+     狼人杀不带——两条断言各守一边。 */
+  const art = JSON.parse(offline.match(/__ARENA_ART__=(.*?);<\/script>/su)[1])
+  assert.deepEqual(art.scenes, {}, '象棋不该内联狼人杀的昼夜场景')
+  assert.ok(Object.keys(art.portraits).length >= 2, '象棋要把选手形象带上')
+  assert.ok(Object.keys(art.busts).length >= 2, '象棋竖屏走紧凑档，胸像必须内联')
   const embedded = JSON.parse(offline.match(/__ARENA_DATA__=(.*?);<\/script>/su)[1])
   assert.equal(embedded.game.id, 'xiangqi')
   assert.equal(embedded.game.name, '中国象棋')

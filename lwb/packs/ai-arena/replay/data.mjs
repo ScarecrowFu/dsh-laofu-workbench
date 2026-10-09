@@ -35,16 +35,15 @@ function xiangqiFlags(match) {
  * 这里只把快照摘掉，留下产物真正要内联的逐手描述（形状与从前逐字节一致）。
  * 档位不可用时 steps=null，画面降级为「只播发言、不画身份」，但仍保留开局与终局播报。
  */
-function werewolfProjection(match) {
+function werewolfProjection(match, portraits) {
   const roles = (match.state?.players || []).map(player => player.role)
   const seatCount = (match.players || []).length
   const timeline = werewolfTimeline(match)
   const terminalReason = match.state?.terminalReason || match.result?.message || ''
-  /* 与观战同一份整局分配：同家族多模型各拿一套，回放/视频才和直播逐席同图。 */
-  const portraits = assignPortraits(match.players || [])
   /* 台词锚在「本手开场」（见 werewolf-projection.mjs），所以最后一手的结算播报没有下一手可挂：
      谁被放逐、猎人带走了谁由终局卡说出来，否则它会提前到当天最后一位发言/投票者嘴上。 */
   const closing = timeline.steps.length && timeline.closing && timeline.closing !== timeline.steps[timeline.steps.length - 1].host ? timeline.closing : ''
+  const finaleLine = `${closing}${werewolfHostLine({ winnerSide: timeline.winnerSide, terminalReason, finale: true })}`
   return {
     seats: (match.players || []).map((player, index) => ({
       seat: index + 1,
@@ -59,9 +58,18 @@ function werewolfProjection(match) {
     })),
     columns: { landscape: werewolfCastColumns(seatCount, 'landscape'), portrait: werewolfCastColumns(seatCount, 'portrait') },
     steps: timeline.replayable ? timeline.steps.map(({ snapshot, ...step }) => step) : null,
+    /* 最后一手的存活与出局：逐手快照讲的是「本手开场」，最后一手的结果没有下一帧可挂，
+       由终局帧承接（否则最后一手出局的人会在终局席位上复活）。 */
+    finalAlive: timeline.finalAlive ?? null,
+    finalDeaths: timeline.finalDeaths ?? [],
     winnerSide: timeline.winnerSide,
     host: timeline.host,
-    finale: `${closing}${werewolfHostLine({ winnerSide: timeline.winnerSide, terminalReason, finale: true })}`,
+    /* 终局正文：`finale` 是 werewolfHostLine 的 finale 口径 ——「最后一条结算播报 + 裁决」，
+       与终局那一格的配音同源（见 hostNarrationLines）。它从前挂在主持人口播那一格，
+       现在整格让给胜负卡，所以正文也归胜负卡。判负 / 取消这类没有裁决文案的记录补上
+       result.message，保证「为什么结束」永远在画面上。 */
+    finale: finaleLine,
+    finaleBody: !finaleLine ? terminalReason : (!terminalReason || finaleLine.includes(terminalReason)) ? finaleLine : `${finaleLine}${terminalReason}`,
   }
 }
 
@@ -150,7 +158,10 @@ export function replayData(match, audio = null) {
   const moves = movesOf(match)
   const result = match.result || null
   const voices = assignVoices(match.players || [])
-  const wolf = match.game?.id === 'werewolf' ? werewolfProjection(match) : null
+  /* 整局形象分配只算一次：执行者卡（所有游戏）与狼人杀席卡必须取同一份，
+     否则同一名选手在侧栏与舞台上会穿两套衣服。观战页用 werewolfStage 里的同一次分配。 */
+  const portraits = assignPortraits(match.players || [])
+  const wolf = match.game?.id === 'werewolf' ? werewolfProjection(match, portraits) : null
   const wolfData = wolf ? { ...wolf, ...finaleAudio(audio, moves.length) } : null
   return {
     id: match.id,
@@ -162,6 +173,8 @@ export function replayData(match, audio = null) {
       model: player.model ?? '',
       voice: voices[index] || '',
       logo: playerLogo(player),
+      /* 形象家族键（槽位语义见 presentation.assignPortraits）；素材在 model-art.mjs 的 full / bust 两档。 */
+      portrait: portraits[index],
     })),
     /* winner 只保留座位号（棋类）；隐藏身份游戏用 side 表示阵营，避免被当成和棋。 */
     result: result ? { kind: result.kind ?? '', winner: typeof result.winner === 'number' ? result.winner : null, side: wolf?.winnerSide || null, message: result.message ?? '' } : null,
