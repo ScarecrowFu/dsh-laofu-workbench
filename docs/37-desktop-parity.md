@@ -101,6 +101,8 @@ LWB_COMMERCIAL_PACK_DIR=/absolute/path/to/commercial-pack npm run package:deskto
 
 Windows 产物是可直接运行的 portable `.exe`，macOS 产物是包含 `.app` 的 `.zip`，不生成 NSIS 安装器或 DMG。程序数据写入用户数据目录，不要求把压缩包目录作为可写目录。未签名模式不读取签名环境文件，不调用 Apple 公证或 Windows 签名硬件。macOS 原生组件使用临时 ad-hoc 签名满足 Apple Silicon 的加载要求，不代表 Developer ID 签名或公证；首次打开仍可能受到 Gatekeeper 或 SmartScreen 提示。
 
+macOS payload 的原生依赖在签名之前会重写加载路径。`@remotion/compositor-darwin-*` 的 `ffmpeg` / `ffprobe` / `remotion` 与七个 `libav*` dylib 用的是裸相对名（`libavdevice.dylib`），dyld 只在未硬化的进程里才肯按工作目录解析这些名字；而产物给整个 payload（含 `lwb-product/node_modules`）做的是 hardened runtime 签名，于是这些引用会被直接拒绝——`Library not loaded: libavdevice.dylib` / `relative path not allowed in hardened program`，打包版里所有视频导出都因此 SIGABRT，而开发态用仓库里那份未硬化的副本，永远复现不出来。打包步骤把它们改成 `@loader_path/<name>`：保留 hardened runtime（上游强制、公证预期），也不再有工作目录依赖。重写后的字节计入构建 id（否则同一 id 的旧 runtime 副本会继续被沿用），`lwb/desktop/darwin-library-paths.test.mjs` 会在硬化签名下真的把二进制跑一遍；打包时若仍有裸名残留则直接失败。
+
 官方便携版关闭自动更新与强制更新服务，使用 LWB 根版本号；构建编号仅用于 Windows 构建目录和两端构建关联。文件名明确带 `-portable-unsigned`，官方发行版统一使用 `LaofuWorkbench` 的应用身份和数据目录。
 
 Windows 官方发行版在商业私有仓库的自托管 Windows x64 Runner 上构建，通过 Actions 的 `Desktop portable test builds` 手动触发，填写构建编号。macOS 官方发行版在本机 Apple Silicon Mac 构建：
@@ -111,7 +113,7 @@ LWB_COMMERCIAL_PACK_DIR=/absolute/path/to/commercial-pack npm run package:deskto
 node scripts/collect-desktop-artifacts.mjs --edition commercial --target mac-arm64
 ```
 
-官方产物必须通过实际打包宿主的能力包加载、卸载、重新加载、浏览器模块注册和重启恢复验收。Windows workflow 和本机 macOS 构建将成品、SHA256 校验值和构建报告汇总到公开仓库的同一个 Draft Release，验收通过后发布为正式 Release。未签名状态会在发布说明和构建报告中明确标注。
+官方产物必须通过实际打包宿主的能力包加载、卸载、重新加载、浏览器模块注册和重启恢复验收。验收还要包含一次**打包版视频导出**（竞技台导出 MP4 与口播成片各一次）：这类原生依赖只在打包版里被硬化签名，开发态用的是仓库副本，渲染链路必须实测，不能用开发态结果代替。Windows workflow 和本机 macOS 构建将成品、SHA256 校验值和构建报告汇总到公开仓库的同一个 Draft Release，验收通过后发布为正式 Release。未签名状态会在发布说明和构建报告中明确标注。
 
 官方源码保持原样。未签名模式通过仅在构建子进程启用的内存适配复用官方运行时准备、完整性校验与烟雾测试；适配与锁定的上游结构不匹配时会报错。此模式只用于测试分发，正式签名构建仍使用原有校验。
 

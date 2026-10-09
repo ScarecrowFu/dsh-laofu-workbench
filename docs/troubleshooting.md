@@ -36,6 +36,7 @@
 | 封面生成提示未配置 | 到「发布 → 封面生图」选择 LWB 账号或百炼，确认账号服务或 BYOK 图片模型可用。该配置独立于配音和 AI 模型。 |
 | LWB 服务提示积分不足，或百炼提示额度/权限错误 | LWB 服务在「设置」查看积分、会员和服务状态，必要时购买积分或切换到 BYOK；百炼则检查供应商账户余额、模型权限与 API 区域/工作空间。 |
 | `ffmpeg` / `ffprobe` 不存在 | 在启动服务的同一终端验证两个命令，安装 FFmpeg 并配置 PATH，重启服务。 |
+| 打包版（桌面 App）导出视频报 `Library not loaded: libavdevice.dylib`，或 `relative path not allowed in hardened program` | 这不是缺 FFmpeg，而是 macOS hardened runtime 与 Remotion 自带原生库加载路径的冲突：产物给整个 payload 做了硬化签名，而 `@remotion/compositor-darwin-*` 用的是裸相对名。开发态用仓库里未硬化的副本，所以只在打包版复现。需要用带修复的版本重新打包（`lwb/desktop/darwin-library-paths.mjs` 在签名前把引用改写成 `@loader_path`）；旧产物不会自行变好，runtime 目录按构建 id 隔离，换新构建即可。 |
 | 找不到渲染浏览器 | 运行 `npx --no-install remotion browser ensure`，或设置 `LWB_REMOTION_BROWSER_EXECUTABLE` 为实际可执行文件绝对路径。 |
 | 视频中文缺字 | 在运行主机安装可用的中文字体，确认视频工程指定的字体能够解析。 |
 | 配音成功但字幕失败 | 音频保留，可在任务中单独重试字幕；不必为了字幕重新付费生成配音。 |

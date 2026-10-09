@@ -10,6 +10,7 @@ import { LWB_RUNTIME } from '../dsh-bundle/runtime-config.mjs'
 import { desktopPnpmInvocation } from './toolchain.mjs'
 import { loadEditionManifest, resolveEdition } from './editions.mjs'
 import { assembleProductPayload } from './payload.mjs'
+import { relinkDarwinLibraries } from './darwin-library-paths.mjs'
 
 assertUpstream()
 const { values } = parseArgs({
@@ -116,6 +117,14 @@ for (const path of ['package.json', 'package-lock.json']) await cp(join(LWB_RUNT
 // checkout node_modules, credentials, local state, or upstream source backups.
 if (!process.env.npm_execpath) throw new Error('Run Desktop packaging through npm run package:desktop.')
 await run(process.execPath, [process.env.npm_execpath, 'ci', '--omit=dev', '--no-audit', '--no-fund'], payload)
+// The product signature below carries the hardened runtime, which refuses
+// relative library paths; native dependencies must load from their own
+// directory. The rewritten bytes are part of the build id, so an existing
+// runtime copy with the old bytes can never masquerade as this payload.
+if (process.platform === 'darwin') {
+  const relinked = await relinkDarwinLibraries(join(payload, 'node_modules'), { log: message => console.log(message) })
+  for (const entry of relinked.patched) digest.update(`native-libraries:${entry.file}:${entry.sha256}`)
+}
 digest.update(await readFile(join(payload, 'package-lock.json')))
 await writeFile(join(payload, 'build.json'), JSON.stringify({
   id: digest.digest('hex').slice(0, 24),
