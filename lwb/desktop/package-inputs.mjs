@@ -23,6 +23,40 @@ export const COMMERCIAL_PACK_ID = 'model-review'
 export const ELECTRON_MIRROR_FALLBACK = 'https://cdn.npmmirror.com/binaries/electron/'
 
 /**
+ * Variables an unsigned test build must not inherit from the operator's shell:
+ * Apple notary and signing credentials, Windows signing credentials, and the
+ * production update feed.
+ */
+const UNSIGNED_ENV_DENY = /^(?:DSH_DESKTOP_|APPLE_|CSC_|WIN_CSC_|DOWNLOAD_(?:TEST|PROD)_)/u
+
+/**
+ * The one `DSH_DESKTOP_` variable that carries a package *source* rather than a
+ * credential.
+ */
+export const NPM_REGISTRY_ENV = 'DSH_DESKTOP_NPM_REGISTRY'
+
+/**
+ * Environment for the unsigned packaging chain: what the operator exported, minus
+ * the variables that belong to a signed release.
+ *
+ * `DSH_DESKTOP_NPM_REGISTRY` has to survive. The pinned preparation resolves its
+ * registry from that variable alone and otherwise falls back to
+ * `https://registry.npmjs.org/`, so a blanket `DSH_DESKTOP_` filter leaves the one
+ * documented override unreachable -- on a network that cannot reach the default
+ * registry that is a build which cannot be produced at all, and nothing in the
+ * output names the override that would have fixed it. It picks a package source,
+ * not a credential, so unsigned mode keeps it.
+ *
+ * @param environment - the operator's environment.
+ * @returns a shallow copy safe to hand to the unsigned packaging chain.
+ */
+export function unsignedPackagingEnvironment(environment) {
+  return Object.fromEntries(Object.entries(environment).filter(([name]) => (
+    name === NPM_REGISTRY_ENV || !UNSIGNED_ENV_DENY.test(name)
+  )))
+}
+
+/**
  * Resolve the edition to package.
  * @param value - `--edition` value, or undefined for the default.
  * @param fallback - Edition used when no value is given.

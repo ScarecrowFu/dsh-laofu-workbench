@@ -4,7 +4,7 @@ import test from 'node:test'
 import {
   COMMERCIAL_PACK_ID, ELECTRON_MIRROR_FALLBACK, artifactDirectory, artifactExtensions, commercialPackCandidates,
   releaseChecksumUrl, resolveBuildNumber, resolveCommercialPackDir, resolveEditionName, resolveElectronMirror, resolveHostTarget,
-  unpackedApp,
+  unpackedApp, unsignedPackagingEnvironment,
 } from './package-inputs.mjs'
 
 const ROOT = '/repo'
@@ -171,4 +171,33 @@ test('probing disabled keeps the release host without any request', async () => 
   })
   assert.deepEqual(disabled, { mirror: undefined, source: 'probing disabled' })
   assert.equal(probed, 0, 'opting out skips the probe entirely')
+})
+
+test('an unsigned build drops release credentials but keeps the npm registry', () => {
+  const environment = unsignedPackagingEnvironment({
+    PATH: '/usr/bin',
+    HOME: '/Users/build',
+    DSH_DESKTOP_APP_ID: 'com.deepseek.official',
+    DSH_DESKTOP_NPM_REGISTRY: 'https://registry.npmmirror.com',
+    APPLE_ID: 'release@example.com',
+    APPLE_APP_SPECIFIC_PASSWORD: 'secret',
+    CSC_LINK: 'certificate.p12',
+    WIN_CSC_LINK: 'certificate.pfx',
+    DOWNLOAD_TEST_ORIGIN: 'https://updates.example.com',
+    DOWNLOAD_PROD_ORIGIN: 'https://production.example.com',
+  })
+  /* Everything a signed release owns is gone: a test build must not be able to
+     sign, notarize, or point an installed app at a production feed. */
+  for (const name of ['DSH_DESKTOP_APP_ID', 'APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'CSC_LINK', 'WIN_CSC_LINK', 'DOWNLOAD_TEST_ORIGIN', 'DOWNLOAD_PROD_ORIGIN']) {
+    assert.equal(environment[name], undefined, `${name} must not reach an unsigned build`)
+  }
+  assert.equal(environment.PATH, '/usr/bin', 'ordinary variables pass through')
+  assert.equal(environment.HOME, '/Users/build')
+  /* The registry is the one DSH_DESKTOP_ variable that is a package source rather
+     than a credential. The pinned preparation reads it from there and nowhere else,
+     so dropping it leaves a network that cannot reach registry.npmjs.org with no way
+     to build at all — and nothing in the output naming the override that would have
+     fixed it. */
+  assert.equal(environment.DSH_DESKTOP_NPM_REGISTRY, 'https://registry.npmmirror.com')
+  assert.deepEqual(unsignedPackagingEnvironment({}), {})
 })

@@ -47,6 +47,9 @@ Options:
   --release              name the artifact as a release build (no -test.<n> suffix)
   --dir                  produce the unpacked app only
   --plan                 resolve the edition and shipped packs, then stop
+  --npm-registry <url>   npm registry for the runtime dependencies; default is the
+                         release registry (registry.npmjs.org). Point it at a mirror
+                         when that host is unreachable from this network.
   --dry-run              print the resolved inputs and the command, then stop
   --no-mirror-fallback   never substitute an Electron mirror when the release host is unreachable
   -h, --help             show this message
@@ -56,11 +59,29 @@ Environment:
   LWB_DESKTOP_BUILD_NUMBER  test build number; the local date is used when unset
   ELECTRON_MIRROR           Electron download source; only probed when unset
   LWB_ELECTRON_MIRROR=off   keep the default release host without probing it
+  DSH_DESKTOP_NPM_REGISTRY  same as --npm-registry, and what the option sets
 `
 
 /** Fail loudly with a message a human can act on. */
 function fail(message) {
   throw new Error(message)
+}
+
+/**
+ * Validate `--npm-registry` the way the pinned preparation validates the same
+ * setting: an HTTPS origin, no credentials, no path, query or fragment. The
+ * preparation repeats this check; doing it here too keeps `--dry-run` from
+ * printing a command whose only possible outcome is a failure.
+ */
+function resolveNpmRegistryOption(value) {
+  const configured = (value ?? '').trim()
+  if (configured === '') return undefined
+  let url = null
+  try { url = new URL(configured) } catch { url = null }
+  const valid = url !== null && url.protocol === 'https:' && url.username === '' && url.password === ''
+    && url.search === '' && url.hash === '' && (url.pathname === '/' || url.pathname === '')
+  if (!valid) fail(`--npm-registry must be an HTTPS origin without credentials, path, query or fragment, not "${configured}".`)
+  return url.origin
 }
 
 /** Resolve every packaging input, failing before any expensive work starts. */
@@ -88,11 +109,15 @@ async function resolveInputs(values, manifest) {
     })
     : undefined
   const buildNumber = resolveBuildNumber(values['build-number'], process.env)
+  /* The flag wins, but the documented environment variable is the same setting and
+     has to survive this script: it is what the preparation itself reads, and it is
+     inherited by the packaging chain either way. */
+  const npmRegistry = resolveNpmRegistryOption(values['npm-registry'] ?? process.env.DSH_DESKTOP_NPM_REGISTRY)
   const electron = await electronVersion()
   const mirror = values['no-mirror-fallback']
     ? { mirror: process.env.ELECTRON_MIRROR?.trim() || undefined, source: 'no probe requested' }
     : await resolveElectronMirror({ env: process.env, version: electron, probe: url => probeDownload(url) })
-  return { edition, target, pack, buildNumber, electron, mirror }
+  return { edition, target, pack, buildNumber, electron, mirror, npmRegistry }
 }
 
 /**
@@ -132,13 +157,14 @@ function packagingCommand(values, inputs) {
     LWB_DESKTOP_BUILD_NUMBER: inputs.buildNumber,
     ...(inputs.pack === undefined ? {} : { LWB_COMMERCIAL_PACK_DIR: inputs.pack.directory }),
     ...(inputs.mirror.mirror === undefined ? {} : { ELECTRON_MIRROR: inputs.mirror.mirror }),
+    ...(inputs.npmRegistry === undefined ? {} : { DSH_DESKTOP_NPM_REGISTRY: inputs.npmRegistry }),
   }
   return { args: ['run', 'package:desktop', '--', ...forward], env, forward }
 }
 
 /** Human-readable environment prefix that reproduces the run by hand. */
 function reproduction(env, forward) {
-  const names = ['ELECTRON_MIRROR', 'LWB_COMMERCIAL_PACK_DIR', 'LWB_DESKTOP_BUILD_NUMBER']
+  const names = ['ELECTRON_MIRROR', 'DSH_DESKTOP_NPM_REGISTRY', 'LWB_COMMERCIAL_PACK_DIR', 'LWB_DESKTOP_BUILD_NUMBER']
   const prefix = names.filter(name => env[name] !== undefined).map(name => `${name}=${env[name]}`)
   const command = `npm run package:desktop -- ${forward.join(' ')}`
   return prefix.length === 0 ? command : `${prefix.join(' \\\n  ')} \\\n${command}`
@@ -158,6 +184,7 @@ async function main() {
       plan: { type: 'boolean' },
       'dry-run': { type: 'boolean' },
       'no-mirror-fallback': { type: 'boolean' },
+      'npm-registry': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   })
@@ -174,6 +201,7 @@ async function main() {
   console.log(`  signing         ${values.signed ? 'official environment' : 'unsigned test build'}`)
   if (inputs.pack !== undefined) console.log(`  commercial pack ${inputs.pack.directory} (${inputs.pack.source})`)
   console.log(`  electron        ${inputs.electron === undefined ? 'unknown version' : `v${inputs.electron}`} from ${inputs.mirror.mirror ?? 'the default release host'} (${inputs.mirror.source})`)
+  console.log(`  npm registry    ${inputs.npmRegistry ?? 'the release registry (registry.npmjs.org)'}`)
   if (inputs.mirror.source === 'no reachable download source') {
     console.log('  hint            neither the release host nor the mirror served the checksum; set ELECTRON_MIRROR to a reachable copy')
   }
@@ -181,7 +209,7 @@ async function main() {
 
   if (values['dry-run']) {
     console.log('\nEnvironment overrides:')
-    for (const name of ['LWB_DESKTOP_BUILD_NUMBER', 'LWB_COMMERCIAL_PACK_DIR', 'ELECTRON_MIRROR']) {
+    for (const name of ['LWB_DESKTOP_BUILD_NUMBER', 'LWB_COMMERCIAL_PACK_DIR', 'ELECTRON_MIRROR', 'DSH_DESKTOP_NPM_REGISTRY']) {
       console.log(`  ${name}=${command.env[name] ?? '(unset)'}`)
     }
     console.log(`\nCommand:\n  npm ${command.args.join(' ')}`)

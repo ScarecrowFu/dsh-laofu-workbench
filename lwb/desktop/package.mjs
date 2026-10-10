@@ -11,6 +11,7 @@ import { desktopPnpmInvocation } from './toolchain.mjs'
 import { loadEditionManifest, resolveEdition } from './editions.mjs'
 import { assembleProductPayload } from './payload.mjs'
 import { relinkDarwinLibraries } from './darwin-library-paths.mjs'
+import { unsignedPackagingEnvironment } from './package-inputs.mjs'
 
 assertUpstream()
 const { values } = parseArgs({
@@ -61,7 +62,7 @@ const { loadDesktopPackageEnvironment, validateDesktopPackageEnvironment } = awa
 const unsigned = values.unsigned === true
 const portable = values.portable === true
 const release = values.release === true || process.env.LWB_DESKTOP_RELEASE === '1'
-const env = unsigned ? Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:DSH_DESKTOP_|APPLE_|CSC_|WIN_CSC_|DOWNLOAD_(?:TEST|PROD)_)/u.test(key))) : loadDesktopPackageEnvironment(process.platform)
+const env = unsigned ? unsignedPackagingEnvironment(process.env) : loadDesktopPackageEnvironment(process.platform)
 if (unsigned) {
   Object.assign(env, {
     DSH_DESKTOP_APP_ID: 'com.scitiger.laofu.workbench',
