@@ -6,7 +6,7 @@ import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { ArenaStore } from '../store.mjs'
-import { ArenaExport, replayHtml, reportMarkdown, verifyVideoProbe } from '../export.mjs'
+import { ArenaExport, brokenFrames, replayHtml, reportMarkdown, verifyVideoProbe } from '../export.mjs'
 import { LOUDNESS_VERSION, clipDataUrl } from '../speech.mjs'
 import { boardSvg, frameAt } from '../presentation.mjs'
 
@@ -171,4 +171,47 @@ test('成片自检：静音音轨不算配音，尺寸、时长、配音音轨�
   assert.throws(() => verifyVideoProbe({ streams: [{ codec_type: 'video', width: 1280, height: 720 }], format: { duration: '11.05' } }, { ...request, spoken: [1] }), /缺少配音音轨/u)
   /* 真的混过配音时，音轨必须在 */
   verifyVideoProbe(silent, { ...request, spoken: [1] })
+})
+
+/* 坏帧判别：单帧坏帧是「跳出去、下一帧跳回来」，孤立的一对高差分；
+   正常动画（落子入场、文字淡入）是连续多帧高差分，不能误判。 */
+test('坏帧判别：孤立的一对高差分算坏帧，连续动效不算', () => {
+  const quiet = Array.from({ length: 400 }, () => 0.4)
+  const withGlitch = [...quiet]
+  withGlitch[100] = 52
+  withGlitch[101] = 52
+  assert.deepEqual(brokenFrames(withGlitch), [100], '孤立的一对高差分必须被认成坏帧')
+
+  /* 连续 8 帧高差分 = 正常动效：不算坏帧。 */
+  const animation = [...quiet]
+  for (let index = 100; index < 108; index++) animation[index] = 52
+  assert.deepEqual(brokenFrames(animation), [], '连续动效不是坏帧')
+
+  /* 只有一侧高（真实切镜：切口有尖峰，下一帧就稳住）不算坏帧。 */
+  const cut = [...quiet]
+  cut[100] = 52
+  assert.deepEqual(brokenFrames(cut), [], '真实切镜不是坏帧')
+
+  assert.deepEqual(brokenFrames([]), [], '空输入不报错')
+  assert.deepEqual(brokenFrames(quiet), [], '干净片子零命中')
+
+  /* 坏帧占比偏高时（一次渲染坏十几帧）阈值不能被坏帧自己顶上去：这正是最该重渲的情形。 */
+  const manyBad = [...quiet]
+  for (const at of [50, 120, 200, 300]) { manyBad[at] = 52; manyBad[at + 1] = 52 }
+  assert.deepEqual(brokenFrames(manyBad), [50, 120, 200, 300], '坏帧多也要全部抓到')
+
+  /* 短片段同样要判得出来（p95 不能落在仅有的几个坏值上）。 */
+  const short = Array.from({ length: 40 }, () => 0.4)
+  short[10] = 52; short[11] = 52
+  assert.deepEqual(brokenFrames(short), [10], '短片段也抓得到')
+})
+
+test('坏帧阈值跟着内容走：动效大的片子不会被误判，坏帧仍然抓得到', () => {
+  /* 内容本身差分很大时阈值抬到 p90 的两倍，避免把动效当坏帧。 */
+  const busy = Array.from({ length: 400 }, (_, index) => index % 2 ? 12 : 0)
+  assert.deepEqual(brokenFrames(busy), [], '差分 12 的常态内容不报')
+  const noisy = [...busy]
+  noisy[200] = 60
+  noisy[201] = 60
+  assert.deepEqual(brokenFrames(noisy), [200], '同一片子里 60 的孤立尖峰仍然抓得到')
 })

@@ -78,7 +78,7 @@ export const RENDER_INPUTS = [
   'replay/page.html', 'replay/shell.css', 'replay/app.js',
 ]
 /** 渲染链路版本：Remotion / FFmpeg / 编码参数变了就 +1；画面源文件改动由上面的摘要兜住。 */
-const PIPELINE_VERSION = 2
+const PIPELINE_VERSION = 3
 /** 出片分辨率倍率。构图按 1280×720 / 720×1280 授权，但 1× 光栅化 + 720p 出片在 2× 屏上会被
     播放器放大一倍：实测量化只有 VMAF 44（不足 60 即「差」），同一帧改成 2× 光栅化后到 90+。
     这是清晰度的主旋钮 —— 只换编码参数换不回来。改它必须同步 +PIPELINE_VERSION，
@@ -86,6 +86,15 @@ const PIPELINE_VERSION = 2
 const VIDEO_SCALE = 2
 /** 有 2× 光栅化兜底之后 CRF 才是第二位旋钮：23 → 16 实测再涨约 4 分 VMAF，代价约 ×3.2 体积。 */
 const VIDEO_CRF = 16
+/** GL 后端。原来强制 swiftshader（纯软件合成）：每截一帧都要自己分配、拷贝、拼接 surface，
+    而 Remotion 正是从 surface 取图（fromSurface + captureBeyondViewport），于是 surface 尺寸
+    与请求的 clip 不同步时会抓到「surface 被平铺重复」或「页面塌缩」的坏帧。改成 ANGLE
+    （macOS 上走 Metal）把 surface 交给合成器管理，从源头收窄这个竞态。 */
+const VIDEO_GL = 'angle'
+/** 单页渲染。两个页面共享合成器会放大上面那个竞态。 */
+const VIDEO_CONCURRENCY = 1
+/** 坏帧是抽奖式的，重渲染一次通常就干净了：最多整场重渲这么多次。 */
+const RENDER_ATTEMPTS = 3
 /** 每场比赛最多留几份成片：模板升级后旧键再也不会被命中，留着只会占盘。 */
 const MAX_ARTIFACTS = 8
 /** 产物文件名由服务端生成，下载与清理时仍按白名单复核，不接受带路径分隔符的名字。 */
@@ -333,6 +342,61 @@ export function verifyVideoProbe(probe, { width, height, frames, fps, spoken }) 
   if (spoken?.length && !hasAudio) throw new Error('导出视频缺少配音音轨。')
 }
 
+/* ------------------------------------------------------------------ 单帧坏帧
+   Remotion 从合成器 surface 抓帧（`fromSurface` + `captureBeyondViewport`）：
+   surface 的实际尺寸与请求的 clip 不同步时，Chrome 会把现有 surface 平铺重复去填满请求区域，
+   或者抓到正在重建的半成品。两种都表现为**某一帧**突然闪一下（棋盘被铺成一格格重复的、
+   或页面塌缩成空白）。它是竞态，所以同一组输入两次渲染坏在不同位置 —— 抽奖，不是内容问题。
+
+   判别只用逐帧差分 d[i] = mean|frame_i − frame_{i−1}|。实测两边的量级分得很开：
+   - 正常内容（落子入场、文字淡入、狼人杀的昼夜交叉淡入淡出）**d ≤ 10**，实测 09 号片 p99 = 9.3、
+     狼人杀整片 max = 6.9；
+   - 坏帧 **d = 49—62**，而且形状是「跳出去、下一帧跳回来」——**孤立的一对高差分**，
+     前后立刻回到基线（实测紧邻的 d 是 0.00）。连续多帧的高差分是正常动画，不满足这个形状。
+
+   所以判据是「孤立的一对超过阈值的差分」，阈值取 p90 的两倍并留一个绝对下限。
+   用 p90 而不是 p99：分位点必须对坏帧本身免疫 —— 一部片子里坏帧占到百分之一二时，
+   p99 就会落在坏帧自己身上、把阈值顶到抓不到它们，而「坏帧特别多」恰恰是最需要重渲染的情形。
+   p90 容忍到 10% 的污染，对本项目的内容（正常 d ≤ 10、坏帧 49—62）留了两倍余量。 */
+export function brokenFrames(deltas, { ratio = 2, floor = 20 } = {}) {
+  if (!Array.isArray(deltas) || deltas.length < 4) return []
+  const sorted = [...deltas].sort((left, right) => left - right)
+  const tail = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9))]
+  const threshold = Math.max(floor, tail * ratio)
+  const hits = []
+  /* 从 1 起：d[0] 没有前一帧，tblend 在首帧给的不是差分，不能当证据。 */
+  for (let index = 1; index < deltas.length - 2; index++) {
+    if (deltas[index] <= threshold || deltas[index + 1] <= threshold) continue
+    if (deltas[index - 1] > threshold || deltas[index + 2] > threshold) continue
+    hits.push(index)
+  }
+  return hits
+}
+
+/** 逐帧差分。tblend 取相邻帧差，signalstats 给每帧均值；ffmpeg 13—30× 实时，比重新渲染便宜一个数量级。 */
+export async function frameDeltas(file, signal) {
+  const { stderr = '' } = await exec('ffmpeg', [
+    '-hide_banner', '-i', file, '-an',
+    '-vf', 'tblend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG',
+    '-f', 'null', '-',
+  ], { signal, maxBuffer: 64 * 1024 * 1024 }).catch(error => ({ stderr: error.stderr || '' }))
+  const deltas = []
+  let pending = null
+  for (const line of String(stderr).split('\n')) {
+    const time = /pts_time:([0-9.]+)/u.exec(line)
+    if (time) { pending = Number(time[1]); continue }
+    const value = /lavfi\.signalstats\.YAVG=([0-9.]+)/u.exec(line)
+    if (value && pending !== null) { deltas.push(Number(value[1])); pending = null }
+  }
+  return deltas
+}
+
+/** 一次渲染的坏帧清单。检测本身失败时返回空数组：宁可交付一个可能带闪烁的成片，也不要因此判导出失败。 */
+async function detectBrokenFrames(file, signal) {
+  const deltas = await frameDeltas(file, signal)
+  return brokenFrames(deltas)
+}
+
 export async function renderVideo(match, directory, { orientation, secondsPerMove, audio = null, signal, fileName = null }) {
   signal.throwIfAborted()
   await exec('ffmpeg', ['-version'], { signal })
@@ -366,15 +430,24 @@ export async function renderVideo(match, directory, { orientation, secondsPerMov
     /* 视频与离线 HTML 共用同一份投影：同一组手数、关键手、连子和终局文案。 */
     const props = { data, layout: orientation, secondsPerMove, durations: audio ? durations : null }
     const silent = join(directory, `${stem}.silent.mp4`)
-    await renderMedia({ serveUrl, composition: { id: 'Arena', width, height, fps, durationInFrames: frames, defaultProps: {}, props, defaultCodec: null, defaultOutName: null, defaultVideoImageFormat: null, defaultPixelFormat: null }, inputProps: props, outputLocation: audio?.size ? silent : temporary, codec: 'h264', crf: VIDEO_CRF, pixelFormat: 'yuv420p', scale: VIDEO_SCALE, browserExecutable, cancelSignal, concurrency: 2, chromiumOptions: { gl: 'swiftshader' } })
-    signal.throwIfAborted()
-    if (spoken.length) await mixSpeech(silent, temporary, spoken, data.moves.length, secondsPerMove, signal)
+    /* 渲染 → 查坏帧 → 不干净就整场重来。Remotion 没有单帧重试接口，而这毛病又是抽奖式的，
+       所以重试粒度只能是整场；实测一次重渲就能清掉，留 3 次余量。 */
+    let attempts = 0, bad = []
+    for (;;) {
+      attempts += 1
+      await renderMedia({ serveUrl, composition: { id: 'Arena', width, height, fps, durationInFrames: frames, defaultProps: {}, props, defaultCodec: null, defaultOutName: null, defaultVideoImageFormat: null, defaultPixelFormat: null }, inputProps: props, outputLocation: audio?.size ? silent : temporary, codec: 'h264', crf: VIDEO_CRF, pixelFormat: 'yuv420p', scale: VIDEO_SCALE, browserExecutable, cancelSignal, concurrency: VIDEO_CONCURRENCY, chromiumOptions: { gl: VIDEO_GL } })
+      signal.throwIfAborted()
+      if (spoken.length) await mixSpeech(silent, temporary, spoken, data.moves.length, secondsPerMove, signal)
+      bad = await detectBrokenFrames(temporary, signal)
+      if (!bad.length || attempts >= RENDER_ATTEMPTS) break
+    }
     const { stdout } = await exec('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height,codec_type:format=duration', '-of', 'json', temporary], { signal })
     const probe = JSON.parse(stdout)
     /* 探针比的是成片尺寸，而成片按 VIDEO_SCALE 出片，期望值要一起放大，否则 2× 出片会被判成尺寸不符。 */
     verifyVideoProbe(probe, { width: width * VIDEO_SCALE, height: height * VIDEO_SCALE, frames, fps, spoken })
     await rename(temporary, join(directory, output))
-    await writeFile(join(directory, 'video-report.json'), `${JSON.stringify(probe, null, 2)}\n`, { mode: 0o600 })
+    /* 坏帧信息留在报告里：重试过几次、最后一次还剩几帧，是排查「成片闪一下」的第一手证据。 */
+    await writeFile(join(directory, 'video-report.json'), `${JSON.stringify({ ...probe, arena: { scale: VIDEO_SCALE, crf: VIDEO_CRF, gl: VIDEO_GL, attempts, brokenFrames: bad } }, null, 2)}\n`, { mode: 0o600 })
   } finally {
     signal.removeEventListener('abort', abort)
     await rm(dir, { recursive: true, force: true })
