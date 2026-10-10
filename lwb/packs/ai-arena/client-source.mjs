@@ -227,14 +227,18 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
     setNotice(html ? `离线回放已导出，含选手发言${match.game?.id === 'werewolf' ? '与主持人播报' : ''}语音${size}。` : preview ? '' : 'MP4 已下载。')
   }
   const seek = value => { setPlaying(false); setStep(value) }
+  /* 整局形象分配只算一次：侧栏的形象与舞台席卡必须同一张（与 replay/data.mjs 同一口径）。
+     它必须留在下面那处「还没读到比赛」的提前 return **之前**：hook 一旦被提前 return 绕过，
+     比赛数据到达后的下一次渲染就比上一次多出一个 hook，React 会直接抛
+     「Rendered more hooks than during the previous render」——观战页与比赛回放都会整页白屏。
+     依赖项同样要容下 match 为空的那一帧，所以用 match?.players。 */
+  const portraits = React.useMemo(() => assignPortraits(match?.players || []), [match?.players])
   if (!match) return h('div', { className: 'ar-empty' }, data.error || '正在读取比赛…')
   const live = step === null && ['running', 'pausing'].includes(match.status), thinking = live && match.activeTurn?.turnId
   /* 没有行动者时不要退回 0 号：开局那一刻 activeTurn 还没落上，退回 0 会把署名写成 1 号选手
      （首手常常不是他），补上身份之后还会连带显示错的身份。 */
   const currentPlayer = thinking ? match.activeTurn.player : frame.current?.player ?? null
   const actor = Number.isInteger(currentPlayer) ? match.players[currentPlayer] : null
-  /* 整局形象分配只算一次：侧栏的形象与舞台席卡必须同一张（与 replay/data.mjs 同一口径）。 */
-  const portraits = React.useMemo(() => assignPortraits(match.players || []), [match.players])
   const actorPortrait = Number.isInteger(currentPlayer) ? portraits[currentPlayer] : null
   /* 逐手条件：本手有发言才画人。思考中还没有发言，因此这时只显示 logo。 */
   const actorSpeaks = !thinking && Boolean(String(frame.current?.speech || '').trim())

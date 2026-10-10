@@ -1923,11 +1923,11 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
     setPlaying(false);
     setStep(value);
   };
+  const portraits = import_react4.default.useMemo(() => assignPortraits(match?.players || []), [match?.players]);
   if (!match) return h2("div", { className: "ar-empty" }, data.error || "\u6B63\u5728\u8BFB\u53D6\u6BD4\u8D5B\u2026");
   const live = step === null && ["running", "pausing"].includes(match.status), thinking = live && match.activeTurn?.turnId;
   const currentPlayer = thinking ? match.activeTurn.player : frame.current?.player ?? null;
   const actor = Number.isInteger(currentPlayer) ? match.players[currentPlayer] : null;
-  const portraits = import_react4.default.useMemo(() => assignPortraits(match.players || []), [match.players]);
   const actorPortrait = Number.isInteger(currentPlayer) ? portraits[currentPlayer] : null;
   const actorSpeaks = !thinking && Boolean(String(frame.current?.speech || "").trim());
   const idleHint = match.game?.id === "werewolf" ? "\u7B49\u5F85\u7B2C\u4E00\u6B65\u884C\u52A8" : "\u7B49\u5F85\u7B2C\u4E00\u6B65\u843D\u5B50";

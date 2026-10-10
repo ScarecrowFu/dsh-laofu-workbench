@@ -214,8 +214,10 @@ test('观战页的模型形象与导出侧同源：同一份分配、同一批�
   /* 形象必须来自 model-art.mjs 的 full 档（与席卡同一张图），不是另取一套。 */
   assert.match(source, /MODEL_ART\.full\[portrait\]/u, '观战页形象没有走 MODEL_ART.full')
   assert.match(source, /MODEL_ART\.logos\[logoKey\(player\)\]/u, '观战页 logo 没有走 MODEL_ART.logos')
-  /* 整局分配只在呈现层算一次，与 replay/data.mjs 用同一个 assignPortraits。 */
-  assert.match(source, /assignPortraits\(match\.players \|\| \[\]\)/u, '观战页没有用 assignPortraits 做整局分配')
+  /* 整局分配只在呈现层算一次，与 replay/data.mjs 用同一个 assignPortraits。
+     表达式要容下「比赛还没读到」的那一帧，否则这个 hook 只能写在提前 return 之后
+     ——hook 顺序哨兵（client-hooks.test.mjs）守着那件事。 */
+  assert.match(source, /assignPortraits\(match\?\.players \|\| \[\]\)/u, '观战页没有用 assignPortraits 做整局分配')
   /* 逐手条件：本手有发言才画人。 */
   assert.match(source, /const actorSpeaks = !thinking && Boolean\(String\(frame\.current\?\.speech \|\| ''\)\.trim\(\)\)/u, '观战页缺少逐手条件')
   /* 版式口径：形象那一格不许有底板（否则又会变成一块黑底）。 */
