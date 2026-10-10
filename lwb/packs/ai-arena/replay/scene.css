@@ -318,6 +318,16 @@
 .ww-host em{display:inline-flex;align-items:center;height:20px;padding:0 10px;border-radius:999px;background:rgba(224,163,46,.2);border:1px solid rgba(224,163,46,.55);color:#F4DFAE;font-size:11px;font-weight:800;font-style:normal;letter-spacing:.14em;backdrop-filter:blur(3px)}
 .ww-host p{margin:0;padding:7px 15px;border-radius:10px;background:rgba(8,12,19,.68);border:1px solid rgba(255,255,255,.16);color:#F6F1E4;font-size:15px;font-weight:700;line-height:1.45;backdrop-filter:blur(3px);text-shadow:0 1px 6px rgba(0,0,0,.6)}
 
+/* 票型条：谁几票、这一轮是怎么裁的 —— 与主持人播报分两格（主持人说阶段与出局名单，
+   这一条说票数），谁投了谁由席卡上的「→N」回答。它同样在布局流里、flex:none，
+   所以条带仍是唯一可收缩的一段；一行放不下时省略号收尾（整句在 title 里）。
+   平票用琥珀、出结果用红，与「进入复投 / 被放逐」两种裁决一一对应。 */
+.ww-vote-line{position:relative;flex:none;align-self:flex-start;margin:10px 30px 0;max-width:min(64%,760px);display:flex;align-items:center;gap:6px}
+.ww-vote-line em{flex:none;display:inline-flex;align-items:center;height:20px;padding:0 10px;border-radius:999px;background:rgba(55,138,221,.24);border:1px solid rgba(55,138,221,.6);color:#CFE3FA;font-size:11px;font-weight:800;font-style:normal;letter-spacing:.14em;backdrop-filter:blur(3px)}
+.ww-vote-line p{margin:0;min-width:0;padding:7px 15px;border-radius:10px;background:rgba(8,12,19,.68);border:1px solid rgba(255,255,255,.16);color:#F6F1E4;font-size:15px;font-weight:700;line-height:1.45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;backdrop-filter:blur(3px);text-shadow:0 1px 6px rgba(0,0,0,.6)}
+.ww-vote-line[data-tone="tie"] em{background:rgba(224,163,46,.24);border-color:rgba(224,163,46,.6);color:#F4DFAE}
+.ww-vote-line[data-tone="result"] em{background:rgba(180,52,42,.3);border-color:rgba(224,110,96,.65);color:#FFD9D3}
+
 /* N 席。条带高度按行数取（--ww-band），行高由行模板均分，席卡吃行高 —— 与观战页同一套契约。
    margin-top:auto 把它压到画面底部，富余的留白落在场景中间而不是条带里；
    条带是唯一可收缩的一段（flex:0 1 auto + min-height:0），窄画幅先让席卡变小。 */
@@ -339,6 +349,15 @@
 .ww-seat[data-alive="false"] .ww-face{border-color:rgba(180,52,42,.6)}
 .ww-seat[data-win="true"] .ww-face{border-color:var(--wolf-gold);box-shadow:0 0 0 2px rgba(224,163,46,.5),0 14px 30px rgba(3,6,12,.55)}
 .ww-out{position:absolute;left:50%;bottom:8px;transform:translateX(-50%);padding:2px 10px;border-radius:999px;background:var(--wolf-red);color:#FFF;font-size:11px;font-weight:800;letter-spacing:.16em;white-space:nowrap;box-shadow:0 4px 14px rgba(120,20,16,.5)}
+/* 本轮票型：箭头挂在投出票的那张卡上（→N），票数挂在被投的那张卡上（N 票）。
+   两块都在立绘框内，席卡高度一个像素都不变 —— 8 / 9 人局加不起任何常驻行。
+   颜色只给「最高票」：单一领先用红（与出局同一语义），平票用琥珀（与复投同一语义），
+   这样 9 人局一眼就能分辨「谁要出去」与「这一轮要复投」。 */
+.ww-vote,.ww-tally{position:absolute;top:5px;z-index:3;display:inline-flex;align-items:center;height:17px;padding:0 6px;border-radius:5px;background:rgba(10,14,22,.86);border:1px solid rgba(255,255,255,.42);color:#F3F7FC;font-size:10px;font-weight:800;font-style:normal;line-height:1;white-space:nowrap;box-shadow:0 2px 8px rgba(3,6,12,.55)}
+.ww-vote{right:5px}
+.ww-tally{left:5px}
+.ww-tally[data-lead="one"]{background:#B4342A;border-color:#FFB4A8;color:#FFF}
+.ww-tally[data-lead="tie"]{background:#B98418;border-color:#FFDF9E;color:#FFF}
 .ww-strike{position:absolute;left:50%;top:50%;width:100%;height:100%;border-radius:inherit;background:
   linear-gradient(45deg,transparent 45.5%,rgba(226,60,48,.86) 48.5%,rgba(226,60,48,.86) 51.5%,transparent 54.5%),
   linear-gradient(-45deg,transparent 45.5%,rgba(226,60,48,.86) 48.5%,rgba(226,60,48,.86) 51.5%,transparent 54.5%),
@@ -413,6 +432,8 @@
 .stage[data-game="werewolf"][data-layout="portrait"] .ww-head{padding:18px 18px 0}
 .stage[data-game="werewolf"][data-layout="portrait"] .ww-host{margin:10px 18px 0;max-width:80%}
 .stage[data-game="werewolf"][data-layout="portrait"] .ww-host p{font-size:14px;padding:6px 12px}
+.stage[data-game="werewolf"][data-layout="portrait"] .ww-vote-line{margin:8px 18px 0;max-width:88%}
+.stage[data-game="werewolf"][data-layout="portrait"] .ww-vote-line p{font-size:14px;padding:6px 12px}
 .stage[data-game="werewolf"][data-layout="portrait"] .ww-win{margin:10px 0 0}
 .stage[data-game="werewolf"][data-layout="portrait"] .ww-win b{font-size:34px}
 .stage[data-game="werewolf"][data-layout="portrait"] .score{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}

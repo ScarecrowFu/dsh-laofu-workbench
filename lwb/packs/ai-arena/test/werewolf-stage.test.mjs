@@ -81,8 +81,8 @@ test('席卡高度由行高决定，不再由列宽推（8 / 9 人撑破画幅�
   assert.match(rule('.ar-cast'), /height:100%/u, '席卡要撑满行')
 })
 
-test('抬头 / 主持人 / 台词 / 胜负卡都在布局流里，不再用只对 6 人局成立的魔数', () => {
-  for (const selector of ['.ar-stage-head', '.ar-stage-host', '.ar-stage .ar-stage-line', '.ar-stage-win']) {
+test('抬头 / 主持人 / 票型条 / 台词 / 胜负卡都在布局流里，不再用只对 6 人局成立的魔数', () => {
+  for (const selector of ['.ar-stage-head', '.ar-stage-host', '.ar-stage .ar-stage-vote', '.ar-stage .ar-stage-line', '.ar-stage-win']) {
     assert.match(rule(selector), /position:relative/u, `${selector} 必须参与布局流`)
   }
   assert.doesNotMatch(CSS_ONLY, /bottom:43\.5%/u, '台词条的位置不再写死 bottom:43.5%（那个数值只对 6 人局成立）')
@@ -90,11 +90,20 @@ test('抬头 / 主持人 / 台词 / 胜负卡都在布局流里，不再用只�
   /* 唯一可伸缩的一段是静场留白：把自由高度收在一处，条带与文字谁也不挤谁。 */
   assert.match(rule('.ar-stage-center'), /flex:1 1 auto/u)
   assert.match(rule('.ar-stage-center'), /min-height:0/u)
-  /* 台词选择器必须压过页面基线的 .ar-page p{margin:0}（(0,1,1) > (0,1,0)）。 */
+  /* 台词选择器必须压过页面基线的 .ar-page p{margin:0}（(0,2,1) > (0,1,1)）。 */
   assert.match(rule('.ar-stage .ar-stage-line'), /margin:0 5%/u)
+  assert.match(rule('.ar-stage .ar-stage-vote p'), /margin:0/u)
   /* 主持人台词最多两行，条带的高度预算才不会被一句长播报吃掉。 */
   assert.match(rule('.ar-stage-host p'), /-webkit-line-clamp:2/u)
   assert.match(rule('.ar-stage-host p'), /overflow:hidden/u)
+  /* 票型条同样只占一行：9 人局 9 个投票人必然溢出，所以投票人由席卡上的「→N」回答。 */
+  assert.match(rule('.ar-stage .ar-stage-vote p'), /white-space:nowrap/u)
+  assert.match(rule('.ar-stage .ar-stage-vote p'), /text-overflow:ellipsis/u)
+  /* 票型的两块标记在席卡里，席卡高度不变 —— 8 / 9 人局加不起任何常驻行。 */
+  assert.match(rule('.ar-cast-vote,.ar-cast-tally'), /position:absolute/u, '票型标记必须贴在立绘框里，不占行高')
+  /* 最高票的两种裁决必须分色：单一领先用红（被放逐），平票用琥珀（复投）。 */
+  assert.match(rule('.ar-cast-tally[data-lead="one"]'), /#B4342A/u)
+  assert.match(rule('.ar-cast-tally[data-lead="tie"]'), /#B98418/u)
 })
 
 test('舞台是查询容器：字号与窄屏降级都按舞台宽度算，不跟窗口走', () => {
@@ -117,19 +126,22 @@ test('观战页把行数与列数写进自定义属性：CSS 不再写死 6 列'
 test('高度预算：设计画幅下条带 + 文字 + 留白仍留得出静场（8 / 9 人不再是满屏席卡）', () => {
   /* 1280×720 是离线回放与视频的画幅，也是观战页在宽窗口下的量级。
      文字段的高度取 CSS 里的对齐数值：抬头（日期胶囊 20 + 间距 4 + 阶段 27×1.1）、
-     主持人（徽标 18 + 间距 4 + 两行台词 2×19 + 内边距 10）、台词（10 + 13×1.45）。 */
+     主持人（徽标 18 + 间距 4 + 两行台词 2×19 + 内边距 10）、票型条（一句 13×1.45 + 内边距 10，
+     与 18px 的徽标取高者）、台词（10 + 13×1.45）。票型条只在投票阶段出现，这里按最坏情况算。 */
   const width = 1280, height = 720
   const pad = (2.8 + 1.9) / 100 * width
   const content = height - pad
   const head = 20 + 4 + Math.round(27 * 1.1)
   const host = 18 + 4 + 2 * 19 + 10
   const line = 10 + Math.round(13 * 1.45)
+  const vote = line
   const hostMargin = 0.04 * width
+  const voteMargin = 0.024 * width
   const castMargin = 0.016 * width
   for (const rows of [1, 2]) {
     const selector = rows === 1 ? '.ar-stage' : `.ar-stage[data-rows="${rows}"]`
     const band = content * bandOf(selector) / 100
-    const used = head + hostMargin + host + line + castMargin + band
+    const used = head + hostMargin + host + voteMargin + vote + line + castMargin + band
     assert.ok(used < content, `${rows} 行的席位条带 + 文字（${Math.round(used)}px）必须小于可用高度（${Math.round(content)}px）`)
   }
 })

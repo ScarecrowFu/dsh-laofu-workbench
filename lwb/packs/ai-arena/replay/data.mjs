@@ -58,6 +58,9 @@ function werewolfProjection(match, portraits) {
     })),
     columns: { landscape: werewolfCastColumns(seatCount, 'landscape'), portrait: werewolfCastColumns(seatCount, 'portrait') },
     steps: timeline.replayable ? timeline.steps.map(({ snapshot, ...step }) => step) : null,
+    /* 座位 → 死因（整局）：席卡上的「出局」标签按它写「夜刀 / 毒杀 / 票出 / 带走」。
+       死因一旦写下就不再变，所以逐帧、终局帧读同一份，不跟着 steps 逐手存。 */
+    deathCauses: timeline.deathCauses || {},
     /* 最后一手的存活与出局：逐手快照讲的是「本手开场」，最后一手的结果没有下一帧可挂，
        由终局帧承接（否则最后一手出局的人会在终局席位上复活）。 */
     finalAlive: timeline.finalAlive ?? null,

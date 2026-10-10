@@ -340,9 +340,9 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
     match.export?.status === 'failed' && h('p', { className: 'ar-error' }, match.export.error), notice && h('p', { className: 'ar-notice', role: 'status' }, notice), videoUrl && h('video', { className: 'ar-video', src: videoUrl, controls: true }),
     h(Conversation, { match, turnId: step === null ? match.events.findLast(event => event.type === 'request')?.turnId : frame.current?.turnId, renderConversation, focusSession }), confirmation)
 }
-/* 席位舞台：从上到下依次是抬头、主持人播报（终局换成胜负卡）、场景留白、本手台词、
-   席位条带。全都参与布局流，没有只对 6 人局成立的绝对定位数值：席位条带高度由行数
-   （--ar-cast-band）决定，席卡高度由行高决定、立绘按原比例居中，所以 8 / 9 人是
+/* 席位舞台：从上到下依次是抬头、主持人播报（终局换成胜负卡）、票型条、场景留白、
+   本手台词、席位条带。全都参与布局流，没有只对 6 人局成立的绝对定位数值：席位条带高度
+   由行数（--ar-cast-band）决定，席卡高度由行高决定、立绘按原比例居中，所以 8 / 9 人是
    「卡片变小一档」，而不是「把 8 张卡撑出画幅、裁掉第一排的头」。 */
 function WerewolfStage({ players, state, active, speech }) {
   const stage = werewolfStage({ players, state, active, speech })
@@ -367,6 +367,11 @@ function WerewolfStage({ players, state, active, speech }) {
       h('b', null, stage.winnerSide === 'wolf' ? '狼人获胜' : '好人获胜'),
       (stage.host || stage.result) ? h('span', null, stage.host || stage.result) : null)
       : stage.host ? h('div', { className: 'ar-stage-host' }, h('em', { className: 'ar-host-badge' }, '主持人'), h('p', { title: stage.host }, stage.host)) : null,
+    /* 票型条：谁几票、这一轮是怎么裁的。它回答的是「为什么出局」，所以与主持人播报分两格 ——
+       主持人说的是阶段与出局名单，这里说的是票数。9 人局一行放不下时省略号收尾，整句在 title 里；
+       谁投了谁由席卡右上角的「→N」回答，不塞进这一行。终局不出（那一格整块让给胜负卡）。 */
+    !stage.winnerSide && stage.voteLine ? h('div', { className: 'ar-stage-vote', 'data-tone': stage.voteTone },
+      h('em', { className: 'ar-vote-badge' }, '票型'), h('p', { title: stage.voteLine }, stage.voteLine)) : null,
     /* 场景留白：唯一可伸缩的一段。抬头、台词与席位条带都是 flex:none，任何人数都不会
        把它们挤出画幅；终局卡占了台词位，所以也不会盖在席卡上。 */
     h('div', { className: 'ar-stage-center', 'aria-hidden': true }),
@@ -380,7 +385,11 @@ function WerewolfStage({ players, state, active, speech }) {
       h('span', { className: 'ar-cast-face' },
         h('img', { alt: seat.name, src: MODEL_ART.full[`${seat.portrait}${seat.alive ? '' : '-dead'}`] || MODEL_ART.full.generic }),
         h('i', { className: 'ar-cast-veil' }),
-        seat.alive ? null : h('span', { className: 'ar-cast-out' }, '出局')),
+        /* 这一席投给了谁：箭头挂在投出票的那张卡上，「谁投了谁」不需要观众自己配对。 */
+        seat.voteOn ? h('span', { className: 'ar-cast-vote', title: `本轮投给 ${seat.voteOn} 号` }, `→${seat.voteOn}`) : null,
+        /* 这一席拿了几票：最高票着色，平票与单一领先分两种颜色（裁决不同，颜色必须分开）。 */
+        seat.voteCount ? h('span', { className: 'ar-cast-tally', 'data-lead': seat.voteLead || undefined, title: `本轮 ${seat.voteCount} 票` }, `${seat.voteCount} 票`) : null,
+        seat.alive ? null : h('span', { className: 'ar-cast-out' }, seat.deathMark)),
       h('figcaption', null, h('b', null, seat.name), h('em', { className: 'ar-role-mark', 'data-role': seat.role }, seat.mark), seat.badge ? h('em', { className: 'ar-cast-badge', 'data-badge': seat.badge }, seat.badge) : null))),
     ))
 }

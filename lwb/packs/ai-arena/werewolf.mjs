@@ -136,6 +136,9 @@ function openDay(state) {
   state.speeches = []
   state.voteRound = 0
   state.votes = []
+  state.voteTally = emptyTally()
+  /* 新的一天开场，昨天的票型下画：它已经由前一夜的播报说完了。 */
+  state.lastVote = null
   state.pending = aliveSeats(state).length ? [aliveSeats(state)[0]] : []
   publicEvent(state, `第 ${state.day} 天，请存活玩家按座位发言。`)
   narrate(state, `第 ${state.day} 天，请存活玩家依次发言。`)
@@ -175,31 +178,80 @@ function dawn(state) {
   return advance(state)
 }
 
+/* 计票。票数降序、同票按座位升序：展示层的票型条与席卡标记直接照这个顺序铺，
+   不再各自排一遍；leaders 按座位升序，文字里的「2 号、5 号」因此可读。 */
 function tally(votes) {
   const counts = new Map()
   for (const vote of votes) counts.set(vote.target, (counts.get(vote.target) || 0) + 1)
   let top = 0
   for (const count of counts.values()) top = Math.max(top, count)
-  const leaders = [...counts.entries()].filter(([, count]) => count === top).map(([seat]) => seat)
-  return { counts: [...counts.entries()].map(([seat, count]) => ({ seat, count })), leaders, top }
+  const leaders = [...counts.entries()].filter(([, count]) => count === top).map(([seat]) => seat).sort((left, right) => left - right)
+  const list = [...counts.entries()].map(([seat, count]) => ({ seat, count })).sort((left, right) => right.count - left.count || left.seat - right.seat)
+  return { counts: list, leaders, top }
+}
+
+const emptyTally = () => ({ counts: [], leaders: [], top: 0 })
+
+/**
+ * 开一轮投票。`votes` 与 `voteTally` 必须同进同退：展示层在投票阶段直接读它们画
+ * 「已投几名 / 谁暂列几票」，只清一个就会画出「有人投了、票数为零」的自相矛盾画面。
+ */
+function openVoteRound(state, round) {
+  state.voteRound = round
+  state.votes = []
+  state.voteTally = emptyTally()
+  state.pending = aliveSeats(state)
+}
+
+/**
+ * 本轮结算留档。票型是公共信息（明票），观众要看到「谁投了谁、谁几票」才能理解裁决，
+ * 但它是**观众侧数据**：与 narration 同类，不进 observe、不参与任何裁决，所以单独合入
+ * 不需要动 werewolf.version。
+ *
+ * `lastVote` 只留最近一轮（不是整局历史）：展示要的是「刚刚这一轮的票型」，而它在
+ * 平票复投那一帧必须还在 —— 那一刻 `votes` 已经归零，只看 phase 会把平票画成一地空票。
+ * 下一轮的第一张票落下时清掉它（见 applyMove 的 day-vote 分支），于是「本轮结果」只在
+ * 结算播报那一帧到当天结束之间可见，第二天开场（openDay）不再残留。
+ */
+function closeRound(state, record) {
+  state.lastVote = record
+  state.votes = []
+  state.voteTally = emptyTally()
+}
+
+/** 结算记录：清票之前把这一轮的票型、票数与裁决一起定下来。 */
+function voteRecord(state, result) {
+  return {
+    day: state.day,
+    round: state.voteRound,
+    votes: state.votes.map(vote => ({ seat: vote.seat, target: vote.target })),
+    counts: result.counts,
+    leaders: result.leaders,
+    top: result.top,
+    tie: result.leaders.length > 1,
+    eliminated: null,
+    final: false,
+  }
 }
 
 function closeSpeech(state) {
   state.phase = 'day-vote'
-  state.voteRound = 1
-  state.votes = []
-  state.pending = aliveSeats(state)
+  openVoteRound(state, 1)
   publicEvent(state, '发言结束，请同时投票。')
   narrate(state, '发言结束，请投票放逐一名玩家。')
 }
 
 function closeVote(state) {
-  const { leaders } = tally(state.votes)
+  const result = tally(state.votes)
+  const { leaders } = result
+  const record = voteRecord(state, result)
   if (leaders.length === 1) {
     const seat = leaders[0]
+    record.eliminated = seat
     kill(state, seat, 'vote')
     publicEvent(state, `${seat} 号被投票出局。`)
     narrate(state, `${seat} 号被投票放逐。`)
+    closeRound(state, record)
     const player = seatOf(state, seat)
     if (player.role === 'hunter') {
       state.phase = 'hunter'
@@ -212,13 +264,14 @@ function closeVote(state) {
     return openNight(state)
   }
   if (state.voteRound === 1) {
-    state.voteRound = 2
-    state.votes = []
-    state.pending = aliveSeats(state)
+    closeRound(state, record)
+    openVoteRound(state, 2)
     publicEvent(state, `平票（${leaders.map(seat => `${seat} 号`).join('、')}），进行一次复投。`)
     narrate(state, `${leaders.map(seat => `${seat} 号`).join('、')}平票，进入复投。`)
     return state
   }
+  record.final = true
+  closeRound(state, record)
   publicEvent(state, '复投仍然平票，无人出局。')
   narrate(state, '复投仍然平票，本日无人出局。')
   state.day += 1
@@ -271,6 +324,9 @@ export const werewolf = Object.freeze({
       speakerCursor: 0,
       votes: [],
       voteRound: 0,
+      /* 观众侧的票型：进行中一轮的票数与结算留档（见 closeRound / voteRecord）。 */
+      voteTally: emptyTally(),
+      lastVote: null,
       pending: [roles.findIndex(role => role === 'werewolf') + 1],
       winner: null,
       terminalReason: null,
@@ -423,6 +479,9 @@ function applyMove(state, action, playerIndex) {
     const target = requireSeat(action?.target, next, { actor: seat })
     if (next.votes.some(vote => vote.seat === seat)) throw new Error('本轮已经投过票。')
     next.votes.push({ seat, target })
+    next.voteTally = tally(next.votes)
+    /* 新的一票落下，上一轮的结算板退场：平票复投的第一票从这里开始把画面交回「本轮进行中」。 */
+    next.lastVote = null
     next.pending = next.pending.filter(item => item !== seat)
     if (!next.pending.length) closeVote(next)
     pushMove(next, seat, action, actionPhase)

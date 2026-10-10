@@ -129,6 +129,16 @@ body[data-ds-dark-theme] .ar-page{
 .ar-host-badge{display:inline-flex;align-items:center;height:18px;padding:0 9px;border-radius:999px;background:rgba(224,163,46,.18);border:1px solid rgba(224,163,46,.55);color:#F2DCA8;font-size:10px;font-size:clamp(8px,.84cqw,10px);font-weight:800;font-style:normal;letter-spacing:.14em}
 /* 台词最多两行（line-clamp）：整句仍在 DOM 与 title 里，画面上不会把席位条带顶下去。 */
 .ar-stage-host p{margin:0;padding:5px 13px;border-radius:9px;background:rgba(8,12,18,.74);border:1px solid rgba(255,255,255,.14);color:#F6F1E4;font-size:13px;font-size:clamp(10px,1.08cqw,13px);font-weight:700;line-height:1.45;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+/* 票型条：谁几票、这一轮是怎么裁的。它回答的是「为什么出局」，所以与主持人播报分两格 ——
+   主持人说的是阶段与出局名单，这里说的是票数。一行放不下时省略号收尾，整句在 title 里；
+   谁投了谁由席卡里的「→N」回答，不塞进这一行（9 人局 9 个投票人必然溢出）。
+   选择器带 .ar-stage 前缀，压过页面基线的 .ar-page p{margin:0}（(0,2,1) > (0,1,1)）。 */
+.ar-stage .ar-stage-vote{position:relative;z-index:2;flex:none;margin:2.4% 0 0 5%;max-width:64%;display:flex;align-items:center;gap:6px}
+.ar-vote-badge{flex:none;display:inline-flex;align-items:center;height:18px;padding:0 9px;border-radius:999px;background:rgba(55,138,221,.2);border:1px solid rgba(55,138,221,.55);color:#CFE3FA;font-size:10px;font-size:clamp(8px,.84cqw,10px);font-weight:800;font-style:normal;letter-spacing:.14em}
+.ar-stage .ar-stage-vote p{margin:0;min-width:0;padding:5px 13px;border-radius:9px;background:rgba(8,12,18,.74);border:1px solid rgba(255,255,255,.14);color:#F6F1E4;font-size:13px;font-size:clamp(10px,1.08cqw,13px);font-weight:700;line-height:1.45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 平票用琥珀、出结果用红：与「进入复投 / 被放逐」两种裁决一一对应，颜色不再兼两义。 */
+.ar-stage .ar-stage-vote[data-tone="tie"] .ar-vote-badge{background:rgba(224,163,46,.2);border-color:rgba(224,163,46,.55);color:#F4DFAE}
+.ar-stage .ar-stage-vote[data-tone="result"] .ar-vote-badge{background:rgba(180,52,42,.26);border-color:rgba(224,110,96,.6);color:#FFD9D3}
 /* 场景留白：唯一可伸缩的一段。抬头、台词与席位条带都是 flex:none，谁也挤不掉谁。 */
 .ar-stage-center{position:relative;z-index:1;flex:1 1 auto;min-height:0}
 /* 席位条带：高度按行数取（可被压缩），列数 / 行数来自内联的 --ar-cast-cols / --ar-cast-rows。
@@ -148,6 +158,14 @@ body[data-ds-dark-theme] .ar-page{
 /* 终局：胜方阵营的席卡加金框，口径与离线回放的 data-win 一致；死掉的胜方仍保留灰化。 */
 .ar-cast[data-win="true"] .ar-cast-face{border-color:#E0A32E;box-shadow:0 0 0 2px rgba(224,163,46,.5),0 10px 22px rgba(3,6,12,.55)}
 .ar-cast-out{position:absolute;left:50%;bottom:4%;transform:translateX(-50%);padding:1px 7px;border-radius:999px;background:#B4342A;color:#fff;font-size:9px;font-weight:800;letter-spacing:.14em;white-space:nowrap}
+/* 本轮票型：箭头挂在投出票的那张卡上（→N），票数挂在被投的那张卡上（N 票）。
+   两块都在立绘框内，席卡高度一个像素都不变 —— 8 / 9 人局加不起任何常驻行。
+   颜色只给「最高票」：单一领先用红（与出局同一语义），平票用琥珀（与复投同一语义）。 */
+.ar-cast-vote,.ar-cast-tally{position:absolute;top:3px;z-index:2;display:inline-flex;align-items:center;height:15px;padding:0 5px;border-radius:5px;background:rgba(10,14,22,.86);border:1px solid rgba(255,255,255,.42);color:#F3F7FC;font-size:9px;font-weight:800;font-style:normal;line-height:1;white-space:nowrap;box-shadow:0 2px 8px rgba(3,6,12,.55)}
+.ar-cast-vote{right:3px}
+.ar-cast-tally{left:3px}
+.ar-cast-tally[data-lead="one"]{background:#B4342A;border-color:#FFB4A8;color:#fff}
+.ar-cast-tally[data-lead="tie"]{background:#B98418;border-color:#FFDF9E;color:#fff}
 .ar-cast figcaption{display:flex;align-items:center;justify-content:center;gap:4px;max-width:100%;flex:none}
 .ar-cast figcaption b{font-size:10px;font-weight:700;color:#F3F7FC;text-shadow:0 1px 4px rgba(0,0,0,.85);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 窄舞台（窗口本身也窄）：两行席位每排只剩几十像素高，署名让位给立绘——姓名、身份、

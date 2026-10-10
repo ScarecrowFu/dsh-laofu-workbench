@@ -7,7 +7,7 @@
  *
  * 只在浏览器/打包环境使用（不依赖 node:fs，不依赖 xiangui 规则）。
  */
-import { boardSvg, actionLabel, playerSide, ROLE_MARK, ROLE_NAME, werewolfPhaseLabel, werewolfSideName, werewolfCastColumns, isCompactTurn } from '../presentation.mjs'
+import { boardSvg, actionLabel, playerSide, ROLE_MARK, ROLE_NAME, werewolfPhaseLabel, werewolfSideName, werewolfCastColumns, isCompactTurn, werewolfVoteLine, werewolfVoteTone, werewolfDeathMark } from '../presentation.mjs'
 import { WEREWOLF_ART } from '../werewolf-art.mjs'
 import { MODEL_ART } from '../model-art.mjs'
 
@@ -333,6 +333,8 @@ function werewolfFrame(data, index) {
     alive: new Set(isFinale ? (wolf.finalAlive || finalStep?.alive || initial) : (step ? step.alive : initial)),
     deaths: step ? step.deaths : (isFinale ? (wolf.finalDeaths || []) : []),
     activeSeat: step ? step.seat : null,
+    /* 票型由投影逐手算好；终局不画（那一格整块让给胜负卡，席位条带也没有多出来的高度）。 */
+    voteBoard: isFinale ? null : (step?.voteBoard || null),
     scene: isFinale ? (data.result?.side === 'wolf' ? 'night' : 'day') : (step?.scene || (phase.startsWith('day') ? 'day' : 'night')),
     day: isFinale ? (finalStep?.day || 1) : (step?.day || 1),
     label: isFinale ? '终局' : (step?.label || (index >= 1 ? werewolfPhaseLabel(phase, null) : '天黑请闭眼')),
@@ -351,10 +353,20 @@ function werewolfSeatHtml(seat, index_, frame, options, order) {
   const style = `--ww-i:${index_};opacity:${round(enterOpacity)};transform:translateY(${round(enterShift - lift * 14)}px) scale(${round(enterScale + lift * .06)})`
   const strike = animate && dying ? (() => { const [scale, opacity] = wwStrike(t); return `<span class="ww-strike" style="opacity:${round(opacity)};transform:translate(-50%,-50%) scale(${round(scale)})"></span>` })() : ''
   const [tagOpacity, tagShift] = animate && dying ? wwTagIn(t) : [1, 0]
-  const out = !alive ? `<span class="ww-out" style="opacity:${round(tagOpacity)};transform:translateX(-50%) translateY(${round(tagShift)}px)">出局</span>` : ''
+  /* 出局标签写死因（夜刀 / 毒杀 / 票出 / 带走）：三种死法不再共用一句「出局」，
+     而「为什么出局」正是票型那一组改动要回答的另一半。死因表整局不变，逐帧读同一份。 */
+  const out = !alive ? `<span class="ww-out" style="opacity:${round(tagOpacity)};transform:translateX(-50%) translateY(${round(tagShift)}px)">${esc(werewolfDeathMark((options.deathCauses || {})[seat.seat]))}</span>` : ''
+  /* 本轮票型：箭头挂在投票者那张卡上，票数挂在被投者那张卡上。两块都在立绘框内，
+     席卡高度不变 —— 8 / 9 人局加不起任何常驻行。 */
+  const board = frame.voteBoard
+  const voted = board ? (board.votes || []).find(vote => vote.seat === seat.seat) : null
+  const count = board ? ((board.counts || []).find(item => item.seat === seat.seat)?.count || 0) : 0
+  const lead = count > 0 && count === board.top ? (board.tie ? 'tie' : 'one') : ''
+  const vote = voted ? `<span class="ww-vote">→${voted.target}</span>` : ''
+  const tally = count ? `<span class="ww-tally"${lead ? ` data-lead="${lead}"` : ''}>${count} 票</span>` : ''
   return `<figure class="ww-seat" data-i="${index_}" data-seat="${seat.seat}" data-alive="${alive}" data-active="${active}" data-role="${esc(seat.role)}"${winning ? ' data-win="true"' : ''} style="${style}">` +
     `<span class="ww-no">${seat.seat}</span>` +
-    `<span class="ww-face"><img src="${seatFace({ ...seat, alive })}" alt=""><i class="ww-veil"></i>${strike}${out}</span>` +
+    `<span class="ww-face"><img src="${seatFace({ ...seat, alive })}" alt=""><i class="ww-veil"></i>${vote}${tally}${strike}${out}</span>` +
     `<figcaption><b class="ww-name">${esc(seat.name)}</b><em class="ww-role" data-role="${esc(seat.role)}">${ROLE_MARK[seat.role] || '·'}</em></figcaption>` +
     `</figure>`
 }
@@ -431,7 +443,8 @@ function werewolfStageHtml(data, index, options = {}) {
      形象进执行者卡后卡片从 79px 长到 112px（+33px），回合记录由 3 条收到 2 条正是让位的那一笔
      ——侧栏净空本来只剩 8—12px（见 test/replay-sidebar.test.mjs 的高度预算）。 */
   const entries = data.moves.slice(0, index).slice(-3, -1).reverse()
-  const cast = seats.map((seat, i) => werewolfSeatHtml(seat, i, frame, { t, animate }, order >= 0 ? i : -1)).join('')
+  const deathCauses = wolf.deathCauses || {}
+  const cast = seats.map((seat, i) => werewolfSeatHtml(seat, i, frame, { t, animate, deathCauses }, order >= 0 ? i : -1)).join('')
   const backgrounds = ['night', 'day'].map(scene => {
     const on = scene === frame.scene
     return `<img class="ww-bg" data-scene="${scene}" src="${WEREWOLF_ART.scenes[scene] || ''}" alt="" style="opacity:${on ? round(sceneFade) : 0}">`
@@ -451,6 +464,13 @@ function werewolfStageHtml(data, index, options = {}) {
       `<b>${frame.winnerSide === 'wolf' ? '狼人获胜' : frame.winnerSide ? '好人获胜' : '比赛结束'}</b>` +
       `<span>${esc(wolf.finaleBody || data.result?.message || '')}</span></div>`
     : ''
+  /* 票型条：谁几票、这一轮是怎么裁的（一句话，整局措辞由 presentation 出一份）。
+     它与主持人播报分两格 —— 主持人说的是阶段与出局名单，这里说的是票数；谁投了谁由席卡上的
+     「→N」回答。终局不出：那一格整块让给胜负卡，而条带上方也没有多出来的高度放第二行。 */
+  const voteLine = frame.isFinale ? '' : werewolfVoteLine(frame.voteBoard)
+  const voteTag = voteLine
+    ? `<div class="ww-vote-line" data-tone="${esc(werewolfVoteTone(frame.voteBoard))}"><em>票型</em><p>${esc(voteLine)}</p></div>`
+    : ''
   const narrative = frame.isFinale
     ? `<div class="finale" data-kind="${frame.winnerSide ? 'win' : 'draw'}" style="opacity:${round(finaleOpacity)};transform:translateY(${round(finaleShift)}px)">` +
       `<small>终局 · ${werewolfSideName(frame.winnerSide)}</small><p>${esc(data.result?.message || '比赛已结束。')}</p></div>`
@@ -468,7 +488,7 @@ function werewolfStageHtml(data, index, options = {}) {
     `<header class="ww-head" style="opacity:${round(headOpacity)};transform:translateY(${round(headShift)}px)">` +
     `<span class="ww-day">第 ${frame.day} 天 · ${frame.scene === 'day' ? '白天' : '夜间'}</span>` +
     `<b class="ww-phase">${esc(frame.label)}</b></header>` +
-    hostTag + winTag +
+    hostTag + winTag + voteTag +
     `<div class="ww-cast">${cast}</div>` +
     `</div></section>` +
     `<aside class="side">` +

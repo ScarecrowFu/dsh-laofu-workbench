@@ -10,14 +10,19 @@
  * 规则引擎只看参数（没有时钟、随机源或宿主 API），所以浏览器里也能逐手重放。
  */
 import { werewolf, WEREWOLF_PRESETS, WEREWOLF_OPENING } from './werewolf.mjs'
-import { movesOf, werewolfPhaseLabel, werewolfScene, werewolfHostLine } from './presentation.mjs'
+import { movesOf, werewolfPhaseLabel, werewolfScene, werewolfHostLine, werewolfVoteBoard, werewolfDeathCauses } from './presentation.mjs'
 
 /**
  * 给 werewolfStage 用的那一刻公开局面。
  *
  * 只带舞台真正读到的字段：phase / hunterCause / day 决定抬头与昼夜，players 决定席位存活，
  * narration 决定主持人这一句，winner / terminalReason 决定终局图层。整份规则局面里的审计字段
- * （wolfChat / checks / votes / night / moves …）不进画面，逐手各留一份也就不会按手数平方地累积。
+ * （wolfChat / checks / night / moves …）不进画面，逐手各留一份也就不会按手数平方地累积。
+ *
+ * 票型（`votes` / `voteRound` / `voteTally` / `lastVote`）与死因（`deathCauses`）是**公共信息**，
+ * 也是舞台要画的：少了它们，往回拖时「谁投了谁、谁几票、为什么出局」会整块消失，只剩直播那一帧
+ * 有（跟随最新回合喂的是记录自己的 state）。规则层逐票替换这些对象、从不原地改，快照之间因此
+ * 不会互相污染；仍然逐手复制一份，与 `players` / `narration` 同一个规矩。
  *
  * `lastNightDeaths` 在这里是「这一步宣布的出局」：直播路径直接喂规则 state 时它是规则字段，
  * 逐手快照里则是本步的 deaths 增量 —— 舞台只拿它决定 data-act（出局强调），两种读法都对得上。
@@ -30,6 +35,8 @@ import { movesOf, werewolfPhaseLabel, werewolfScene, werewolfHostLine } from './
  * （见 werewolfTimeline 的逐手投影），两者不是同一时刻的切片，所以不能都从 `state` 上截。
  */
 function snapshotOf(state, deaths = [], roles = null, narration = state.narration) {
+  const causes = {}
+  for (const death of state.deaths || []) causes[death.seat] = death.cause
   return {
     phase: state.phase,
     hunterCause: state.hunterCause ?? null,
@@ -38,6 +45,15 @@ function snapshotOf(state, deaths = [], roles = null, narration = state.narratio
     narration: (narration || []).slice(-1),
     publicLog: (state.publicLog || []).slice(-1),
     lastNightDeaths: [...deaths],
+    votes: (state.votes || []).map(vote => ({ seat: vote.seat, target: vote.target })),
+    voteRound: state.voteRound || 0,
+    voteTally: {
+      counts: (state.voteTally?.counts || []).map(item => ({ seat: item.seat, count: item.count })),
+      leaders: [...(state.voteTally?.leaders || [])],
+      top: state.voteTally?.top || 0,
+    },
+    lastVote: state.lastVote ? { ...state.lastVote, votes: state.lastVote.votes.map(vote => ({ ...vote })), counts: state.lastVote.counts.map(item => ({ ...item })), leaders: [...state.lastVote.leaders] } : null,
+    deathCauses: causes,
     winner: state.winner ?? null,
     terminalReason: state.terminalReason ?? null,
   }
@@ -86,6 +102,9 @@ export function werewolfTimeline(match) {
     /* 最后一手的存活与出局（终局帧用）：不可重放时为 null，调用方回落到记录自己的 state。 */
     finalAlive: null,
     finalDeaths: [],
+    /* 座位 → 死因（整局）。死因一旦写下就不再变，所以终局帧与中间帧读同一份；
+       不可重放时退回记录自己的 state，至少让「为什么出局」还在。 */
+    deathCauses: werewolfDeathCauses(match.state || {}),
     /* 整局重放到底时最后一条结算播报：没有下一手可挂，由终局卡接管。 */
     closing: '',
   }
@@ -112,6 +131,7 @@ export function werewolfTimeline(match) {
     const host = werewolfHostLine({ narration: state.narration })
     const deaths = state.deaths.slice(shown).map(death => death.seat)
     shown = state.deaths.length
+    const snapshot = { ...snapshotOf(state, deaths, dealt, state.narration), phase, hunterCause, day }
     steps.push({
       n: move.moveNumber,
       seat: move.player + 1,
@@ -122,7 +142,10 @@ export function werewolfTimeline(match) {
       alive: state.players.filter(player => player.alive).map(player => player.seat),
       deaths,
       host,
-      snapshot: { ...snapshotOf(state, deaths, dealt, state.narration), phase, hunterCause, day },
+      /* 票型取自与快照同一个时刻：观战页往回拖画快照、离线回放与视频读这个字段，
+         两者是同一次计算的两个出口，不可能各自漂移。 */
+      voteBoard: werewolfVoteBoard(snapshot),
+      snapshot,
     })
     let after
     try { after = werewolf.apply(state, move.action, move.player) } catch { return timeline }
@@ -135,6 +158,8 @@ export function werewolfTimeline(match) {
      否则最后一手被放逐/带走的人会在终局帧里「复活」。 */
   timeline.finalAlive = state.players.filter(player => player.alive).map(player => player.seat)
   timeline.finalDeaths = state.deaths.slice(shown).map(death => death.seat)
+  /* 重放到终局的死因表：整局重放到底时以重放结果为准（与 finalAlive / finalDeaths 同一口径）。 */
+  timeline.deathCauses = werewolfDeathCauses(state)
   /* 重放到底之后状态上剩下的最后一条播报：它是「整局结束」那一句，交给终局卡。 */
   timeline.closing = werewolfHostLine({ narration: state.narration })
   /* 只有整局重放到底，才敢用重放出的阵营覆盖记录自己的口径。 */

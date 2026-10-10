@@ -325,6 +325,57 @@ var werewolfScene = (phase, hunterCause) => phase === "hunter" ? hunterCause ===
 var werewolfPhaseLabel = (phase, hunterCause) => phase === "hunter" ? "\u730E\u4EBA\u5F00\u67AA" : werewolfPhase(phase).label;
 var WEREWOLF_SIDE = Object.freeze({ village: "\u597D\u4EBA\u9635\u8425", wolf: "\u72FC\u4EBA\u9635\u8425" });
 var werewolfSide = (role) => role === "werewolf" ? "wolf" : "village";
+var DEATH_MARK = Object.freeze({ wolf: "\u591C\u5200", poison: "\u6BD2\u6740", vote: "\u7968\u51FA", hunter: "\u5E26\u8D70" });
+var werewolfDeathMark = (cause) => DEATH_MARK[cause] || "\u51FA\u5C40";
+function werewolfVoteBoard(state = {}) {
+  if (state.winner) return null;
+  const closed = state.lastVote;
+  if (closed) return { ...closed, open: false, voters: null, awaiting: 0 };
+  if (state.phase !== "day-vote") return null;
+  const votes = state.votes || [];
+  const tally2 = state.voteTally || legacyTally(votes);
+  const alive = (state.players || []).filter((player) => player.alive !== false).map((player) => player.seat);
+  const voted = new Set(votes.map((vote) => vote.seat));
+  return {
+    day: state.day || 1,
+    round: state.voteRound || 1,
+    votes: votes.map((vote) => ({ seat: vote.seat, target: vote.target })),
+    counts: tally2.counts || [],
+    leaders: tally2.leaders || [],
+    top: tally2.top || 0,
+    tie: (tally2.leaders || []).length > 1,
+    eliminated: null,
+    final: false,
+    open: true,
+    voters: alive.length,
+    awaiting: alive.filter((seat) => !voted.has(seat)).length
+  };
+}
+function legacyTally(votes) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const vote of votes) counts.set(vote.target, (counts.get(vote.target) || 0) + 1);
+  let top = 0;
+  for (const count of counts.values()) top = Math.max(top, count);
+  return {
+    counts: [...counts.entries()].map(([seat, count]) => ({ seat, count })).sort((left, right) => right.count - left.count || left.seat - right.seat),
+    leaders: [...counts.entries()].filter(([, count]) => count === top).map(([seat]) => seat).sort((left, right) => left - right),
+    top
+  };
+}
+function werewolfVoteLine(board) {
+  if (!board) return "";
+  const names = (seats) => seats.map((seat) => `${seat} \u53F7`).join("\u3001");
+  const round = board.round > 1 ? "\u590D\u6295" : "\u6295\u7968";
+  if (board.open) {
+    const progress = `\u7B2C ${board.day} \u5929 \xB7 ${round} ${board.voters - board.awaiting}/${board.voters}`;
+    if (!board.top) return progress;
+    return `${progress} \xB7 ${board.tie ? "\u5E76\u5217" : "\u6682\u5217"} ${names(board.leaders)} ${board.top} \u7968`;
+  }
+  if (board.eliminated) return `\u7B2C ${board.day} \u5929 \xB7 ${round}\u7ED3\u679C\uFF1A${board.eliminated} \u53F7 ${board.top} \u7968\uFF0C\u88AB\u653E\u9010`;
+  if (board.final) return `\u7B2C ${board.day} \u5929 \xB7 \u590D\u6295\u4ECD\u5E73\u7968\uFF1A${names(board.leaders)} \u5404 ${board.top} \u7968\uFF0C\u672C\u65E5\u65E0\u4EBA\u51FA\u5C40`;
+  return `\u7B2C ${board.day} \u5929 \xB7 \u5E73\u7968\uFF1A${names(board.leaders)} \u5404 ${board.top} \u7968\uFF0C\u8FDB\u5165\u590D\u6295`;
+}
+var werewolfVoteTone = (board) => !board ? "" : board.open ? "open" : board.eliminated ? "result" : "tie";
 function seatIdentity(match, index) {
   if (match?.game?.id !== "werewolf" || !Number.isInteger(index) || index < 0) return null;
   const role = match.state?.players?.[index]?.role;
@@ -398,9 +449,13 @@ function werewolfStage({ players = [], state = {}, active = null, speech = "" } 
   const winnerSide = typeof state.winner === "string" ? state.winner : null;
   const portraits = assignPortraits(players);
   const layout = werewolfCastLayout((state.players || []).length);
+  const voteBoard = werewolfVoteBoard(state);
+  const causes = werewolfDeathCauses(state);
   const seats = (state.players || []).map((seat, index) => {
     const alive = seat.alive !== false;
     const winning = Boolean(winnerSide) && Boolean(seat.role) && werewolfSide(seat.role) === winnerSide;
+    const voted = voteBoard ? (voteBoard.votes || []).find((vote) => vote.seat === seat.seat) : null;
+    const count = voteBoard ? (voteBoard.counts || []).find((item) => item.seat === seat.seat)?.count || 0 : 0;
     return {
       seat: seat.seat,
       name: players[index]?.name || `${seat.seat} \u53F7`,
@@ -410,6 +465,13 @@ function werewolfStage({ players = [], state = {}, active = null, speech = "" } 
       roleName: ROLE_NAME[seat.role] || "",
       mark: ROLE_MARK[seat.role] || "",
       active: active === index,
+      /* 本轮票型：这一席投给了谁（→N），以及这一席拿了几票（N 票）。
+         最高票要着色 —— 平票与单一领先是两种不同的裁决，颜色必须分开。 */
+      voteOn: voted ? voted.target : null,
+      voteCount: count,
+      voteLead: count > 0 && count === voteBoard?.top ? voteBoard.tie ? "tie" : "one" : "",
+      /* 出局那一席写死因（夜刀 / 毒杀 / 票出 / 带走），不再是三种死法共用一句「出局」。 */
+      deathMark: alive ? "" : werewolfDeathMark(causes[seat.seat]),
       /* 终局席位标记：胜方阵营金框 + 每席「胜 / 负」徽标；没结束一律留空，不提前泄露胜负。 */
       winning,
       badge: winnerSide ? winning ? "\u80DC" : "\u8D1F" : ""
@@ -429,9 +491,18 @@ function werewolfStage({ players = [], state = {}, active = null, speech = "" } 
     deaths: [...state.lastNightDeaths || []],
     winnerSide,
     result: state.winner ? state.terminalReason : "",
+    voteBoard,
+    voteLine: werewolfVoteLine(voteBoard),
+    voteTone: werewolfVoteTone(voteBoard),
     /* 主持人台词：终局用裁决文案，其余用规则层这一手的播报。 */
     host: werewolfHostLine({ narration: state.narration, publicLog: state.publicLog, winnerSide, terminalReason: state.terminalReason, finale: Boolean(winnerSide) })
   };
+}
+function werewolfDeathCauses(state = {}) {
+  if (state.deathCauses && typeof state.deathCauses === "object") return state.deathCauses;
+  const map = {};
+  for (const death of Array.isArray(state.deaths) ? state.deaths : []) map[death.seat] = death.cause;
+  return map;
 }
 var actionLabel = (action, game) => game?.id === "werewolf" ? (() => {
   const target = Number.isInteger(action?.target) ? `${action.target} \u53F7` : "";
@@ -797,6 +868,8 @@ function openDay(state) {
   state.speeches = [];
   state.voteRound = 0;
   state.votes = [];
+  state.voteTally = emptyTally();
+  state.lastVote = null;
   state.pending = aliveSeats(state).length ? [aliveSeats(state)[0]] : [];
   publicEvent(state, `\u7B2C ${state.day} \u5929\uFF0C\u8BF7\u5B58\u6D3B\u73A9\u5BB6\u6309\u5EA7\u4F4D\u53D1\u8A00\u3002`);
   narrate(state, `\u7B2C ${state.day} \u5929\uFF0C\u8BF7\u5B58\u6D3B\u73A9\u5BB6\u4F9D\u6B21\u53D1\u8A00\u3002`);
@@ -839,24 +912,52 @@ function tally(votes) {
   for (const vote of votes) counts.set(vote.target, (counts.get(vote.target) || 0) + 1);
   let top = 0;
   for (const count of counts.values()) top = Math.max(top, count);
-  const leaders = [...counts.entries()].filter(([, count]) => count === top).map(([seat]) => seat);
-  return { counts: [...counts.entries()].map(([seat, count]) => ({ seat, count })), leaders, top };
+  const leaders = [...counts.entries()].filter(([, count]) => count === top).map(([seat]) => seat).sort((left, right) => left - right);
+  const list = [...counts.entries()].map(([seat, count]) => ({ seat, count })).sort((left, right) => right.count - left.count || left.seat - right.seat);
+  return { counts: list, leaders, top };
+}
+var emptyTally = () => ({ counts: [], leaders: [], top: 0 });
+function openVoteRound(state, round) {
+  state.voteRound = round;
+  state.votes = [];
+  state.voteTally = emptyTally();
+  state.pending = aliveSeats(state);
+}
+function closeRound(state, record) {
+  state.lastVote = record;
+  state.votes = [];
+  state.voteTally = emptyTally();
+}
+function voteRecord(state, result) {
+  return {
+    day: state.day,
+    round: state.voteRound,
+    votes: state.votes.map((vote) => ({ seat: vote.seat, target: vote.target })),
+    counts: result.counts,
+    leaders: result.leaders,
+    top: result.top,
+    tie: result.leaders.length > 1,
+    eliminated: null,
+    final: false
+  };
 }
 function closeSpeech(state) {
   state.phase = "day-vote";
-  state.voteRound = 1;
-  state.votes = [];
-  state.pending = aliveSeats(state);
+  openVoteRound(state, 1);
   publicEvent(state, "\u53D1\u8A00\u7ED3\u675F\uFF0C\u8BF7\u540C\u65F6\u6295\u7968\u3002");
   narrate(state, "\u53D1\u8A00\u7ED3\u675F\uFF0C\u8BF7\u6295\u7968\u653E\u9010\u4E00\u540D\u73A9\u5BB6\u3002");
 }
 function closeVote(state) {
-  const { leaders } = tally(state.votes);
+  const result = tally(state.votes);
+  const { leaders } = result;
+  const record = voteRecord(state, result);
   if (leaders.length === 1) {
     const seat = leaders[0];
+    record.eliminated = seat;
     kill(state, seat, "vote");
     publicEvent(state, `${seat} \u53F7\u88AB\u6295\u7968\u51FA\u5C40\u3002`);
     narrate(state, `${seat} \u53F7\u88AB\u6295\u7968\u653E\u9010\u3002`);
+    closeRound(state, record);
     const player = seatOf(state, seat);
     if (player.role === "hunter") {
       state.phase = "hunter";
@@ -869,13 +970,14 @@ function closeVote(state) {
     return openNight(state);
   }
   if (state.voteRound === 1) {
-    state.voteRound = 2;
-    state.votes = [];
-    state.pending = aliveSeats(state);
+    closeRound(state, record);
+    openVoteRound(state, 2);
     publicEvent(state, `\u5E73\u7968\uFF08${leaders.map((seat) => `${seat} \u53F7`).join("\u3001")}\uFF09\uFF0C\u8FDB\u884C\u4E00\u6B21\u590D\u6295\u3002`);
     narrate(state, `${leaders.map((seat) => `${seat} \u53F7`).join("\u3001")}\u5E73\u7968\uFF0C\u8FDB\u5165\u590D\u6295\u3002`);
     return state;
   }
+  record.final = true;
+  closeRound(state, record);
   publicEvent(state, "\u590D\u6295\u4ECD\u7136\u5E73\u7968\uFF0C\u65E0\u4EBA\u51FA\u5C40\u3002");
   narrate(state, "\u590D\u6295\u4ECD\u7136\u5E73\u7968\uFF0C\u672C\u65E5\u65E0\u4EBA\u51FA\u5C40\u3002");
   state.day += 1;
@@ -926,6 +1028,9 @@ var werewolf = Object.freeze({
       speakerCursor: 0,
       votes: [],
       voteRound: 0,
+      /* 观众侧的票型：进行中一轮的票数与结算留档（见 closeRound / voteRecord）。 */
+      voteTally: emptyTally(),
+      lastVote: null,
       pending: [roles.findIndex((role) => role === "werewolf") + 1],
       winner: null,
       terminalReason: null,
@@ -1076,6 +1181,8 @@ function applyMove(state, action, playerIndex) {
     const target = requireSeat(action?.target, next, { actor: seat });
     if (next.votes.some((vote) => vote.seat === seat)) throw new Error("\u672C\u8F6E\u5DF2\u7ECF\u6295\u8FC7\u7968\u3002");
     next.votes.push({ seat, target });
+    next.voteTally = tally(next.votes);
+    next.lastVote = null;
     next.pending = next.pending.filter((item) => item !== seat);
     if (!next.pending.length) closeVote(next);
     pushMove(next, seat, action, actionPhase);
@@ -1099,6 +1206,8 @@ function pushMove(state, seat, action, phase) {
 
 // lwb/packs/ai-arena/werewolf-projection.mjs
 function snapshotOf(state, deaths = [], roles = null, narration = state.narration) {
+  const causes = {};
+  for (const death of state.deaths || []) causes[death.seat] = death.cause;
   return {
     phase: state.phase,
     hunterCause: state.hunterCause ?? null,
@@ -1107,6 +1216,15 @@ function snapshotOf(state, deaths = [], roles = null, narration = state.narratio
     narration: (narration || []).slice(-1),
     publicLog: (state.publicLog || []).slice(-1),
     lastNightDeaths: [...deaths],
+    votes: (state.votes || []).map((vote) => ({ seat: vote.seat, target: vote.target })),
+    voteRound: state.voteRound || 0,
+    voteTally: {
+      counts: (state.voteTally?.counts || []).map((item) => ({ seat: item.seat, count: item.count })),
+      leaders: [...state.voteTally?.leaders || []],
+      top: state.voteTally?.top || 0
+    },
+    lastVote: state.lastVote ? { ...state.lastVote, votes: state.lastVote.votes.map((vote) => ({ ...vote })), counts: state.lastVote.counts.map((item) => ({ ...item })), leaders: [...state.lastVote.leaders] } : null,
+    deathCauses: causes,
     winner: state.winner ?? null,
     terminalReason: state.terminalReason ?? null
   };
@@ -1128,6 +1246,9 @@ function werewolfTimeline(match) {
     /* 最后一手的存活与出局（终局帧用）：不可重放时为 null，调用方回落到记录自己的 state。 */
     finalAlive: null,
     finalDeaths: [],
+    /* 座位 → 死因（整局）。死因一旦写下就不再变，所以终局帧与中间帧读同一份；
+       不可重放时退回记录自己的 state，至少让「为什么出局」还在。 */
+    deathCauses: werewolfDeathCauses(match.state || {}),
     /* 整局重放到底时最后一条结算播报：没有下一手可挂，由终局卡接管。 */
     closing: ""
   };
@@ -1147,6 +1268,7 @@ function werewolfTimeline(match) {
     const host = werewolfHostLine({ narration: state.narration });
     const deaths = state.deaths.slice(shown).map((death) => death.seat);
     shown = state.deaths.length;
+    const snapshot = { ...snapshotOf(state, deaths, dealt, state.narration), phase, hunterCause, day };
     steps.push({
       n: move.moveNumber,
       seat: move.player + 1,
@@ -1157,7 +1279,10 @@ function werewolfTimeline(match) {
       alive: state.players.filter((player) => player.alive).map((player) => player.seat),
       deaths,
       host,
-      snapshot: { ...snapshotOf(state, deaths, dealt, state.narration), phase, hunterCause, day }
+      /* 票型取自与快照同一个时刻：观战页往回拖画快照、离线回放与视频读这个字段，
+         两者是同一次计算的两个出口，不可能各自漂移。 */
+      voteBoard: werewolfVoteBoard(snapshot),
+      snapshot
     });
     let after;
     try {
@@ -1172,6 +1297,7 @@ function werewolfTimeline(match) {
   timeline.replayable = true;
   timeline.finalAlive = state.players.filter((player) => player.alive).map((player) => player.seat);
   timeline.finalDeaths = state.deaths.slice(shown).map((death) => death.seat);
+  timeline.deathCauses = werewolfDeathCauses(state);
   timeline.closing = werewolfHostLine({ narration: state.narration });
   if (typeof state.winner === "string") timeline.winnerSide = state.winner;
   return timeline;
@@ -1324,6 +1450,16 @@ body[data-ds-dark-theme] .ar-page{
 .ar-host-badge{display:inline-flex;align-items:center;height:18px;padding:0 9px;border-radius:999px;background:rgba(224,163,46,.18);border:1px solid rgba(224,163,46,.55);color:#F2DCA8;font-size:10px;font-size:clamp(8px,.84cqw,10px);font-weight:800;font-style:normal;letter-spacing:.14em}
 /* \u53F0\u8BCD\u6700\u591A\u4E24\u884C\uFF08line-clamp\uFF09\uFF1A\u6574\u53E5\u4ECD\u5728 DOM \u4E0E title \u91CC\uFF0C\u753B\u9762\u4E0A\u4E0D\u4F1A\u628A\u5E2D\u4F4D\u6761\u5E26\u9876\u4E0B\u53BB\u3002 */
 .ar-stage-host p{margin:0;padding:5px 13px;border-radius:9px;background:rgba(8,12,18,.74);border:1px solid rgba(255,255,255,.14);color:#F6F1E4;font-size:13px;font-size:clamp(10px,1.08cqw,13px);font-weight:700;line-height:1.45;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+/* \u7968\u578B\u6761\uFF1A\u8C01\u51E0\u7968\u3001\u8FD9\u4E00\u8F6E\u662F\u600E\u4E48\u88C1\u7684\u3002\u5B83\u56DE\u7B54\u7684\u662F\u300C\u4E3A\u4EC0\u4E48\u51FA\u5C40\u300D\uFF0C\u6240\u4EE5\u4E0E\u4E3B\u6301\u4EBA\u64AD\u62A5\u5206\u4E24\u683C \u2014\u2014
+   \u4E3B\u6301\u4EBA\u8BF4\u7684\u662F\u9636\u6BB5\u4E0E\u51FA\u5C40\u540D\u5355\uFF0C\u8FD9\u91CC\u8BF4\u7684\u662F\u7968\u6570\u3002\u4E00\u884C\u653E\u4E0D\u4E0B\u65F6\u7701\u7565\u53F7\u6536\u5C3E\uFF0C\u6574\u53E5\u5728 title \u91CC\uFF1B
+   \u8C01\u6295\u4E86\u8C01\u7531\u5E2D\u5361\u91CC\u7684\u300C\u2192N\u300D\u56DE\u7B54\uFF0C\u4E0D\u585E\u8FDB\u8FD9\u4E00\u884C\uFF089 \u4EBA\u5C40 9 \u4E2A\u6295\u7968\u4EBA\u5FC5\u7136\u6EA2\u51FA\uFF09\u3002
+   \u9009\u62E9\u5668\u5E26 .ar-stage \u524D\u7F00\uFF0C\u538B\u8FC7\u9875\u9762\u57FA\u7EBF\u7684 .ar-page p{margin:0}\uFF08(0,2,1) > (0,1,1)\uFF09\u3002 */
+.ar-stage .ar-stage-vote{position:relative;z-index:2;flex:none;margin:2.4% 0 0 5%;max-width:64%;display:flex;align-items:center;gap:6px}
+.ar-vote-badge{flex:none;display:inline-flex;align-items:center;height:18px;padding:0 9px;border-radius:999px;background:rgba(55,138,221,.2);border:1px solid rgba(55,138,221,.55);color:#CFE3FA;font-size:10px;font-size:clamp(8px,.84cqw,10px);font-weight:800;font-style:normal;letter-spacing:.14em}
+.ar-stage .ar-stage-vote p{margin:0;min-width:0;padding:5px 13px;border-radius:9px;background:rgba(8,12,18,.74);border:1px solid rgba(255,255,255,.14);color:#F6F1E4;font-size:13px;font-size:clamp(10px,1.08cqw,13px);font-weight:700;line-height:1.45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* \u5E73\u7968\u7528\u7425\u73C0\u3001\u51FA\u7ED3\u679C\u7528\u7EA2\uFF1A\u4E0E\u300C\u8FDB\u5165\u590D\u6295 / \u88AB\u653E\u9010\u300D\u4E24\u79CD\u88C1\u51B3\u4E00\u4E00\u5BF9\u5E94\uFF0C\u989C\u8272\u4E0D\u518D\u517C\u4E24\u4E49\u3002 */
+.ar-stage .ar-stage-vote[data-tone="tie"] .ar-vote-badge{background:rgba(224,163,46,.2);border-color:rgba(224,163,46,.55);color:#F4DFAE}
+.ar-stage .ar-stage-vote[data-tone="result"] .ar-vote-badge{background:rgba(180,52,42,.26);border-color:rgba(224,110,96,.6);color:#FFD9D3}
 /* \u573A\u666F\u7559\u767D\uFF1A\u552F\u4E00\u53EF\u4F38\u7F29\u7684\u4E00\u6BB5\u3002\u62AC\u5934\u3001\u53F0\u8BCD\u4E0E\u5E2D\u4F4D\u6761\u5E26\u90FD\u662F flex:none\uFF0C\u8C01\u4E5F\u6324\u4E0D\u6389\u8C01\u3002 */
 .ar-stage-center{position:relative;z-index:1;flex:1 1 auto;min-height:0}
 /* \u5E2D\u4F4D\u6761\u5E26\uFF1A\u9AD8\u5EA6\u6309\u884C\u6570\u53D6\uFF08\u53EF\u88AB\u538B\u7F29\uFF09\uFF0C\u5217\u6570 / \u884C\u6570\u6765\u81EA\u5185\u8054\u7684 --ar-cast-cols / --ar-cast-rows\u3002
@@ -1343,6 +1479,14 @@ body[data-ds-dark-theme] .ar-page{
 /* \u7EC8\u5C40\uFF1A\u80DC\u65B9\u9635\u8425\u7684\u5E2D\u5361\u52A0\u91D1\u6846\uFF0C\u53E3\u5F84\u4E0E\u79BB\u7EBF\u56DE\u653E\u7684 data-win \u4E00\u81F4\uFF1B\u6B7B\u6389\u7684\u80DC\u65B9\u4ECD\u4FDD\u7559\u7070\u5316\u3002 */
 .ar-cast[data-win="true"] .ar-cast-face{border-color:#E0A32E;box-shadow:0 0 0 2px rgba(224,163,46,.5),0 10px 22px rgba(3,6,12,.55)}
 .ar-cast-out{position:absolute;left:50%;bottom:4%;transform:translateX(-50%);padding:1px 7px;border-radius:999px;background:#B4342A;color:#fff;font-size:9px;font-weight:800;letter-spacing:.14em;white-space:nowrap}
+/* \u672C\u8F6E\u7968\u578B\uFF1A\u7BAD\u5934\u6302\u5728\u6295\u51FA\u7968\u7684\u90A3\u5F20\u5361\u4E0A\uFF08\u2192N\uFF09\uFF0C\u7968\u6570\u6302\u5728\u88AB\u6295\u7684\u90A3\u5F20\u5361\u4E0A\uFF08N \u7968\uFF09\u3002
+   \u4E24\u5757\u90FD\u5728\u7ACB\u7ED8\u6846\u5185\uFF0C\u5E2D\u5361\u9AD8\u5EA6\u4E00\u4E2A\u50CF\u7D20\u90FD\u4E0D\u53D8 \u2014\u2014 8 / 9 \u4EBA\u5C40\u52A0\u4E0D\u8D77\u4EFB\u4F55\u5E38\u9A7B\u884C\u3002
+   \u989C\u8272\u53EA\u7ED9\u300C\u6700\u9AD8\u7968\u300D\uFF1A\u5355\u4E00\u9886\u5148\u7528\u7EA2\uFF08\u4E0E\u51FA\u5C40\u540C\u4E00\u8BED\u4E49\uFF09\uFF0C\u5E73\u7968\u7528\u7425\u73C0\uFF08\u4E0E\u590D\u6295\u540C\u4E00\u8BED\u4E49\uFF09\u3002 */
+.ar-cast-vote,.ar-cast-tally{position:absolute;top:3px;z-index:2;display:inline-flex;align-items:center;height:15px;padding:0 5px;border-radius:5px;background:rgba(10,14,22,.86);border:1px solid rgba(255,255,255,.42);color:#F3F7FC;font-size:9px;font-weight:800;font-style:normal;line-height:1;white-space:nowrap;box-shadow:0 2px 8px rgba(3,6,12,.55)}
+.ar-cast-vote{right:3px}
+.ar-cast-tally{left:3px}
+.ar-cast-tally[data-lead="one"]{background:#B4342A;border-color:#FFB4A8;color:#fff}
+.ar-cast-tally[data-lead="tie"]{background:#B98418;border-color:#FFDF9E;color:#fff}
 .ar-cast figcaption{display:flex;align-items:center;justify-content:center;gap:4px;max-width:100%;flex:none}
 .ar-cast figcaption b{font-size:10px;font-weight:700;color:#F3F7FC;text-shadow:0 1px 4px rgba(0,0,0,.85);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* \u7A84\u821E\u53F0\uFF08\u7A97\u53E3\u672C\u8EAB\u4E5F\u7A84\uFF09\uFF1A\u4E24\u884C\u5E2D\u4F4D\u6BCF\u6392\u53EA\u5269\u51E0\u5341\u50CF\u7D20\u9AD8\uFF0C\u7F72\u540D\u8BA9\u4F4D\u7ED9\u7ACB\u7ED8\u2014\u2014\u59D3\u540D\u3001\u8EAB\u4EFD\u3001
@@ -2108,6 +2252,15 @@ function WerewolfStage({ players, state, active, speech }) {
       h2("b", null, stage.winnerSide === "wolf" ? "\u72FC\u4EBA\u83B7\u80DC" : "\u597D\u4EBA\u83B7\u80DC"),
       stage.host || stage.result ? h2("span", null, stage.host || stage.result) : null
     ) : stage.host ? h2("div", { className: "ar-stage-host" }, h2("em", { className: "ar-host-badge" }, "\u4E3B\u6301\u4EBA"), h2("p", { title: stage.host }, stage.host)) : null,
+    /* 票型条：谁几票、这一轮是怎么裁的。它回答的是「为什么出局」，所以与主持人播报分两格 ——
+       主持人说的是阶段与出局名单，这里说的是票数。9 人局一行放不下时省略号收尾，整句在 title 里；
+       谁投了谁由席卡右上角的「→N」回答，不塞进这一行。终局不出（那一格整块让给胜负卡）。 */
+    !stage.winnerSide && stage.voteLine ? h2(
+      "div",
+      { className: "ar-stage-vote", "data-tone": stage.voteTone },
+      h2("em", { className: "ar-vote-badge" }, "\u7968\u578B"),
+      h2("p", { title: stage.voteLine }, stage.voteLine)
+    ) : null,
     /* 场景留白：唯一可伸缩的一段。抬头、台词与席位条带都是 flex:none，任何人数都不会
        把它们挤出画幅；终局卡占了台词位，所以也不会盖在席卡上。 */
     h2("div", { className: "ar-stage-center", "aria-hidden": true }),
@@ -2131,7 +2284,11 @@ function WerewolfStage({ players, state, active, speech }) {
           { className: "ar-cast-face" },
           h2("img", { alt: seat.name, src: MODEL_ART.full[`${seat.portrait}${seat.alive ? "" : "-dead"}`] || MODEL_ART.full.generic }),
           h2("i", { className: "ar-cast-veil" }),
-          seat.alive ? null : h2("span", { className: "ar-cast-out" }, "\u51FA\u5C40")
+          /* 这一席投给了谁：箭头挂在投出票的那张卡上，「谁投了谁」不需要观众自己配对。 */
+          seat.voteOn ? h2("span", { className: "ar-cast-vote", title: `\u672C\u8F6E\u6295\u7ED9 ${seat.voteOn} \u53F7` }, `\u2192${seat.voteOn}`) : null,
+          /* 这一席拿了几票：最高票着色，平票与单一领先分两种颜色（裁决不同，颜色必须分开）。 */
+          seat.voteCount ? h2("span", { className: "ar-cast-tally", "data-lead": seat.voteLead || void 0, title: `\u672C\u8F6E ${seat.voteCount} \u7968` }, `${seat.voteCount} \u7968`) : null,
+          seat.alive ? null : h2("span", { className: "ar-cast-out" }, seat.deathMark)
         ),
         h2("figcaption", null, h2("b", null, seat.name), h2("em", { className: "ar-role-mark", "data-role": seat.role }, seat.mark), seat.badge ? h2("em", { className: "ar-cast-badge", "data-badge": seat.badge }, seat.badge) : null)
       ))

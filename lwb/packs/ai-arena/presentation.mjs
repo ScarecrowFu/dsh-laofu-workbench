@@ -50,6 +50,94 @@ export const werewolfSideName = side => WEREWOLF_SIDE[side] || ''
 /** 身份 → 阵营。终局给胜方席位打金框、给席卡算「胜 / 负」都用这一处口径。 */
 export const werewolfSide = role => role === 'werewolf' ? 'wolf' : 'village'
 /**
+ * 出局标记：把**死因**写在那张席卡上，而不是只写一个「出局」。
+ *
+ * 死因来自规则层的 `deaths[].cause`（wolf 狼刀 / poison 毒杀 / vote 票出 / hunter 猎人带走）。
+ * 此前席位灰化 + 一个「出局」标签是三种死法共用的，观众只能靠白天还是夜景去猜 ——
+ * 而「为什么出局」正是这次要回答的问题。标签留在红底胶囊里，所以不再重复「出局」二字。
+ */
+export const DEATH_MARK = Object.freeze({ wolf: '夜刀', poison: '毒杀', vote: '票出', hunter: '带走' })
+export const werewolfDeathMark = cause => DEATH_MARK[cause] || '出局'
+
+/**
+ * 观众侧的票型板：一步画面上「这一轮谁投了谁、谁几票、为什么出局」。
+ *
+ * 票是公共信息（明票），`observe` 里本来就没有 `votes`，所以这块只服务观战 / 离线回放 / 视频，
+ * 不改变任何一处的选手提示词。
+ *
+ * 两个来源合成同一个形状，**`lastVote` 优先**：
+ * - 进行中的一轮读 `votes` + `voteTally`（规则层逐票维护，双方必然一致）；
+ * - 已结算的一轮读规则层留下的 `lastVote`。它必须优先：平票复投的第一帧 `votes` 已经归零，
+ *   只看 `phase` 会把刚宣布的平票画成「0 票」；而那一帧恰恰是唯一能说明「为什么进入复投」的画面。
+ *
+ * 返回 null 表示这一步与投票无关，调用方据此完全不渲染（不占版面、不写空元素）。
+ * `state.winner` 有值时同样返回 null：终局那一格整块让给胜负卡，两位作者的口径一致。
+ */
+export function werewolfVoteBoard(state = {}) {
+  if (state.winner) return null
+  const closed = state.lastVote
+  if (closed) return { ...closed, open: false, voters: null, awaiting: 0 }
+  if (state.phase !== 'day-vote') return null
+  const votes = state.votes || []
+  /* 1.0.0 的历史局面没有 voteTally（那一版只落 votes）：就地补一份，别让票型条把「有人投了」
+     画成「0 票」。当前规则引擎写的局面一律走上面那条，不进这个分支。 */
+  const tally = state.voteTally || legacyTally(votes)
+  const alive = (state.players || []).filter(player => player.alive !== false).map(player => player.seat)
+  const voted = new Set(votes.map(vote => vote.seat))
+  return {
+    day: state.day || 1,
+    round: state.voteRound || 1,
+    votes: votes.map(vote => ({ seat: vote.seat, target: vote.target })),
+    counts: tally.counts || [],
+    leaders: tally.leaders || [],
+    top: tally.top || 0,
+    tie: (tally.leaders || []).length > 1,
+    eliminated: null,
+    final: false,
+    open: true,
+    voters: alive.length,
+    awaiting: alive.filter(seat => !voted.has(seat)).length,
+  }
+}
+
+/** 只服务 1.0.0 历史局面的兜底计票（口径与规则层 tally 一致：票数降序、同票按座位升序）。 */
+function legacyTally(votes) {
+  const counts = new Map()
+  for (const vote of votes) counts.set(vote.target, (counts.get(vote.target) || 0) + 1)
+  let top = 0
+  for (const count of counts.values()) top = Math.max(top, count)
+  return {
+    counts: [...counts.entries()].map(([seat, count]) => ({ seat, count })).sort((left, right) => right.count - left.count || left.seat - right.seat),
+    leaders: [...counts.entries()].filter(([, count]) => count === top).map(([seat]) => seat).sort((left, right) => left - right),
+    top,
+  }
+}
+
+/**
+ * 票型条的一句话：观战页、离线回放与视频读同一条措辞，三处不会各说各话。
+ *
+ * 条形只报「谁几票、结果是什么」，不逐个列投票人 —— 那件事由席卡上的 `→N` 回答，
+ * 9 人局把 9 个投票人写进一行会溢出画幅。
+ *
+ * 句首一律带「第几天 + 投票 / 复投」：结算板在当夜一直留着（观众需要在一帧里读完），
+ * 没有日期就会被读成「此刻正在发生的事」，而它其实是刚刚过去的那一轮。
+ */
+export function werewolfVoteLine(board) {
+  if (!board) return ''
+  const names = seats => seats.map(seat => `${seat} 号`).join('、')
+  const round = board.round > 1 ? '复投' : '投票'
+  if (board.open) {
+    const progress = `第 ${board.day} 天 · ${round} ${board.voters - board.awaiting}/${board.voters}`
+    if (!board.top) return progress
+    return `${progress} · ${board.tie ? '并列' : '暂列'} ${names(board.leaders)} ${board.top} 票`
+  }
+  if (board.eliminated) return `第 ${board.day} 天 · ${round}结果：${board.eliminated} 号 ${board.top} 票，被放逐`
+  if (board.final) return `第 ${board.day} 天 · 复投仍平票：${names(board.leaders)} 各 ${board.top} 票，本日无人出局`
+  return `第 ${board.day} 天 · 平票：${names(board.leaders)} 各 ${board.top} 票，进入复投`
+}
+/** 票型条的配色档：投票中取中性、平票取琥珀、出结果取红（与席卡红叉同一语义）。 */
+export const werewolfVoteTone = board => !board ? '' : board.open ? 'open' : board.eliminated ? 'result' : 'tie'
+/**
  * 观众侧的席位身份：座位下标 → `{ seat, role, mark, roleName }`，没有身份时返回 null。
  *
  * 观战页的发言署名与回合记录要回答「这个模型是什么身份」——只给模型名时，观众得自己把
@@ -186,9 +274,14 @@ export function werewolfStage({ players = [], state = {}, active = null, speech 
   const portraits = assignPortraits(players)
   /* 列数与行数一起给：观战页的席位条带高度按行数取，缺了行数就会把 8 / 9 人撑出画幅。 */
   const layout = werewolfCastLayout((state.players || []).length)
+  /* 票型与死因都取自这一步的公开局面：观战页往回拖画的是逐手快照，快照带什么就画什么。 */
+  const voteBoard = werewolfVoteBoard(state)
+  const causes = werewolfDeathCauses(state)
   const seats = (state.players || []).map((seat, index) => {
     const alive = seat.alive !== false
     const winning = Boolean(winnerSide) && Boolean(seat.role) && werewolfSide(seat.role) === winnerSide
+    const voted = voteBoard ? (voteBoard.votes || []).find(vote => vote.seat === seat.seat) : null
+    const count = voteBoard ? ((voteBoard.counts || []).find(item => item.seat === seat.seat)?.count || 0) : 0
     return {
       seat: seat.seat,
       name: players[index]?.name || `${seat.seat} 号`,
@@ -198,6 +291,13 @@ export function werewolfStage({ players = [], state = {}, active = null, speech 
       roleName: ROLE_NAME[seat.role] || '',
       mark: ROLE_MARK[seat.role] || '',
       active: active === index,
+      /* 本轮票型：这一席投给了谁（→N），以及这一席拿了几票（N 票）。
+         最高票要着色 —— 平票与单一领先是两种不同的裁决，颜色必须分开。 */
+      voteOn: voted ? voted.target : null,
+      voteCount: count,
+      voteLead: count > 0 && count === voteBoard?.top ? (voteBoard.tie ? 'tie' : 'one') : '',
+      /* 出局那一席写死因（夜刀 / 毒杀 / 票出 / 带走），不再是三种死法共用一句「出局」。 */
+      deathMark: alive ? '' : werewolfDeathMark(causes[seat.seat]),
       /* 终局席位标记：胜方阵营金框 + 每席「胜 / 负」徽标；没结束一律留空，不提前泄露胜负。 */
       winning,
       badge: winnerSide ? (winning ? '胜' : '负') : '',
@@ -211,9 +311,24 @@ export function werewolfStage({ players = [], state = {}, active = null, speech 
     speech, deaths: [...(state.lastNightDeaths || [])],
     winnerSide,
     result: state.winner ? state.terminalReason : '',
+    voteBoard,
+    voteLine: werewolfVoteLine(voteBoard),
+    voteTone: werewolfVoteTone(voteBoard),
     /* 主持人台词：终局用裁决文案，其余用规则层这一手的播报。 */
     host: werewolfHostLine({ narration: state.narration, publicLog: state.publicLog, winnerSide, terminalReason: state.terminalReason, finale: Boolean(winnerSide) }),
   }
+}
+
+/**
+ * 座位 → 死因。两种局面形状都要认：观战跟随最新回合时喂进来的是规则层的真局面
+ * （`deaths` 是一串 `{ seat, cause }`），往回拖与离线回放喂的是逐手快照（`deathCauses` 是
+ * 一张 `{ 座位: 死因 }` 表）。死因一旦写下就不再变，所以两者取到的是同一份事实。
+ */
+export function werewolfDeathCauses(state = {}) {
+  if (state.deathCauses && typeof state.deathCauses === 'object') return state.deathCauses
+  const map = {}
+  for (const death of Array.isArray(state.deaths) ? state.deaths : []) map[death.seat] = death.cause
+  return map
 }
 export const actionLabel = (action, game) => game?.id === 'werewolf'
   ? (() => {

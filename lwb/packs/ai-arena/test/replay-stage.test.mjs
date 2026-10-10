@@ -42,14 +42,14 @@ test('胜负卡在布局流里，占主持人那一格，不再绝对定位飘�
   assert.match(win, /align-self:center/u, '横向上仍居中（与观战页同一个观感）')
   assert.match(rule('.stage[data-act="finale"] .ww-win'), /display:flex/u)
   /* 位移已经进流：舞台这四大块里不再有「居中的绝对定位」这回事。
-     （席卡内部的红叉 `.ww-strike` 与身份榜的胜 / 负徽标仍是绝对定位，那是它们自己的容器。） */
-  for (const selector of ['.ww-head', '.ww-host', '.ww-win', '.ww-cast']) {
+     （席卡内部的红叉 `.ww-strike`、票型标记与身份榜的胜 / 负徽标仍是绝对定位，那是它们自己的容器。） */
+  for (const selector of ['.ww-head', '.ww-host', '.ww-win', '.ww-cast', '.ww-vote-line']) {
     assert.doesNotMatch(rule(selector), /top:50%|translate\(-50%,-50%\)/u, `${selector} 不该再有居中用的绝对定位`)
   }
-  /* 舞台是竖排的流：抬头 / 主持人 / 胜负卡 / 条带依次排下去。 */
+  /* 舞台是竖排的流：抬头 / 主持人 / 胜负卡 / 票型条 / 条带依次排下去。 */
   assert.match(rule('.ww-scene'), /display:flex/u)
   assert.match(rule('.ww-scene'), /flex-direction:column/u)
-  for (const selector of ['.ww-head', '.ww-host', '.ww-cast']) {
+  for (const selector of ['.ww-head', '.ww-host', '.ww-cast', '.ww-vote-line']) {
     assert.match(rule(selector), /position:relative/u, `${selector} 必须在布局流里`)
   }
   assert.doesNotMatch(rule('.ww-host'), /position:absolute/u)
@@ -117,6 +117,32 @@ test('胜负卡占主持人那一格：终局不再同时出主持人播报，�
   /* 正文只在 data.mjs 里推导一次：它是「最后一条结算播报 + 裁决」，与终局那一格的配音同源。 */
   assert.match(DATA, /finaleBody:/u)
   assert.match(DATA, /const finaleLine = /u)
+})
+
+test('票型条：与主持人播报分两格、终局不出、条带仍是唯一可收缩的一段', () => {
+  /* 它和主持人一样是 flex:none 的布局流成员：票型出现时被压缩的只能是席位条带。 */
+  const vote = rule('.ww-vote-line')
+  assert.match(vote, /flex:none/u, '票型条不参与压缩：可收缩的只能是席位条带')
+  assert.match(vote, /align-self:flex-start/u, '与主持人一样左对齐，不飘到画面中间')
+  /* 一行放不下时省略号收尾：9 人局 9 个投票人必然溢出，投票人由席卡上的「→N」回答。 */
+  assert.match(rule('.ww-vote-line p'), /white-space:nowrap/u)
+  assert.match(rule('.ww-vote-line p'), /text-overflow:ellipsis/u)
+  /* 最高票的两种裁决必须分色：单一领先用红（被放逐），平票用琥珀（复投）。 */
+  assert.match(rule('.ww-tally[data-lead="one"]'), /#B4342A/u)
+  assert.match(rule('.ww-tally[data-lead="tie"]'), /#B98418/u)
+  for (const selector of ['.ww-vote,.ww-tally']) {
+    assert.match(rule(selector), /position:absolute/u, '票型标记必须贴在立绘框里，不占行高')
+  }
+  /* 终局不出：那一格整块让给胜负卡，而条带上方也没有多出来的高度放第二行。 */
+  assert.match(MARKUP, /const voteLine = frame\.isFinale \? '' : werewolfVoteLine\(frame\.voteBoard\)/u, 'markup 终局不再渲染票型条')
+  assert.match(APP, /const voteLine = isFinale \? '' : S\.werewolfVoteLine\(frame\.voteBoard\)/u, '播放器终局同样收起票型条')
+  /* 离线播放器的 DOM 顺序与 markup 一致：抬头 → 主持人 → 胜负卡 → 票型条 → 条带。 */
+  assert.ok(APP.indexOf("id=\"wwVoteLine\"") > APP.indexOf("id=\"wwWin\""), '票型条要排在胜负卡之后')
+  assert.ok(APP.indexOf("id=\"wwVoteLine\"") < APP.indexOf("class=\"ww-cast\" id=\"wwCast\""), '票型条要排在席位条带之前')
+  /* 死因表整局一份，逐帧读同一个来源，席卡上的「出局」才写得出死因。 */
+  assert.match(DATA, /deathCauses: timeline\.deathCauses/u)
+  assert.match(MARKUP, /werewolfDeathMark\(\(options\.deathCauses \|\| \{\}\)\[seat\.seat\]\)/u)
+  assert.match(APP, /S\.werewolfDeathMark\(/u)
 })
 
 test('高度预算：6 / 8 / 9 人 × 横竖屏，胜负卡底边与席位条带顶边都留得下席号徽标', () => {

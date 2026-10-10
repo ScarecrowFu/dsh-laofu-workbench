@@ -110,10 +110,23 @@
       alive: new Set(isFinale ? (((D.werewolf && D.werewolf.finalAlive) || (last && last.alive)) || initial) : (step ? step.alive : initial)),
       deaths: step ? step.deaths : (isFinale ? ((D.werewolf && D.werewolf.finalDeaths) || []) : []),
       active: step ? step.seat : null,
+      /* 票型由投影逐手算好；终局不画（与 markup.mjs 同一口径）。 */
+      voteBoard: isFinale ? null : ((step && step.voteBoard) || null),
       scene: step ? step.scene : fallbackScene,
       day: isFinale ? ((last && last.day) || 1) : ((step && step.day) || 1),
       label: step ? step.label : (index >= 1 ? '结算' : '天黑请闭眼'),
     }
+  }
+  /* 死因表整局不变（D.werewolf.deathCauses），逐帧读同一份，与 markup.mjs 同源。 */
+  const wolfCause = seat => S.werewolfDeathMark(((D.werewolf && D.werewolf.deathCauses) || {})[seat])
+  /* 席卡上的小胶囊（本轮投向 →N / 得票 N 票）：有就写文本与 data-lead，没有就删掉，
+     不留空壳。类名与 markup.mjs 的 inline HTML 一一对应，配色由 scene.css 给同一套。 */
+  function syncChip(face, className, text, lead) {
+    const chip = face.querySelector('.' + className)
+    if (!text) { if (chip) chip.remove(); return }
+    const node = chip || face.appendChild(Object.assign(document.createElement('span'), { className }))
+    if (node.textContent !== text) node.textContent = text
+    if (lead) node.dataset.lead = lead; else delete node.dataset.lead
   }
   function buildWolf() {
     /* 列数按人数与画幅取向写进 CSS 变量：横竖屏切换时不用重建 DOM。 */
@@ -130,6 +143,9 @@
       '<header class="ww-head"><span class="ww-day" id="wwDay"></span><b class="ww-phase" id="wwPhase"></b></header>' +
       '<div class="ww-host" id="wwHost" hidden><em>主持人</em><p id="wwHostText"></p></div>' +
       '<div class="ww-win" id="wwWin" hidden></div>' +
+      /* 票型条与主持人播报分两格（主持人说阶段与出局名单，这一条说票数）。
+         DOM 顺序与 markup.mjs 一致：抬头 → 主持人 → 胜负卡 → 票型条 → 席位条带。 */
+      '<div class="ww-vote-line" id="wwVoteLine" hidden><em>票型</em><p id="wwVoteText"></p></div>' +
       '<div class="ww-cast" id="wwCast">' + WOLF_SEATS.map((seat, i) =>
         `<figure class="ww-seat" data-i="${i}" data-seat="${seat.seat}" style="--ww-i:${i}">` +
         `<span class="ww-no">${seat.seat}</span>` +
@@ -163,6 +179,12 @@
 
     boardCard.querySelectorAll('.ww-bg').forEach(img => { img.style.opacity = img.dataset.scene === scene ? '1' : '0' })
 
+    /* 本轮票型：箭头挂在投出票的那张卡上（→N），票数挂在被投的那张卡上（N 票）。
+       与 markup.mjs 同一份数据（step.voteBoard），逐帧同步；没有就删掉，不留空壳。 */
+    const board = frame.voteBoard
+    const seatVote = seatNo => board ? (board.votes || []).find(vote => vote.seat === seatNo) : null
+    const seatCount = seatNo => board ? ((board.counts || []).find(item => item.seat === seatNo)?.count || 0) : 0
+
     wolfSeatNodes().forEach(node => {
       const seat = WOLF_SEATS[Number(node.dataset.i)]
       const alive = frame.alive.has(seat.seat)
@@ -181,15 +203,23 @@
         mark.className = 'ww-strike'
         face.insertBefore(mark, face.querySelector('.ww-out'))
       } else if (!dying && strike) strike.remove()
-      if (!alive && !face.querySelector('.ww-out')) {
-        const out = document.createElement('span')
-        out.className = 'ww-out'
-        out.textContent = '出局'
-        face.appendChild(out)
-      } else if (alive) {
-        const out = face.querySelector('.ww-out')
-        if (out) out.remove()
-      }
+      /* 出局标签写死因：三种死法不再共用一句「出局」。 */
+      const out = face.querySelector('.ww-out')
+      if (!alive && !out) {
+        const tag = document.createElement('span')
+        tag.className = 'ww-out'
+        tag.textContent = wolfCause(seat.seat)
+        face.appendChild(tag)
+      } else if (!alive && out) {
+        const text = wolfCause(seat.seat)
+        if (out.textContent !== text) out.textContent = text
+      } else if (alive && out) out.remove()
+
+      const voted = seatVote(seat.seat)
+      const count = seatCount(seat.seat)
+      const lead = board && count > 0 && count === board.top ? (board.tie ? 'tie' : 'one') : ''
+      syncChip(face, 'ww-vote', voted ? `→${voted.target}` : '', '')
+      syncChip(face, 'ww-tally', count ? `${count} 票` : '', lead)
     })
 
     /* 主持人播报：出局与阶段由它一起说出，不再单独挂一条出局横幅。
@@ -200,6 +230,16 @@
     const host = $('wwHost')
     host.hidden = !hostLine
     if (hostLine) $('wwHostText').textContent = hostLine
+
+    /* 票型条：文案与配色档都取 presentation（经 runtime.js 暴露），与 markup.mjs 读同一条
+       ——离线播放器是浏览器里的独立渲染，措辞不能再写第二遍。终局不出（那一格让给胜负卡）。 */
+    const voteLine = isFinale ? '' : S.werewolfVoteLine(frame.voteBoard)
+    const voteBar = $('wwVoteLine')
+    voteBar.hidden = !voteLine
+    if (voteLine) {
+      voteBar.dataset.tone = S.werewolfVoteTone(frame.voteBoard)
+      $('wwVoteText').textContent = voteLine
+    }
 
     const win = $('wwWin')
     win.hidden = !isFinale

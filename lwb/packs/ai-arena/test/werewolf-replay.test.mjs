@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readdir } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { noteSpeech, werewolf } from '../werewolf.mjs'
@@ -14,7 +14,7 @@ import { countSpeechLines } from '../speech.mjs'
 import { stageHtml } from '../replay/markup.mjs'
 import { replayHtml, reportMarkdown } from '../export.mjs'
 import { parseDecision } from '../host.mjs'
-import { MODEL_PORTRAIT_VARIANTS, assignPortraits, portraitKey, ROLE_MARK, seatIdentity, werewolfPhaseLabel, werewolfScene, werewolfStage } from '../presentation.mjs'
+import { MODEL_PORTRAIT_VARIANTS, assignPortraits, portraitKey, ROLE_MARK, seatIdentity, werewolfPhaseLabel, werewolfScene, werewolfStage, werewolfVoteLine, werewolfVoteTone } from '../presentation.mjs'
 import { werewolfTimeline, werewolfStageState } from '../werewolf-projection.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -53,6 +53,38 @@ function playedMatch(overrides = {}) {
     events, status: 'finished', result: { kind: 'win', winner: state.winner, message: state.terminalReason },
     calls: SCRIPT.length, tokens: 100, state,
     ...overrides,
+  }
+}
+
+/* 平票夹具：女巫用解药救下刀口 → 第一天 6 人全在 → 首轮 3:3 平票 → 复投才分出结果。
+   平票是票型数据最脆的一档：规则层在「宣布结算」的同一手里就把 votes 清空了，
+   那一刻的票型只能从结算留档里读。 */
+const TIE_SCRIPT = [
+  [1, { type: 'kill', target: 3 }], [3, { type: 'kill', target: 3 }],
+  [4, { type: 'check', target: 2 }], [5, { type: 'potion', potion: 'save' }],
+  [0, { type: 'speak' }], [1, { type: 'speak' }], [2, { type: 'speak' }], [3, { type: 'speak' }], [4, { type: 'speak' }], [5, { type: 'speak' }],
+  [0, { type: 'vote', target: 2 }], [1, { type: 'vote', target: 1 }], [2, { type: 'vote', target: 2 }],
+  [3, { type: 'vote', target: 1 }], [4, { type: 'vote', target: 2 }], [5, { type: 'vote', target: 1 }],
+  [0, { type: 'vote', target: 2 }], [1, { type: 'vote', target: 1 }], [2, { type: 'vote', target: 2 }],
+  [3, { type: 'vote', target: 2 }], [4, { type: 'vote', target: 1 }], [5, { type: 'vote', target: 2 }],
+  /* 复投的结算播报没有「下一手」可挂，补一手夜刀让那一帧存在（宣布与出局同帧那条契约）。 */
+  [3, { type: 'kill', target: 1 }],
+]
+
+function playedTieMatch() {
+  let state = werewolf.create(SEED)
+  const events = []
+  TIE_SCRIPT.forEach(([player, action], index) => {
+    state = werewolf.apply(state, action, player)
+    noteSpeech(state, player, `第 ${index + 1} 手发言`)
+    events.push({ type: 'move', moveNumber: index + 1, player, action, speech: `第 ${index + 1} 手发言`, elapsedMs: 100 })
+  })
+  return {
+    id: 'tttttttt-tttt-tttt-tttt-tttttttttttt', title: '狼人杀平票演示',
+    game: { id: 'werewolf', name: '狼人杀', description: '标准局', version: werewolf.version },
+    players: ['猎人', '狼甲', '村民', '狼乙', '预言家', '女巫'].map((name, index) => ({ name, provider: 'test', model: `ww-${index + 1}` })),
+    config: { seed: SEED, seats: 6 },
+    events, status: 'running', result: null, calls: events.length, tokens: 100, state,
   }
 }
 
@@ -119,6 +151,8 @@ test('replayData 投影出六席身份、逐手存活与出局座位', () => {
     n: 1, seat: 2, phase: 'night-wolf', label: '狼人行动', scene: 'night', day: 1, alive: [1, 2, 3, 4, 5, 6], deaths: [],
     /* 第一头狼只是提案，阶段没变，这一步开场的播报仍是开局的「天黑请闭眼」 */
     host: '天黑请闭眼。狼人请睁眼，选择今晚要击杀的玩家。',
+    /* 还没到投票阶段：这一步没有票型，调用方据此一个空元素都不产出。 */
+    voteBoard: null,
   })
   /* 一帧只讲一个时刻：第 4 手是女巫用药，这一帧的公开局面里 3 号仍然活着、台词是「女巫请睁眼」；
      3 号出局与宣布它的「天亮了，昨夜 3 号出局」一起落在下一步（天亮后第一位发言者）——
@@ -155,6 +189,129 @@ test('replayData 投影出六席身份、逐手存活与出局座位', () => {
   /* 最后一手（猎人开枪）的结果由终局帧承接：4 号出局、席位名单停在 5 / 6 号 */
   assert.deepEqual(data.werewolf.finalAlive, [5, 6])
   assert.deepEqual(data.werewolf.finalDeaths, [4])
+})
+
+/* 票型：观众要能从画面上读出「谁投了谁、谁几票、为什么出局」。逐手投影是唯一的取数口
+   （观战快照、离线回放、MP4 共用），所以这里把它钉死。 */
+test('票型逐手投影：谁投了谁、谁几票、结算留档，且与宣布同帧', () => {
+  const steps = replayData(playedMatch()).werewolf.steps
+  /* 投票阶段之前没有票型：调用方据此一个空元素都不产出 */
+  assert.equal(steps[8].voteBoard, null)
+  /* 第 10 手（第一位投票者）那一帧：一票未投，但投票人数已经定下（3 号夜里出局，5 人投票） */
+  assert.deepEqual(steps[9].voteBoard, {
+    day: 1, round: 1, votes: [], counts: [], leaders: [], top: 0, tie: false, eliminated: null, final: false,
+    open: true, voters: 5, awaiting: 5,
+  })
+  /* 逐手累积：谁投的（seat）、投给谁（target）、谁几票（counts）都在，展示层不需要自己数 */
+  assert.deepEqual(steps[10].voteBoard.votes, [{ seat: 1, target: 2 }])
+  assert.deepEqual(steps[13].voteBoard.votes.map(vote => `${vote.seat}→${vote.target}`), ['1→2', '2→1', '4→2', '5→2'])
+  assert.deepEqual(steps[13].voteBoard.counts, [{ seat: 2, count: 3 }, { seat: 1, count: 1 }])
+  assert.equal(steps[13].voteBoard.awaiting, 1)
+  /* 第 14 手是最后一位投票者那一帧（本手开场）：第 5 票还没投出来，仍是「进行中」，
+     被放逐者不许提前出现 —— 与「出局与宣布同帧」是同一条契约。 */
+  assert.equal(steps[13].voteBoard.open, true)
+  assert.equal(steps[13].voteBoard.eliminated, null)
+  /* 第 15 手（宣布那一帧）：本轮已结算，2 号 4 票被放逐，与主持人的「2 号被投票放逐」同帧 */
+  assert.match(steps[14].host, /^2 号被投票放逐。/u)
+  assert.deepEqual(steps[14].voteBoard, {
+    day: 1, round: 1,
+    votes: [{ seat: 1, target: 2 }, { seat: 2, target: 1 }, { seat: 4, target: 2 }, { seat: 5, target: 2 }, { seat: 6, target: 2 }],
+    counts: [{ seat: 2, count: 4 }, { seat: 1, count: 1 }], leaders: [2], top: 4, tie: false, eliminated: 2, final: false,
+    open: false, voters: null, awaiting: 0,
+  })
+  /* 结算板留到当夜结束：第二天开场（openDay）票型下画，不残留到新的一天 */
+  assert.equal(steps[14].voteBoard.eliminated, 2)
+  assert.equal(steps[16].voteBoard.eliminated, 2)
+  assert.equal(steps.at(-1).voteBoard.eliminated, 2)
+})
+
+test('平票复投：宣布「进入复投」那一帧仍看得到上一轮的票型', () => {
+  const match = playedTieMatch()
+  const steps = replayData(match).werewolf.steps
+  const announce = steps.find(step => /平票/.test(step.host))
+  assert.ok(announce, '夹具里没有平票那一帧')
+  /* 关键：这一刻 phase 仍是 day-vote（复投正要开始）且规则已经把 votes 清空，
+     票型只能从结算留档读出来 —— 只看 votes 会把刚宣布的平票画成「0 票」，
+     而那一帧恰恰是唯一能解释「为什么进入复投」的画面。 */
+  assert.equal(announce.phase, 'day-vote')
+  const snapshot = werewolfTimeline(match).steps.find(step => step.n === announce.n).snapshot
+  assert.deepEqual(snapshot.votes, [])
+  assert.equal(announce.voteBoard.open, false)
+  assert.equal(announce.voteBoard.tie, true)
+  assert.deepEqual(announce.voteBoard.leaders, [1, 2])
+  assert.equal(announce.voteBoard.top, 3)
+  assert.equal(announce.voteBoard.round, 1)
+  assert.equal(announce.voteBoard.eliminated, null)
+  /* 复投的第一票落下之后，画面交回「本轮进行中」，不再挂着上一轮的结果 */
+  const revote = steps.find(step => step.voteBoard?.open && step.voteBoard.round === 2)
+  assert.ok(revote, '复投进行中的票型没有回到 open')
+  assert.equal(revote.voteBoard.tie, false)
+  /* 复投分出结果：2 号 4 票被放逐，这一轮同样留档（round 2） */
+  const settled = steps.find(step => step.voteBoard?.eliminated)
+  assert.deepEqual([settled.voteBoard.round, settled.voteBoard.eliminated, settled.voteBoard.top], [2, 2, 4])
+})
+
+test('出局带死因：席卡标签写「夜刀 / 毒杀 / 票出 / 带走」，不再是一句共用的「出局」', () => {
+  const match = playedMatch()
+  const data = replayData(match)
+  /* 3 号夜里被狼刀、2 号被票出、1 号（猎人）夜里被狼刀、4 号被猎人带走 */
+  assert.deepEqual(data.werewolf.deathCauses, { 3: 'wolf', 2: 'vote', 1: 'wolf', 4: 'hunter' })
+  /* 逐手快照那条路（观战往回拖 / 离线回放 / 视频都读它） */
+  const timeline = werewolfTimeline(match)
+  const snapshot = werewolfStage({ players: match.players, state: timeline.steps[14].snapshot })
+  assert.deepEqual(snapshot.seats.map(seat => [seat.seat, seat.deathMark]),
+    [[1, ''], [2, '票出'], [3, '夜刀'], [4, ''], [5, ''], [6, '']])
+  /* 规则真局面那条路（观战跟随最新回合喂的是它）：两种形状必须给出同一个死因 */
+  const live = werewolfStage({ players: match.players, state: match.state })
+  assert.deepEqual(live.seats.map(seat => seat.deathMark), ['夜刀', '票出', '夜刀', '带走', '', ''])
+})
+
+test('票型条文案与配色档：进行中 / 平票 / 出结果三档，三处读同一条', () => {
+  const open = { day: 1, round: 1, counts: [{ seat: 2, count: 1 }, { seat: 1, count: 1 }], leaders: [1, 2], top: 1, tie: true, eliminated: null, final: false, open: true, voters: 6, awaiting: 4 }
+  assert.equal(werewolfVoteLine(open), '第 1 天 · 投票 2/6 · 并列 1 号、2 号 1 票')
+  assert.equal(werewolfVoteTone(open), 'open')
+  const revote = { ...open, round: 2, tie: false, leaders: [2], counts: [{ seat: 2, count: 3 }], top: 3 }
+  assert.equal(werewolfVoteLine(revote), '第 1 天 · 复投 2/6 · 暂列 2 号 3 票')
+  const tie = { ...open, open: false, awaiting: 0, voters: null }
+  assert.equal(werewolfVoteLine(tie), '第 1 天 · 平票：1 号、2 号 各 1 票，进入复投')
+  assert.equal(werewolfVoteTone(tie), 'tie')
+  const out = { day: 1, round: 1, counts: [{ seat: 2, count: 4 }], leaders: [2], top: 4, tie: false, eliminated: 2, final: false, open: false, voters: null, awaiting: 0 }
+  assert.equal(werewolfVoteLine(out), '第 1 天 · 投票结果：2 号 4 票，被放逐')
+  assert.equal(werewolfVoteTone(out), 'result')
+  const stuck = { ...out, eliminated: null, final: true, round: 2, leaders: [1, 2], top: 3 }
+  assert.equal(werewolfVoteLine(stuck), '第 1 天 · 复投仍平票：1 号、2 号 各 3 票，本日无人出局')
+  /* 与投票无关的一帧不产出任何文案：调用方据此完全不渲染 */
+  assert.equal(werewolfVoteLine(null), '')
+  assert.equal(werewolfVoteTone(null), '')
+})
+
+test('票型三处同源：观战快照 / 离线回放 / MP4 读同一份投影与同一条文案', async () => {
+  const client = await readFile(join(HERE, '..', 'client-source.mjs'), 'utf8')
+  const markup = await readFile(join(HERE, '..', 'replay', 'markup.mjs'), 'utf8')
+  const app = await readFile(join(HERE, '..', 'replay', 'app.js'), 'utf8')
+  const entry = await readFile(join(HERE, '..', 'replay', 'entry.mjs'), 'utf8')
+  const data = await readFile(join(HERE, '..', 'replay', 'data.mjs'), 'utf8')
+  /* 观战页读的是 werewolfStage（它内部调 werewolfVoteBoard），规则真局面与逐手快照同一个口 */
+  assert.match(client, /werewolfStage\(\{ players, state, active, speech \}\)/u)
+  assert.match(client, /stage\.voteLine/u)
+  /* 离线回放与 MP4 都是 markup 那一份；浏览器播放器走 runtime.js 暴露的同名函数，不另写措辞 */
+  assert.match(markup, /werewolfVoteLine\(frame\.voteBoard\)/u)
+  assert.match(app, /S\.werewolfVoteLine\(frame\.voteBoard\)/u)
+  assert.match(app, /S\.werewolfDeathMark/u)
+  for (const name of ['werewolfVoteLine', 'werewolfVoteTone', 'werewolfDeathMark']) assert.ok(entry.includes(name), `runtime.js 没有暴露 ${name}`)
+  /* 死因表整局一份，不再逐手存 */
+  assert.match(data, /deathCauses: timeline\.deathCauses/u)
+  /* 产物必须重建：改了源码不跑 arena:build，软件里就是「改了但没生效」 */
+  const bundle = await readFile(join(HERE, '..', 'client.js'), 'utf8')
+  for (const marker of ['ar-stage-vote', 'ar-cast-vote', 'ar-cast-tally', 'ar-vote-badge']) {
+    assert.ok(bundle.includes(marker), `client.js 缺少 ${marker}：改了 presentation.mjs / styles.mjs / client-source.mjs 之后必须执行 npm run arena:build`)
+  }
+  const runtime = await readFile(join(HERE, '..', 'replay', 'runtime.js'), 'utf8')
+  /* 浏览器播放器要用到的三个函数必须真的挂在 window.ArenaScene 上：漏一个就是运行时的
+     「S.werewolfVoteLine is not a function」，而离线回放只有真的点开才炸。 */
+  const exposed = runtime.match(/globalThis\.ArenaScene=\{([^}]*)\}/u)
+  assert.ok(exposed, 'runtime.js 里找不到 ArenaScene 的导出')
+  for (const name of ['werewolfVoteLine', 'werewolfVoteTone', 'werewolfDeathMark']) assert.ok(exposed[1].includes(name), `runtime.js 的 ArenaScene 缺少 ${name}`)
 })
 
 test('关键步是出局与终局，不是吃子/将军', () => {
