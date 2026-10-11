@@ -654,6 +654,27 @@ function xiangqiPosition(moves = []) {
   }
   return board;
 }
+var XIANGQI_WIN_KINDS = Object.freeze({ "capture-general": "\u5403\u5C06", checkmate: "\u5C06\u6B7B", stalemate: "\u56F0\u6BD9" });
+function xiangqiFinaleMark({ reason = null, moves = [], winner = null } = {}) {
+  if (!XIANGQI_WIN_KINDS[reason] || winner !== 0 && winner !== 1) return null;
+  const last = Array.isArray(moves) ? moves.at(-1) : null;
+  const from = coordinate(last?.from), to = coordinate(last?.to);
+  if (!from || !to) return null;
+  const board = xiangqiPosition(moves), glyph = winner === 0 ? "K" : "k";
+  let loserGeneral = null;
+  board.forEach((line, row) => line.forEach((code, col) => {
+    if (code === glyph) loserGeneral = { row: row + 1, col: col + 1 };
+  }));
+  return {
+    kind: reason,
+    label: XIANGQI_WIN_KINDS[reason],
+    from: { row: from.row + 1, col: from.col + 1 },
+    to: { row: to.row + 1, col: to.col + 1 },
+    /* 只有同行或同列才连线：马走日、相走田、仕走斜格，直线连过去会骗人。 */
+    straight: from.row === to.row || from.col === to.col,
+    loserGeneral
+  };
+}
 var XIANGQI_NO_PROGRESS_RULE_VERSION = "1.1.0";
 var XIANGQI_NO_PROGRESS_LIMIT = 120;
 var XIANGQI_NO_PROGRESS_STALL = XIANGQI_NO_PROGRESS_LIMIT / 2;
@@ -704,9 +725,11 @@ function noProgressSummary(game, moves = []) {
   const progress = xiangqiNoProgress(moves);
   return { ...noProgressClock(game, progress.noProgressPlies), clocks: progress.clocks, plies: progress.plies };
 }
-function xiangqiBoardSvg(moves = [], { opacity = 1 } = {}) {
+function xiangqiBoardSvg(moves = [], { opacity = 1, finaleMark = null } = {}) {
   const margin = 38, gap = 54, width = margin * 2 + gap * 8, height = margin * 2 + gap * 9;
   const board = xiangqiPosition(moves);
+  const mark = XIANGQI_WIN_KINDS[finaleMark?.kind] ? finaleMark : null;
+  const cell = (point) => ({ x: margin + (point.col - 1) * gap, y: margin + (point.row - 1) * gap });
   const parts = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="\u4E2D\u56FD\u8C61\u68CB\u68CB\u76D8\uFF0C${moves.length} \u624B"><defs><linearGradient id="ar-xq-wood" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e0b16b"/><stop offset=".5" stop-color="#c99251"/><stop offset="1" stop-color="#b9793f"/></linearGradient><filter id="ar-xq-shadow"><feDropShadow dx="1.5" dy="2" stdDeviation="1.5" flood-color="#4b2d15" flood-opacity=".35"/></filter></defs><rect width="${width}" height="${height}" rx="6" fill="url(#ar-xq-wood)"/><rect x="10" y="10" width="${width - 20}" height="${height - 20}" rx="4" fill="none" stroke="#754a26" stroke-opacity=".55" stroke-width="1.5"/>`];
   const x = (col) => margin + col * gap, y = (row) => margin + row * gap;
   for (let row = 0; row < 10; row++) parts.push(`<path d="M ${x(0)} ${y(row)} H ${x(8)}" stroke="#674622" stroke-opacity=".9" stroke-width="1.25"/><text x="18" y="${y(row) + 3}" text-anchor="middle" fill="#5e3e1e" font-size="10" font-family="sans-serif" font-weight="600">${row + 1}</text>`);
@@ -718,6 +741,10 @@ function xiangqiBoardSvg(moves = [], { opacity = 1 } = {}) {
   parts.push(`<rect x="${x(0)}" y="${y(4)}" width="${gap * 8}" height="${gap}" fill="#edd095" fill-opacity=".36"/><text x="${width / 2 - 80}" y="${y(4) + 34}" text-anchor="middle" fill="#784c28" font-family="serif" font-size="19" font-weight="700" letter-spacing="6">\u695A\u6CB3</text><text x="${width / 2 + 80}" y="${y(4) + 34}" text-anchor="middle" fill="#784c28" font-family="serif" font-size="19" font-weight="700" letter-spacing="6">\u6C49\u754C</text>`);
   for (const [fromCol, fromRow, toCol, toRow] of [[3, 0, 5, 2], [5, 0, 3, 2], [3, 7, 5, 9], [5, 7, 3, 9]]) parts.push(`<path d="M ${x(fromCol)} ${y(fromRow)} L ${x(toCol)} ${y(toRow)}" stroke="#674622" stroke-width="1.1"/>`);
   for (const [row, col] of [[2, 1], [2, 7], [7, 1], [7, 7], [3, 0], [3, 2], [3, 4], [3, 6], [3, 8], [6, 0], [6, 2], [6, 4], [6, 6], [6, 8]]) parts.push(`<path d="M ${x(col) - 5} ${y(row) - 5} h 4 v -4 M ${x(col) + 5} ${y(row) - 5} h -4 v -4 M ${x(col) - 5} ${y(row) + 5} h 4 v 4 M ${x(col) + 5} ${y(row) + 5} h -4 v 4" fill="none" stroke="#674622" stroke-width="1"/>`);
+  if (mark?.straight) {
+    const head = cell(mark.from), tail = cell(mark.to);
+    parts.push(`<line x1="${head.x}" y1="${head.y}" x2="${tail.x}" y2="${tail.y}" stroke="#F0B429" stroke-width="14" stroke-linecap="round" class="winband" opacity=".55"/>`);
+  }
   board.forEach((line, row) => line.forEach((code, col) => {
     if (!code || !XIANGQI_PIECES[code]) return;
     const [label, side] = XIANGQI_PIECES[code], fill = side === "red" ? "#b83c2e" : "#202723", stroke = side === "red" ? "#79231c" : "#101512";
@@ -725,11 +752,22 @@ function xiangqiBoardSvg(moves = [], { opacity = 1 } = {}) {
   }));
   const last = moves.at(-1), lastTo = coordinate(last?.to);
   if (lastTo) parts.push(`<circle cx="${x(lastTo.col)}" cy="${y(lastTo.row)}" r="24" fill="none" stroke="#e45d3c" stroke-width="2.4"/>`);
+  if (mark) {
+    const rings = [
+      { point: mark.from, stroke: "#F0B429" },
+      { point: mark.to, stroke: "#F0B429" },
+      ...mark.loserGeneral ? [{ point: mark.loserGeneral, stroke: "#E24B4A" }] : []
+    ];
+    for (const ring of rings) {
+      const at = cell(ring.point);
+      parts.push(`<circle cx="${at.x}" cy="${at.y}" r="27" fill="none" stroke="${ring.stroke}" stroke-width="2.4" class="winring"/>`);
+    }
+  }
   return `${parts.join("")}</svg>`;
 }
-function boardSvg(moves, { size = 15, opacity = 1, gameId = "", winRun = null } = {}) {
+function boardSvg(moves, { size = 15, opacity = 1, gameId = "", winRun = null, finaleMark = null } = {}) {
   if (gameId === "werewolf") return "";
-  if (gameId === "xiangqi" || moves?.some(isXiangqiMove)) return xiangqiBoardSvg(moves, { opacity });
+  if (gameId === "xiangqi" || moves?.some(isXiangqiMove)) return xiangqiBoardSvg(moves, { opacity, finaleMark });
   const margin = 34, gap = 32, end = margin + gap * (size - 1), extent = end + margin;
   const parts = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${extent} ${extent}" role="img" aria-label="\u4E94\u5B50\u68CB\u68CB\u76D8\uFF0C${moves.length} \u624B"><defs><linearGradient id="ar-board-wood" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#d7a866"/><stop offset=".5" stop-color="#c6904e"/><stop offset="1" stop-color="#b9793f"/></linearGradient><radialGradient id="ar-stone-black" cx="30%" cy="25%"><stop offset="0" stop-color="#4a514c"/><stop offset=".55" stop-color="#1c2521"/><stop offset="1" stop-color="#0d1310"/></radialGradient><radialGradient id="ar-stone-white" cx="30%" cy="25%"><stop offset="0" stop-color="#fffdf7"/><stop offset=".65" stop-color="#e8e5dc"/><stop offset="1" stop-color="#bdb8ad"/></radialGradient></defs><rect width="${extent}" height="${extent}" rx="6" fill="url(#ar-board-wood)"/><path d="M 0 48 H ${extent} M 0 128 H ${extent} M 0 214 H ${extent} M 0 302 H ${extent} M 0 384 H ${extent}" stroke="#fff1c4" stroke-opacity=".12" stroke-width="2"/>`];
   for (let i = 0; i < size; i++) {
@@ -2069,6 +2107,7 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
   const frame = match ? frameAt(match, currentStep) : null;
   const finale = match && currentStep >= moves.length ? finaleInfo(match) : null;
   const winRun = finale ? winningRun(match) : null;
+  const finaleMark = finale ? xiangqiFinaleMark({ reason: match.state?.result, moves: match.state?.moves || [], winner: finale.seat }) : null;
   const progress = import_react4.default.useMemo(
     () => match ? noProgressSummary(match.game, moves.map((event) => event.action)) : null,
     [match?.id, match?.game?.version, moves.length]
@@ -2199,7 +2238,9 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
           import_react4.default.Fragment,
           null,
           h2("div", { className: "ar-scoreboard" }, h2(Player, { player: match.players[0], index: 0, gameId: match.game?.id, badge: seatBadge(finale, 0) }), h2("span", { className: "ar-vs" }, "VS"), h2(Player, { player: match.players[1], index: 1, gameId: match.game?.id, badge: seatBadge(finale, 1) })),
-          h2("div", { className: "ar-board", key: currentStep, "data-win": winRun ? "true" : void 0, dangerouslySetInnerHTML: { __html: boardSvg(frame.moves, { gameId: match.game?.id, winRun }) } })
+          /* data-win 同时管两件事：给「终局那一手」换色，以及让样式知道这一帧是胜局图层。
+             象棋把它一并挂上：终局那颗子会同时拿到最后一手圈与金色制胜环，橙红与金相邻会糊成一圈。 */
+          h2("div", { className: "ar-board", key: currentStep, "data-win": winRun || finaleMark ? "true" : void 0, dangerouslySetInnerHTML: { __html: boardSvg(frame.moves, { gameId: match.game?.id, winRun, finaleMark }) } })
         ),
         h2(
           "div",

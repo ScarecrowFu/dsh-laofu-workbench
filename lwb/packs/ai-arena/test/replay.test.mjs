@@ -117,6 +117,49 @@ test('帧驱动 markup 覆盖逐手与终局，且关键手特效按档位生效
   assert.match(finale, /class="logo"/u)
 })
 
+/* 象棋的终局图层与五子棋同构（金线铺底、环盖顶），但形状来自 data.finaleMark：
+   制胜一手的起点与落点各一环、败方将帅另挂一环。数据只由 presentation.xiangqiFinaleMark
+   一处产出，离线 HTML（app.js）与视频（这里的 markup）都只负责「按帧点亮」。 */
+test('象棋终局：数据带 finaleMark，终局帧画金线 + 三环，逐手帧与和棋帧都不画', async () => {
+  const mate = JSON.parse(await readFile(join(HERE, 'fixtures', 'xiangqi-checkmate-game.json'), 'utf8'))
+  const board = {
+    id: 'dddddddd-dddd-dddd-dddd-dddddddddddd', title: '象棋演示',
+    game: { id: 'xiangqi', name: '中国象棋', description: '规则', version: '1.1.0' },
+    players: [{ name: '红模型', provider: 'test', model: 'red' }, { name: '黑模型', provider: 'test', model: 'black' }],
+    state: { result: mate.reason, winner: mate.winner, moves: mate.moves },
+    events: mate.moves.map((entry, i) => ({ type: 'move', moveNumber: i + 1, player: entry.player, action: { from: entry.from, to: entry.to }, speech: '' })),
+    status: 'finished', result: { kind: 'win', winner: mate.winner, message: '红模型 将死黑方，获胜。' },
+  }
+  const data = replayData(board)
+  assert.equal(data.winRun, null, '象棋不吃五子棋的连子口径')
+  const mark = data.finaleMark
+  assert.deepEqual(
+    [mark.kind, mark.label, mark.from, mark.to, mark.loserGeneral],
+    ['checkmate', '将死', { row: 9, col: 6 }, { row: 9, col: 4 }, { row: 2, col: 4 }])
+
+  /* 往回拖一帧（还没到终局）就不该有胜因图层。 */
+  const mid = stageHtml(data, mate.moves.length - 1, { layout: 'landscape', t: 1 })
+  assert.equal(/class="winband"|class="winring"/u.test(mid), false, '没到终局帧就不该有胜因图层')
+
+  const finale = stageHtml(data, mate.moves.length + 1, { layout: 'landscape', t: 1 })
+  assert.match(finale, /data-phase="finale"/)
+  assert.equal((finale.match(/class="winband"/gu) || []).length, 1)
+  assert.equal((finale.match(/class="winring"/gu) || []).length, 3)
+  assert.match(finale, /stroke="#E24B4A"/u, '败方将帅那一环是红的')
+  assert.match(finale, /class="pill win">胜局/u)
+
+  /* 和棋：终局不是胜法，finaleMark 为 null，棋盘上什么也不加。 */
+  const draw = replayData({
+    ...board,
+    state: { ...board.state, result: 'move-limit', winner: null },
+    result: { kind: 'draw', winner: null, message: '中国象棋和棋（无进展和棋）。' },
+  })
+  assert.equal(draw.finaleMark, null)
+  const drawFinale = stageHtml(draw, mate.moves.length + 1, { layout: 'landscape', t: 1 })
+  assert.equal(/class="winband"|class="winring"/u.test(drawFinale), false, '和棋没有胜因')
+  assert.match(drawFinale, /class="pill plain">和棋/u)
+})
+
 /* ---------------------------------------------------------------- 执行者卡里的模型形象
    口径：只有人物、没有底板；logo 贴在人物左上角；**本手有发言才画人**；
    没有发言时只留 logo（同高占位）。三档：横屏/标准竖屏 66×86 在左，象棋竖屏 46×58 在右。 */

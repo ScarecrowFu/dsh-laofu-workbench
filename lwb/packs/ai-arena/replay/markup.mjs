@@ -253,6 +253,28 @@ function boardMarkup(data, index, { key, t }) {
     })
   }
 
+  /* 象棋终局：制胜一手的连线铺底（棋子把它切成几段）+ 起点 / 落点 / 败方将帅三环。
+     与五子棋同构，但形状来自 data.finaleMark（presentation.xiangqiFinaleMark 的唯一口径），
+     这里只做「按帧点亮」——离线 HTML 用 CSS 关键帧复刻同一节奏。 */
+  if (isFinale && data.finaleMark) {
+    const mark = data.finaleMark
+    const point = c => ({ x: XIANGQI.margin + (c.col - 1) * XIANGQI.gap, y: XIANGQI.margin + (c.row - 1) * XIANGQI.gap })
+    if (mark.straight) {
+      const a = point(mark.from), b = point(mark.to)
+      svg = svg.replace(/(<g\b)/u, `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="#F0B429" stroke-width="14" stroke-linecap="round" class="winband" style="opacity:${round(bandIn(t))}"/>$1`)
+    }
+    const rings = [
+      { point: mark.from, stroke: '#F0B429' },
+      { point: mark.to, stroke: '#F0B429' },
+      ...(mark.loserGeneral ? [{ point: mark.loserGeneral, stroke: '#E24B4A' }] : []),
+    ]
+    rings.forEach((ring, i) => {
+      const c = point(ring.point)
+      const [opacity, scale] = winPop(t, .12 + i * .08)
+      fx.push(`<circle cx="${c.x}" cy="${c.y}" r="27" fill="none" stroke="${ring.stroke}" stroke-width="2.4" class="winring" style="opacity:${round(opacity)};transform:scale(${round(scale)})"/>`)
+    })
+  }
+
   if (fx.length) svg = svg.replace(/<\/svg>$/u, `${fx.join('')}</svg>`)
   return svg
 }

@@ -1,6 +1,6 @@
 import React from 'react'
 import { Trophy, Settings2, Play, Pause, Square, SkipBack, ChevronDown, ChevronLeft, ChevronRight, ArrowLeft, Download, FileText, Film, RefreshCw, MessageCircle, Radio, Eye, Minus, Info } from 'lucide-react'
-import { boardSvg, frameAt, movesOf, gameName, matchTitle, matchOutcome, playerSide, actionLabel, werewolfStage, winningRun, finaleInfo, forfeitDetail, seatBadge, seatIdentity, sideIdentity, gameCard, gameCoverSvg, werewolfCoverSeats, assignPortraits, noProgressSummary, noProgressClock } from './presentation.mjs'
+import { boardSvg, frameAt, movesOf, gameName, matchTitle, matchOutcome, playerSide, actionLabel, werewolfStage, winningRun, xiangqiFinaleMark, finaleInfo, forfeitDetail, seatBadge, seatIdentity, sideIdentity, gameCard, gameCoverSvg, werewolfCoverSeats, assignPortraits, noProgressSummary, noProgressClock } from './presentation.mjs'
 import { werewolfTimeline, werewolfStageState } from './werewolf-projection.mjs'
 import { WEREWOLF_ART } from './werewolf-art.mjs'
 import { MODEL_ART } from './model-art.mjs'
@@ -182,6 +182,9 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
      `finale` 同时决定胶囊文案、配色档位与徽标归属，避免三处各推一套。 */
   const finale = match && currentStep >= moves.length ? finaleInfo(match) : null
   const winRun = finale ? winningRun(match) : null
+  /* 象棋的胜因图层与离线回放同源：口径取自规则层自己的裁决（`state.result` 与胜方座位），
+     只画制胜一手与败方的将帅。和棋与判负拿到 null，棋盘上就什么也不加。 */
+  const finaleMark = finale ? xiangqiFinaleMark({ reason: match.state?.result, moves: match.state?.moves || [], winner: finale.seat }) : null
   /* 无进展计数器：1.1.0 起象棋的停滞只由「连续 120 半回合无吃子及兵卒向前推进」收口，
      选手每手都拿到这个量，观众此前一点都看不到 —— 一局「双方都赢不了」的棋于是只剩
      「卡住了」一种读法。这里按已提交落子推当前计数，与选手拿到的 noProgressPlies 同源。 */
@@ -300,7 +303,9 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
           ? h(WerewolfStage, { players: match.players, state: werewolfStageState(match, wolfTimeline, currentStep), active: finale?.side ? null : currentPlayer, speech: thinking ? phaseLabel : frame.current?.speech || '' })
           : h(React.Fragment, null,
               h('div', { className: 'ar-scoreboard' }, h(Player, { player: match.players[0], index: 0, gameId: match.game?.id, badge: seatBadge(finale, 0) }), h('span', { className: 'ar-vs' }, 'VS'), h(Player, { player: match.players[1], index: 1, gameId: match.game?.id, badge: seatBadge(finale, 1) })),
-              h('div', { className: 'ar-board', key: currentStep, 'data-win': winRun ? 'true' : undefined, dangerouslySetInnerHTML: { __html: boardSvg(frame.moves, { gameId: match.game?.id, winRun }) } })),
+              /* data-win 同时管两件事：给「终局那一手」换色，以及让样式知道这一帧是胜局图层。
+                 象棋把它一并挂上：终局那颗子会同时拿到最后一手圈与金色制胜环，橙红与金相邻会糊成一圈。 */
+              h('div', { className: 'ar-board', key: currentStep, 'data-win': winRun || finaleMark ? 'true' : undefined, dangerouslySetInnerHTML: { __html: boardSvg(frame.moves, { gameId: match.game?.id, winRun, finaleMark }) } })),
         h('div', { className: 'ar-toolbar' },
           h(IconButton, { icon: SkipBack, title: '回到开局', onClick: () => seek(0) }),
           h(IconButton, { icon: ChevronLeft, title: '上一步', onClick: () => seek(Math.max(0, currentStep - 1)), disabled: currentStep === 0 }),

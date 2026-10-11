@@ -423,7 +423,8 @@ export function forfeitDetail(match) {
 /* ---------------------------------------------------------------- 终局口径
    观战与离线回放/视频共用同一份胜负投影：哪几颗连子、终局胶囊说什么、徽标给谁、
    用哪种配色。三处各写一套时，「和棋」与「判负 / 取消」会各自漂移。
-   连子只在五子棋成立（象棋动作是 from/to，天然取不到 row/col，因此返回 null）。 */
+   连子只在五子棋成立（象棋动作是 from/to，天然取不到 row/col，因此返回 null）；
+   象棋自己的胜因图层见下面的 `xiangqiFinaleMark` —— 它答的是另一个问题。 */
 /** 五子棋连子：从最后一手向四个方向数，取长度 >= 5 的那一串。 */
 export function winningRun(match) {
   const moves = movesOf(match)
@@ -500,6 +501,46 @@ export function xiangqiPosition(moves = []) {
   }
   return board
 }
+/* ---------------------------------------------------------------- 象棋终局图层
+   象棋的胜因不是「连成一串」，而是「哪一手定了胜负、哪一方的将帅再也不能动」。
+   棋盘上因此只画两件事：制胜一手的起点与落点，以及败方那个将帅。
+
+   口径直接取规则层自己的裁决（`state.result` 的 key + 胜方座位），不在这里重推规则：
+   胜负与胜法只有一处计算，展示层不跟着规则版本漂移（1.0.0 与 1.1.0 都写这两个字段）。
+   只有吃将 / 将死 / 困毙三种胜法画图层，和棋与判负不画 —— 和棋没有胜因，判负裁决的是
+   协议遵守度而非棋力，借用胜局图层会把它读成棋力失败（与 `finaleInfo` 的配色档同规矩）。
+
+   败方将帅的位置从落子序列现推。吃将之后它已经不在盘上，所以那一档只有制胜手 ——
+   这与画面上「被吃的子确实消失了」一致，不再凭空造一个位置出来。
+
+   观战页、离线回放与视频共用这一份；五子棋那一套（`winningRun`）仍各归各的。 */
+const XIANGQI_WIN_KINDS = Object.freeze({ 'capture-general': '吃将', checkmate: '将死', stalemate: '困毙' })
+/**
+ * @param {{ reason?: string|null, moves?: object[], winner?: number|null }} input
+ *   `reason` 是规则层 `state.result`（`capture-general` / `checkmate` / `stalemate`），
+ *   `winner` 是胜方座位（0 红方 / 1 黑方），`moves` 是落子序列（每项至少带 `from` / `to`）。
+ * @returns {{ kind: string, label: string, from: object, to: object, straight: boolean,
+ *   loserGeneral: object|null }|null} 坐标是规则层口径（行 1—10、列 1—9）。
+ */
+export function xiangqiFinaleMark({ reason = null, moves = [], winner = null } = {}) {
+  if (!XIANGQI_WIN_KINDS[reason] || (winner !== 0 && winner !== 1)) return null
+  const last = Array.isArray(moves) ? moves.at(-1) : null
+  const from = coordinate(last?.from), to = coordinate(last?.to)
+  if (!from || !to) return null
+  /* 败方的将帅：红方是 `k`、黑方是 `K`（`XIANGQI_PIECES` 的键）。 */
+  const board = xiangqiPosition(moves), glyph = winner === 0 ? 'K' : 'k'
+  let loserGeneral = null
+  board.forEach((line, row) => line.forEach((code, col) => { if (code === glyph) loserGeneral = { row: row + 1, col: col + 1 } }))
+  return {
+    kind: reason,
+    label: XIANGQI_WIN_KINDS[reason],
+    from: { row: from.row + 1, col: from.col + 1 },
+    to: { row: to.row + 1, col: to.col + 1 },
+    /* 只有同行或同列才连线：马走日、相走田、仕走斜格，直线连过去会骗人。 */
+    straight: from.row === to.row || from.col === to.col,
+    loserGeneral,
+  }
+}
 /* ---------------------------------------------------------------- 象棋无进展
    观战、离线回放、MP4 与战报共用这一份推导：从落子序列还原「连续多少半回合既没有吃子、
    也没有兵卒向前推进」，以及距离判和的剩余手数 —— 这正是选手每手拿到的 noProgressPlies，
@@ -571,9 +612,13 @@ export function noProgressSummary(game, moves = []) {
   const progress = xiangqiNoProgress(moves)
   return { ...noProgressClock(game, progress.noProgressPlies), clocks: progress.clocks, plies: progress.plies }
 }
-export function xiangqiBoardSvg(moves = [], { opacity = 1 } = {}) {
+export function xiangqiBoardSvg(moves = [], { opacity = 1, finaleMark = null } = {}) {
   const margin = 38, gap = 54, width = margin * 2 + gap * 8, height = margin * 2 + gap * 9
   const board = xiangqiPosition(moves)
+  /* 只认三种胜法：即便调用方递进来一个和棋 / 判负形状的对象，棋盘也不加图层 ——
+     和棋没有胜因，借用胜局图层会把它读成棋力胜负（与 finaleInfo 的配色档同规矩）。 */
+  const mark = XIANGQI_WIN_KINDS[finaleMark?.kind] ? finaleMark : null
+  const cell = point => ({ x: margin + (point.col - 1) * gap, y: margin + (point.row - 1) * gap })
   const parts = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="中国象棋棋盘，${moves.length} 手"><defs><linearGradient id="ar-xq-wood" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e0b16b"/><stop offset=".5" stop-color="#c99251"/><stop offset="1" stop-color="#b9793f"/></linearGradient><filter id="ar-xq-shadow"><feDropShadow dx="1.5" dy="2" stdDeviation="1.5" flood-color="#4b2d15" flood-opacity=".35"/></filter></defs><rect width="${width}" height="${height}" rx="6" fill="url(#ar-xq-wood)"/><rect x="10" y="10" width="${width - 20}" height="${height - 20}" rx="4" fill="none" stroke="#754a26" stroke-opacity=".55" stroke-width="1.5"/>`]
   const x = col => margin + col * gap, y = row => margin + row * gap
   for (let row = 0; row < 10; row++) parts.push(`<path d="M ${x(0)} ${y(row)} H ${x(8)}" stroke="#674622" stroke-opacity=".9" stroke-width="1.25"/><text x="18" y="${y(row) + 3}" text-anchor="middle" fill="#5e3e1e" font-size="10" font-family="sans-serif" font-weight="600">${row + 1}</text>`)
@@ -585,6 +630,12 @@ export function xiangqiBoardSvg(moves = [], { opacity = 1 } = {}) {
   parts.push(`<rect x="${x(0)}" y="${y(4)}" width="${gap * 8}" height="${gap}" fill="#edd095" fill-opacity=".36"/><text x="${width / 2 - 80}" y="${y(4) + 34}" text-anchor="middle" fill="#784c28" font-family="serif" font-size="19" font-weight="700" letter-spacing="6">楚河</text><text x="${width / 2 + 80}" y="${y(4) + 34}" text-anchor="middle" fill="#784c28" font-family="serif" font-size="19" font-weight="700" letter-spacing="6">汉界</text>`)
   for (const [fromCol, fromRow, toCol, toRow] of [[3, 0, 5, 2], [5, 0, 3, 2], [3, 7, 5, 9], [5, 7, 3, 9]]) parts.push(`<path d="M ${x(fromCol)} ${y(fromRow)} L ${x(toCol)} ${y(toRow)}" stroke="#674622" stroke-width="1.1"/>`)
   for (const [row, col] of [[2, 1], [2, 7], [7, 1], [7, 7], [3, 0], [3, 2], [3, 4], [3, 6], [3, 8], [6, 0], [6, 2], [6, 4], [6, 6], [6, 8]]) parts.push(`<path d="M ${x(col) - 5} ${y(row) - 5} h 4 v -4 M ${x(col) + 5} ${y(row) - 5} h -4 v -4 M ${x(col) - 5} ${y(row) + 5} h 4 v 4 M ${x(col) + 5} ${y(row) + 5} h -4 v 4" fill="none" stroke="#674622" stroke-width="1"/>`)
+  /* 制胜一手的连线铺在棋子底下（与五子棋的金带同层）：棋子把它切成几段，
+     露出来的正是「这一子是从哪走过来的」。只有同行 / 同列才画，见 xiangqiFinaleMark。 */
+  if (mark?.straight) {
+    const head = cell(mark.from), tail = cell(mark.to)
+    parts.push(`<line x1="${head.x}" y1="${head.y}" x2="${tail.x}" y2="${tail.y}" stroke="#F0B429" stroke-width="14" stroke-linecap="round" class="winband" opacity=".55"/>`)
+  }
   board.forEach((line, row) => line.forEach((code, col) => {
     if (!code || !XIANGQI_PIECES[code]) return
     const [label, side] = XIANGQI_PIECES[code], fill = side === 'red' ? '#b83c2e' : '#202723', stroke = side === 'red' ? '#79231c' : '#101512'
@@ -592,11 +643,24 @@ export function xiangqiBoardSvg(moves = [], { opacity = 1 } = {}) {
   }))
   const last = moves.at(-1), lastTo = coordinate(last?.to)
   if (lastTo) parts.push(`<circle cx="${x(lastTo.col)}" cy="${y(lastTo.row)}" r="24" fill="none" stroke="#e45d3c" stroke-width="2.4"/>`)
+  /* 终局图层盖在棋子上：制胜一手的起点与落点各一环（金），败方的将帅另挂一环（红，
+     与「将军」那条红环脉冲同色）。环比最后一手圈大一号，两者相邻时不会糊成一团。 */
+  if (mark) {
+    const rings = [
+      { point: mark.from, stroke: '#F0B429' },
+      { point: mark.to, stroke: '#F0B429' },
+      ...(mark.loserGeneral ? [{ point: mark.loserGeneral, stroke: '#E24B4A' }] : []),
+    ]
+    for (const ring of rings) {
+      const at = cell(ring.point)
+      parts.push(`<circle cx="${at.x}" cy="${at.y}" r="27" fill="none" stroke="${ring.stroke}" stroke-width="2.4" class="winring"/>`)
+    }
+  }
   return `${parts.join('')}</svg>`
 }
-export function boardSvg(moves, { size = 15, opacity = 1, gameId = '', winRun = null } = {}) {
+export function boardSvg(moves, { size = 15, opacity = 1, gameId = '', winRun = null, finaleMark = null } = {}) {
   if (gameId === 'werewolf') return ''
-  if (gameId === 'xiangqi' || moves?.some(isXiangqiMove)) return xiangqiBoardSvg(moves, { opacity })
+  if (gameId === 'xiangqi' || moves?.some(isXiangqiMove)) return xiangqiBoardSvg(moves, { opacity, finaleMark })
   const margin = 34, gap = 32, end = margin + gap * (size - 1), extent = end + margin
   const parts = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${extent} ${extent}" role="img" aria-label="五子棋棋盘，${moves.length} 手"><defs><linearGradient id="ar-board-wood" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#d7a866"/><stop offset=".5" stop-color="#c6904e"/><stop offset="1" stop-color="#b9793f"/></linearGradient><radialGradient id="ar-stone-black" cx="30%" cy="25%"><stop offset="0" stop-color="#4a514c"/><stop offset=".55" stop-color="#1c2521"/><stop offset="1" stop-color="#0d1310"/></radialGradient><radialGradient id="ar-stone-white" cx="30%" cy="25%"><stop offset="0" stop-color="#fffdf7"/><stop offset=".65" stop-color="#e8e5dc"/><stop offset="1" stop-color="#bdb8ad"/></radialGradient></defs><rect width="${extent}" height="${extent}" rx="6" fill="url(#ar-board-wood)"/><path d="M 0 48 H ${extent} M 0 128 H ${extent} M 0 214 H ${extent} M 0 302 H ${extent} M 0 384 H ${extent}" stroke="#fff1c4" stroke-opacity=".12" stroke-width="2"/>`]
   for (let i = 0; i < size; i++) {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { actionLabel, boardSvg, finaleInfo, forfeitDetail, frameAt, matchOutcome, matchTitle, playerSide, seatBadge, sideIdentity, werewolfSide, werewolfStage, winningRun, xiangqiPosition, xiangqiNoProgress, noProgressAt, noProgressClock, noProgressSummary, hasNoProgressRule, XIANGQI_NO_PROGRESS_LIMIT, XIANGQI_NO_PROGRESS_RULE_VERSION } from '../presentation.mjs'
+import { actionLabel, boardSvg, finaleInfo, forfeitDetail, frameAt, matchOutcome, matchTitle, playerSide, seatBadge, sideIdentity, werewolfSide, werewolfStage, winningRun, xiangqiFinaleMark, xiangqiPosition, xiangqiNoProgress, noProgressAt, noProgressClock, noProgressSummary, hasNoProgressRule, XIANGQI_NO_PROGRESS_LIMIT, XIANGQI_NO_PROGRESS_RULE_VERSION } from '../presentation.mjs'
 import { xiangqi, XIANGQI_NO_PROGRESS_LIMIT as ENGINE_NO_PROGRESS_LIMIT } from '../xiangqi.mjs'
 import { replayHtml, reportMarkdown } from '../export.mjs'
 
@@ -253,6 +253,90 @@ test('boardSvg 的胜局图层：金带铺在棋子底下，五个点亮环盖�
   assert.equal(/winring/u.test(boardSvg(moves, { winRun: [{ row: 4, col: 8 }] })), false)
   assert.equal(/winband|winring/u.test(boardSvg([], { gameId: 'xiangqi', winRun: [{ row: 1, col: 1 }, { row: 1, col: 2 }, { row: 1, col: 3 }, { row: 1, col: 4 }, { row: 1, col: 5 }] })), false)
   assert.equal(/winband|winring/u.test(boardSvg([{ row: 8, col: 8, player: 0 }])), false)
+})
+
+/* ---------------------------------------------------------------- 象棋终局图层
+   象棋没有「连成一串」：胜因是「哪一手定了胜负、败方将帅再也不能动」。口径取规则层自己的
+   裁决（`state.result` 的 key + 胜方座位），展示层不重推规则，所以 1.0.0 的历史对局只要
+   `state.result` 是胜法就能照画。两份夹具是固定种子跑出来的**合法**终局（将死 25 手、
+   困毙 105 手），下面顺手用规则引擎回放校验一遍 —— 夹具不能只是手写的坐标。 */
+const finaleFixture = async name => JSON.parse(await readFile(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'))
+
+test('象棋终局夹具在规则层回放合法，终局原因与胜方吻合', async () => {
+  for (const [file, reason, winner, plies] of [
+    ['xiangqi-checkmate-game.json', 'checkmate', 0, 25],
+    ['xiangqi-stalemate-game.json', 'stalemate', 0, 105],
+  ]) {
+    const game = await finaleFixture(file)
+    assert.equal(game.reason, reason)
+    assert.equal(game.winner, winner)
+    let state = xiangqi.create()
+    for (const entry of game.moves) state = xiangqi.apply(state, { from: entry.from, to: entry.to }, entry.player)
+    assert.equal(state.moves.length, plies, `${file} 的手数变了`)
+    assert.equal(state.result, reason, `${file} 的终局原因与夹具声明不一致`)
+    assert.equal(state.winner, winner, `${file} 的胜方与夹具声明不一致`)
+  }
+})
+
+test('xiangqiFinaleMark 从规则层裁决还原制胜一手与败方将帅', async () => {
+  const mate = await finaleFixture('xiangqi-checkmate-game.json')
+  assert.deepEqual(xiangqiFinaleMark({ reason: mate.reason, moves: mate.moves, winner: mate.winner }), {
+    kind: 'checkmate', label: '将死',
+    from: { row: 9, col: 6 }, to: { row: 9, col: 4 },
+    straight: true, loserGeneral: { row: 2, col: 4 },
+  })
+  const stale = await finaleFixture('xiangqi-stalemate-game.json')
+  const mark = xiangqiFinaleMark({ reason: stale.reason, moves: stale.moves, winner: stale.winner })
+  assert.deepEqual([mark.kind, mark.label], ['stalemate', '困毙'])
+  assert.deepEqual([mark.from, mark.to], [{ row: 3, col: 7 }, { row: 2, col: 7 }])
+  assert.deepEqual([mark.straight, mark.loserGeneral], [true, { row: 1, col: 6 }])
+  /* 马走日、相走田、仕走斜格：不画连线，否则会被读成「这一手是直着过来的」。 */
+  assert.equal(xiangqiFinaleMark({ reason: 'stalemate', moves: [move(10, 2, 8, 1, 1)], winner: 1 }).straight, false)
+  /* 吃将在合法对局里走不出来（被将军的一方不会把将留在盘上），这一档只守住投影本身：
+     被吃的将已经不在盘上，不能凭空造一个坐标出来。 */
+  const captured = xiangqiFinaleMark({ reason: 'capture-general', moves: [move(10, 1, 1, 5, 0)], winner: 0 })
+  assert.deepEqual([captured.label, captured.loserGeneral], ['吃将', null])
+  /* 和棋 / 判负 / 取消 / 缺字段一律 null：没有胜因就不该在棋盘上加东西。 */
+  assert.equal(xiangqiFinaleMark({ reason: 'move-limit', moves: mate.moves, winner: 0 }), null)
+  assert.equal(xiangqiFinaleMark({ reason: 'repetition', moves: mate.moves, winner: 0 }), null, '1.0.0 的三次重复判和没有胜因')
+  assert.equal(xiangqiFinaleMark({ reason: 'forfeit', moves: mate.moves, winner: 0 }), null)
+  assert.equal(xiangqiFinaleMark({ reason: 'checkmate', moves: mate.moves, winner: null }), null)
+  assert.equal(xiangqiFinaleMark({ reason: 'checkmate', moves: mate.moves, winner: 'wolf' }), null, '隐藏身份游戏只有阵营，没有获胜座位')
+  assert.equal(xiangqiFinaleMark({ reason: null, moves: mate.moves, winner: 0 }), null)
+  assert.equal(xiangqiFinaleMark({ reason: 'checkmate', moves: [], winner: 0 }), null)
+  assert.equal(xiangqiFinaleMark(), null)
+  assert.equal(xiangqiFinaleMark({ reason: 'checkmate', moves: [{ from: { row: 99, col: 1 }, to: { row: 1, col: 1 } }], winner: 0 }), null)
+})
+
+test('象棋终局图层：制胜手金线铺在棋子底下，制胜环与败将环盖在棋子上', async () => {
+  const mate = await finaleFixture('xiangqi-checkmate-game.json')
+  const mark = xiangqiFinaleMark({ reason: mate.reason, moves: mate.moves, winner: mate.winner })
+  /* 不传 finaleMark 时棋盘一个字节都不能变（封面与离线回放的逐手帧都走这条路）。 */
+  assert.equal(/winband|winring/u.test(boardSvg(mate.moves, { gameId: 'xiangqi' })), false)
+  const svg = boardSvg(mate.moves, { gameId: 'xiangqi', finaleMark: mark })
+  assert.equal((svg.match(/class="winband"/gu) || []).length, 1)
+  assert.equal((svg.match(/class="winring"/gu) || []).length, 3, '制胜手的起点与落点 + 败方将帅')
+  /* 层次：金线早于第一颗棋子（否则盖住棋子），环晚于最后一片棋子（否则被盖住）。 */
+  assert.ok(svg.indexOf('class="winband"') < svg.indexOf('<g '), '制胜手的金线必须在棋子之前')
+  assert.ok(svg.lastIndexOf('class="winring"') > svg.lastIndexOf('<g '), '终局环必须在棋子之后')
+  /* 坐标沿用象棋棋盘自身的 margin=38 / gap=54（与五子棋的 34/32 不同，两套不能互相抄）：
+     制胜手落点 (9,4) → x=38+3*54=200, y=38+8*54=470；败将 (2,4) → y=38+1*54=92。 */
+  assert.ok(svg.includes('cx="200" cy="470"'), '制胜手落点那一环必须落在 (9,4)')
+  assert.ok(svg.includes('cx="200" cy="92"'), '败方将帅那一环必须落在 (2,4)')
+  /* 两环金（制胜手）、一环红（败将）；金线也是金 —— 所以 #F0B429 共三处，红只此一处。 */
+  assert.equal((svg.match(/stroke="#F0B429"/gu) || []).length, 3)
+  assert.equal((svg.match(/stroke="#E24B4A"/gu) || []).length, 1)
+  /* 马走日：只有环，没有连线。 */
+  const horseMove = [move(10, 2, 8, 1, 1)]
+  const horse = xiangqiFinaleMark({ reason: 'stalemate', moves: horseMove, winner: 1 })
+  const horseSvg = boardSvg(horseMove, { gameId: 'xiangqi', finaleMark: horse })
+  assert.equal(/class="winband"/u.test(horseSvg), false, '马走日不画连线')
+  assert.equal((horseSvg.match(/class="winring"/gu) || []).length, 3)
+  /* 和棋 / 判负即使被误传进来，画层也不认：没有胜因就没有图层。 */
+  for (const kind of ['move-limit', 'repetition', 'forfeit', 'draw', '']) {
+    assert.equal(/winband|winring/u.test(boardSvg(mate.moves, { gameId: 'xiangqi', finaleMark: { ...mark, kind } })), false, `${kind} 不该画图层`)
+  }
+  assert.equal(/winband|winring/u.test(boardSvg(mate.moves, { gameId: 'xiangqi', finaleMark: null })), false)
 })
 
 test('狼人杀终局席位标记：胜方阵营金框 + 每席「胜 / 负」，未结束不提前泄露', () => {

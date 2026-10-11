@@ -201,7 +201,7 @@ test('客户端源码与产物里都没有未声明的标识符', async () => {
    这里按产物里的字面量核对，不依赖未被压缩的标识符。 */
 test('客户端产物带上终局图层与席位身份，源码与样式改动必须重新 arena:build', async () => {
   const bundle = await readFile(join(HERE, '..', 'client.js'), 'utf8')
-  for (const marker of ['winband', 'winring', '#F0B429', 'ar-pill', 'ar-player-badge', 'ar-cast-badge', 'ar-winring', 'ar-seat', 'ar-role', 'ar-side', 'ar-speaking-figure', 'ar-speaking-face']) {
+  for (const marker of ['winband', 'winring', '#F0B429', 'finaleMark', 'ar-pill', 'ar-player-badge', 'ar-cast-badge', 'ar-winring', 'ar-seat', 'ar-role', 'ar-side', 'ar-speaking-figure', 'ar-speaking-face']) {
     assert.ok(bundle.includes(marker), `client.js 缺少 ${marker}：改了 presentation.mjs / styles.mjs / client-source.mjs 之后必须执行 npm run arena:build`)
   }
 })
@@ -229,6 +229,28 @@ test('无进展倒计时在观战、离线回放与视频三处同源，且产�
      中文措辞由 presentation.test.mjs 直接断言，这里证明「改动真的进了产物」。 */
   for (const marker of ['noProgressSummary', 'noProgressClock', 'data-stalled', 'data-tone=warn', 'halfmoveClock']) {
     assert.ok(bundle.includes(marker), `client.js 缺少 ${marker}：改了 presentation.mjs / styles.mjs / client-source.mjs 之后必须执行 npm run arena:build`)
+  }
+})
+
+/* 象棋终局图层同样是「三处同源」：推导只在 presentation.xiangqiFinaleMark 一处，
+   观战页（client-source）与离线回放 / 视频（replay/data）各自调它，画面侧（markup / app）
+   只读投影结果按帧点亮。形状改在别处就会出现「观战有图层、回放没有」这类漂移 ——
+   源码改了不重建产物，软件里就是「改了但没生效」，所以按**产物**核对，不只读源码。 */
+test('象棋终局图层在观战、离线回放与视频三处同源，且产物已重建', async () => {
+  const source = await readFile(join(HERE, '..', 'client-source.mjs'), 'utf8')
+  const data = await readFile(join(HERE, '..', 'replay', 'data.mjs'), 'utf8')
+  const markup = await readFile(join(HERE, '..', 'replay', 'markup.mjs'), 'utf8')
+  const app = await readFile(join(HERE, '..', 'replay', 'app.js'), 'utf8')
+  const bundle = await readFile(join(HERE, '..', 'client.js'), 'utf8')
+  assert.match(source, /xiangqiFinaleMark\(/u, '观战页没有走 presentation.xiangqiFinaleMark')
+  assert.match(source, /match\.state\?\.result/u, '观战页没取规则层的裁决（state.result）')
+  assert.match(data, /xiangqiFinaleMark\(/u, '离线回放的数据投影没有走同一个 xiangqiFinaleMark')
+  assert.match(markup, /data\.finaleMark/u, '视频侧没有读 finaleMark')
+  assert.match(app, /D\.finaleMark/u, '离线播放器没有读 finaleMark')
+  /* 产物核对只认 ASCII 标记（esbuild 把非 ASCII 字面量转成 \uXXXX）；
+     中文胜法（吃将 / 将死 / 困毙）由 presentation.test.mjs 直接断言。 */
+  for (const marker of ['xiangqiFinaleMark', 'finaleMark']) {
+    assert.ok(bundle.includes(marker), `client.js 缺少 ${marker}：改了 presentation.mjs / client-source.mjs 之后必须执行 npm run arena:build`)
   }
 })
 

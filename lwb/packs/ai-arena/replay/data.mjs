@@ -5,7 +5,7 @@
  * 保证两边画面看到的是同一组手数、关键手、出局与终局文案。
  * 只在 Node 侧使用（imports xiangqi / werewolf 规则用于离线重放）。
  */
-import { movesOf, gameName, matchTitle, winningRun, assignPortraits, ROLE_MARK, ROLE_NAME, werewolfCastColumns, werewolfHostLine, noProgressSummary } from '../presentation.mjs'
+import { movesOf, gameName, matchTitle, winningRun, xiangqiFinaleMark, assignPortraits, ROLE_MARK, ROLE_NAME, werewolfCastColumns, werewolfHostLine, noProgressSummary } from '../presentation.mjs'
 import { xiangqi } from '../xiangqi.mjs'
 import { werewolfTimeline } from '../werewolf-projection.mjs'
 import { assignVoices, playerLogo } from '../voices.mjs'
@@ -184,6 +184,14 @@ export function replayData(match, audio = null) {
     result: result ? { kind: result.kind ?? '', winner: typeof result.winner === 'number' ? result.winner : null, side: wolf?.winnerSide || null, message: result.message ?? '' } : null,
     keys: keyMoves(match, wolf),
     winRun: winningRun(match),
+    /* 象棋的胜因图层：口径与观战页同一份（presentation.xiangqiFinaleMark）。
+       胜负与胜法取规则层自己的裁决（`state.result` + `result.winner`），不在这里重推规则；
+       画面侧只负责把「制胜一手 + 败方将帅」按帧点亮。 */
+    finaleMark: xiangqiFinaleMark({
+      reason: match.state?.result,
+      moves: moves.map(move => move.action),
+      winner: typeof result?.winner === 'number' ? result.winner : null,
+    }),
     /* 象棋的无进展计数整局只算一次（与观战页同一个推导，见 presentation.noProgressSummary），
        回放与视频逐帧只查 clocks[step] —— Remotion 每一帧都要重建 markup，不能每帧重放落子。
        只在 1.1.0 出现：1.0.0 还会被「三次重复」提前判和，倒计时会读成唯一结局。 */

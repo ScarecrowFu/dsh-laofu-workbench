@@ -1,0 +1,1164 @@
+{
+  "name": "xiangqi-stalemate-game",
+  "note": "定向搜索（固定种子 12）跑出的困毙局：红方第 105 手后黑方一个子都动不了、且并未被将军。1.1.0 规则下判「困毙获胜」，用于核对终局图层在「没吃子也没将军」的胜法下照样成立。",
+  "source": "greedy mobility search, seed 12",
+  "reason": "stalemate",
+  "winner": 0,
+  "moves": [
+    {
+      "player": 0,
+      "from": {
+        "row": 8,
+        "col": 2
+      },
+      "to": {
+        "row": 4,
+        "col": 2
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 2
+      },
+      "to": {
+        "row": 3,
+        "col": 4
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 4,
+        "col": 2
+      },
+      "to": {
+        "row": 4,
+        "col": 5
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 1,
+        "col": 5
+      },
+      "to": {
+        "row": 2,
+        "col": 5
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 8,
+        "col": 8
+      },
+      "to": {
+        "row": 4,
+        "col": 8
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 2,
+        "col": 5
+      },
+      "to": {
+        "row": 2,
+        "col": 6
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 4,
+        "col": 5
+      },
+      "to": {
+        "row": 4,
+        "col": 4
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 4
+      },
+      "to": {
+        "row": 3,
+        "col": 5
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 4,
+        "col": 4
+      },
+      "to": {
+        "row": 4,
+        "col": 5
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 8
+      },
+      "to": {
+        "row": 3,
+        "col": 6
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 4,
+        "col": 8
+      },
+      "to": {
+        "row": 2,
+        "col": 8
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 5
+      },
+      "to": {
+        "row": 7,
+        "col": 5
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 4,
+        "col": 5
+      },
+      "to": {
+        "row": 4,
+        "col": 6
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 6
+      },
+      "to": {
+        "row": 3,
+        "col": 8
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 4,
+        "col": 6
+      },
+      "to": {
+        "row": 3,
+        "col": 6
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 7,
+        "col": 5
+      },
+      "to": {
+        "row": 6,
+        "col": 5
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 7,
+        "col": 3
+      },
+      "to": {
+        "row": 6,
+        "col": 3
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 1,
+        "col": 3
+      },
+      "to": {
+        "row": 3,
+        "col": 1
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 7,
+        "col": 7
+      },
+      "to": {
+        "row": 6,
+        "col": 7
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 4,
+        "col": 1
+      },
+      "to": {
+        "row": 5,
+        "col": 1
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 3,
+        "col": 6
+      },
+      "to": {
+        "row": 3,
+        "col": 5
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 8
+      },
+      "to": {
+        "row": 4,
+        "col": 8
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 3,
+        "col": 5
+      },
+      "to": {
+        "row": 5,
+        "col": 5
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 1,
+        "col": 6
+      },
+      "to": {
+        "row": 2,
+        "col": 5
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 10,
+        "col": 5
+      },
+      "to": {
+        "row": 9,
+        "col": 5
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 4,
+        "col": 8
+      },
+      "to": {
+        "row": 9,
+        "col": 8
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 2,
+        "col": 8
+      },
+      "to": {
+        "row": 8,
+        "col": 8
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 9,
+        "col": 8
+      },
+      "to": {
+        "row": 9,
+        "col": 7
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 8,
+        "col": 8
+      },
+      "to": {
+        "row": 2,
+        "col": 8
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 1
+      },
+      "to": {
+        "row": 5,
+        "col": 3
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 10,
+        "col": 8
+      },
+      "to": {
+        "row": 8,
+        "col": 7
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 1,
+        "col": 1
+      },
+      "to": {
+        "row": 3,
+        "col": 1
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 5,
+        "col": 5
+      },
+      "to": {
+        "row": 3,
+        "col": 5
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 1
+      },
+      "to": {
+        "row": 4,
+        "col": 1
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 3,
+        "col": 5
+      },
+      "to": {
+        "row": 5,
+        "col": 5
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 4,
+        "col": 1
+      },
+      "to": {
+        "row": 3,
+        "col": 1
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 5,
+        "col": 5
+      },
+      "to": {
+        "row": 3,
+        "col": 5
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 5,
+        "col": 3
+      },
+      "to": {
+        "row": 3,
+        "col": 5
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 10,
+        "col": 9
+      },
+      "to": {
+        "row": 9,
+        "col": 9
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 5,
+        "col": 1
+      },
+      "to": {
+        "row": 6,
+        "col": 1
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 9,
+        "col": 9
+      },
+      "to": {
+        "row": 9,
+        "col": 7
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 1
+      },
+      "to": {
+        "row": 1,
+        "col": 1
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 9,
+        "col": 7
+      },
+      "to": {
+        "row": 9,
+        "col": 6
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 6,
+        "col": 5
+      },
+      "to": {
+        "row": 6,
+        "col": 6
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 9,
+        "col": 6
+      },
+      "to": {
+        "row": 6,
+        "col": 6
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 2,
+        "col": 5
+      },
+      "to": {
+        "row": 3,
+        "col": 6
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 6,
+        "col": 6
+      },
+      "to": {
+        "row": 3,
+        "col": 6
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 2,
+        "col": 6
+      },
+      "to": {
+        "row": 3,
+        "col": 6
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 7,
+        "col": 1
+      },
+      "to": {
+        "row": 6,
+        "col": 1
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 1,
+        "col": 4
+      },
+      "to": {
+        "row": 2,
+        "col": 5
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 6,
+        "col": 1
+      },
+      "to": {
+        "row": 5,
+        "col": 1
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 2,
+        "col": 5
+      },
+      "to": {
+        "row": 1,
+        "col": 4
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 5,
+        "col": 1
+      },
+      "to": {
+        "row": 4,
+        "col": 1
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 5
+      },
+      "to": {
+        "row": 5,
+        "col": 7
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 4,
+        "col": 1
+      },
+      "to": {
+        "row": 3,
+        "col": 1
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 5,
+        "col": 7
+      },
+      "to": {
+        "row": 3,
+        "col": 9
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 2,
+        "col": 8
+      },
+      "to": {
+        "row": 2,
+        "col": 2
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 1,
+        "col": 1
+      },
+      "to": {
+        "row": 3,
+        "col": 1
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 10,
+        "col": 1
+      },
+      "to": {
+        "row": 3,
+        "col": 1
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 1,
+        "col": 7
+      },
+      "to": {
+        "row": 3,
+        "col": 5
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 3,
+        "col": 1
+      },
+      "to": {
+        "row": 3,
+        "col": 5
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 6
+      },
+      "to": {
+        "row": 2,
+        "col": 6
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 3,
+        "col": 5
+      },
+      "to": {
+        "row": 3,
+        "col": 6
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 2,
+        "col": 6
+      },
+      "to": {
+        "row": 3,
+        "col": 6
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 10,
+        "col": 2
+      },
+      "to": {
+        "row": 8,
+        "col": 1
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 4,
+        "col": 3
+      },
+      "to": {
+        "row": 5,
+        "col": 3
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 6,
+        "col": 3
+      },
+      "to": {
+        "row": 5,
+        "col": 3
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 4,
+        "col": 9
+      },
+      "to": {
+        "row": 5,
+        "col": 9
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 8,
+        "col": 1
+      },
+      "to": {
+        "row": 6,
+        "col": 2
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 5,
+        "col": 9
+      },
+      "to": {
+        "row": 6,
+        "col": 9
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 7,
+        "col": 9
+      },
+      "to": {
+        "row": 6,
+        "col": 9
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 9
+      },
+      "to": {
+        "row": 1,
+        "col": 7
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 2,
+        "col": 2
+      },
+      "to": {
+        "row": 2,
+        "col": 9
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 1,
+        "col": 7
+      },
+      "to": {
+        "row": 3,
+        "col": 9
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 2,
+        "col": 9
+      },
+      "to": {
+        "row": 2,
+        "col": 8
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 1,
+        "col": 9
+      },
+      "to": {
+        "row": 2,
+        "col": 9
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 6,
+        "col": 2
+      },
+      "to": {
+        "row": 4,
+        "col": 1
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 1,
+        "col": 8
+      },
+      "to": {
+        "row": 2,
+        "col": 6
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 4,
+        "col": 1
+      },
+      "to": {
+        "row": 2,
+        "col": 2
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 9
+      },
+      "to": {
+        "row": 5,
+        "col": 7
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 2,
+        "col": 8
+      },
+      "to": {
+        "row": 2,
+        "col": 7
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 2,
+        "col": 9
+      },
+      "to": {
+        "row": 3,
+        "col": 9
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 6,
+        "col": 9
+      },
+      "to": {
+        "row": 5,
+        "col": 9
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 5,
+        "col": 7
+      },
+      "to": {
+        "row": 3,
+        "col": 5
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 5,
+        "col": 9
+      },
+      "to": {
+        "row": 4,
+        "col": 9
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 4,
+        "col": 7
+      },
+      "to": {
+        "row": 5,
+        "col": 7
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 4,
+        "col": 9
+      },
+      "to": {
+        "row": 3,
+        "col": 9
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 5
+      },
+      "to": {
+        "row": 5,
+        "col": 3
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 6,
+        "col": 7
+      },
+      "to": {
+        "row": 5,
+        "col": 7
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 5,
+        "col": 3
+      },
+      "to": {
+        "row": 3,
+        "col": 5
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 10,
+        "col": 3
+      },
+      "to": {
+        "row": 8,
+        "col": 1
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 1,
+        "col": 4
+      },
+      "to": {
+        "row": 2,
+        "col": 5
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 2,
+        "col": 7
+      },
+      "to": {
+        "row": 2,
+        "col": 5
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 5
+      },
+      "to": {
+        "row": 1,
+        "col": 3
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 8,
+        "col": 1
+      },
+      "to": {
+        "row": 6,
+        "col": 3
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 2,
+        "col": 6
+      },
+      "to": {
+        "row": 3,
+        "col": 8
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 3,
+        "col": 9
+      },
+      "to": {
+        "row": 3,
+        "col": 8
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 6
+      },
+      "to": {
+        "row": 2,
+        "col": 6
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 2,
+        "col": 5
+      },
+      "to": {
+        "row": 2,
+        "col": 4
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 2,
+        "col": 6
+      },
+      "to": {
+        "row": 3,
+        "col": 6
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 6,
+        "col": 3
+      },
+      "to": {
+        "row": 8,
+        "col": 1
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 3,
+        "col": 6
+      },
+      "to": {
+        "row": 2,
+        "col": 6
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 3,
+        "col": 8
+      },
+      "to": {
+        "row": 3,
+        "col": 7
+      }
+    },
+    {
+      "player": 1,
+      "from": {
+        "row": 2,
+        "col": 6
+      },
+      "to": {
+        "row": 1,
+        "col": 6
+      }
+    },
+    {
+      "player": 0,
+      "from": {
+        "row": 3,
+        "col": 7
+      },
+      "to": {
+        "row": 2,
+        "col": 7
+      }
+    }
+  ]
+}

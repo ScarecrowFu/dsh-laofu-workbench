@@ -401,6 +401,46 @@
     })
   }
 
+  /* 象棋终局：制胜一手的金线铺底 + 起点 / 落点 / 败方将帅三环。
+     形状来自 D.finaleMark（presentation.xiangqiFinaleMark 的唯一口径），
+     这里只负责画进 DOM —— 坐标常量与 xiangqiBoardSvg 一致：margin=38 / gap=54。 */
+  function xqFinale(svgEl) {
+    const mark = D.finaleMark
+    if (!mark) return
+    const margin = 38, gap = 54
+    const pt = c => ({ x: margin + (c.col - 1) * gap, y: margin + (c.row - 1) * gap })
+    if (mark.straight) {
+      const a = pt(mark.from), b = pt(mark.to)
+      const line = document.createElementNS(SVGNS, 'line')
+      line.setAttribute('x1', a.x); line.setAttribute('y1', a.y)
+      line.setAttribute('x2', b.x); line.setAttribute('y2', b.y)
+      line.setAttribute('stroke', '#F0B429')
+      line.setAttribute('stroke-width', '14')
+      line.setAttribute('stroke-linecap', 'round')
+      line.setAttribute('opacity', '.55')
+      line.setAttribute('class', 'winband')
+      const firstPiece = svgEl.querySelector('g')
+      if (firstPiece) svgEl.insertBefore(line, firstPiece); else svgEl.appendChild(line)
+    }
+    const rings = [
+      { point: mark.from, stroke: '#F0B429' },
+      { point: mark.to, stroke: '#F0B429' },
+      ...(mark.loserGeneral ? [{ point: mark.loserGeneral, stroke: '#E24B4A' }] : []),
+    ]
+    rings.forEach((ring, i) => {
+      const p = pt(ring.point)
+      const circle = document.createElementNS(SVGNS, 'circle')
+      circle.setAttribute('cx', p.x); circle.setAttribute('cy', p.y)
+      circle.setAttribute('r', '27')
+      circle.setAttribute('fill', 'none')
+      circle.setAttribute('stroke', ring.stroke)
+      circle.setAttribute('stroke-width', '2.4')
+      circle.setAttribute('class', 'winring')
+      circle.style.animationDelay = `${120 + i * 80}ms`
+      svgEl.appendChild(circle)
+    })
+  }
+
   /* 棋子索引：以「圆心坐标」为键。识别被吃子不需要复刻规则——
      同一格在新局面里换了字，原来那颗就是被吃的。 */
   function pieceMap(svgEl) {
@@ -521,7 +561,7 @@
     const built = boardMarkup(index)
     board.innerHTML = built.svg
     const svgEl = board.querySelector('svg')
-    if (isFinale && D.winRun) winBand(svgEl)
+    if (isFinale) { winBand(svgEl); xqFinale(svgEl) }
     const nextPieces = pieceMap(svgEl)
     if (animate && last) {
       const moved = findMovedPiece(prevPieces, nextPieces)

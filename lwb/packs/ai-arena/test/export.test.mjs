@@ -31,7 +31,9 @@ test('replay shares game state and safely encodes model text offline', () => {
   assert.equal(embedded.players[0].name, '<b>Black</b>')
   /* 没有 game.id 的历史记录按 gomoku 命名，且投影只保留画面需要的字段 */
   assert.deepEqual(embedded.game, { id: '', name: '五子棋', version: '1' })
-  assert.deepEqual(Object.keys(embedded).sort(), ['game', 'id', 'keys', 'moves', 'players', 'result', 'title', 'winRun'])
+  assert.deepEqual(Object.keys(embedded).sort(), ['finaleMark', 'game', 'id', 'keys', 'moves', 'players', 'result', 'title', 'winRun'])
+  /* 五子棋 / 未知游戏拿不到象棋的终局标记（`finaleMark` 与 `winRun` 并列，永远在、但可以为 null） */
+  assert.equal(embedded.finaleMark, null)
   assert.equal(embedded.moves[0].audio, undefined)
   assert.match(embedded.players[0].logo, /^data:image\/png;base64,/u)
   assert.equal(embedded.players[0].voice, 'generic-1')
