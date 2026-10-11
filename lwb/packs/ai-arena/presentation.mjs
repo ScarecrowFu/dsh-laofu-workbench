@@ -152,6 +152,25 @@ export function seatIdentity(match, index) {
   if (!role) return null
   return { seat: index + 1, role, mark: ROLE_MARK[role] || '', roleName: ROLE_NAME[role] || '' }
 }
+/* 棋类徽记上的一个字与配色档：徽记做成棋子（圆），配色与记分条的 .black / .white /
+   .xq-red / .xq-black 同一套，所以「这个模型是黑方」和盘上的颜色对得上。
+   只有两个字的位置，因此直接按座位下标取——棋类固定 2 席。 */
+const SIDE_MARK = Object.freeze({ gomoku: Object.freeze(['黑', '白']), xiangqi: Object.freeze(['红', '黑']) })
+const SIDE_TONE = Object.freeze({ gomoku: Object.freeze(['black', 'white']), xiangqi: Object.freeze(['red', 'black']) })
+/**
+ * 棋类的观众侧归属：**哪一方**。与狼人杀的席位身份（`seatIdentity`）并列，各答一问：
+ * 狼人杀答「几号、什么身份」，棋类答「盘上的哪一方」。
+ *
+ * 方名仍由 `playerSide` 一处出（`黑方 / 白方 / 红方 / 黑方`），这里只补徽记与配色档，
+ * 避免「红/黑/白」在画面层再写第二套映射。刻意**不产出** `ROLE_MARK` / `ROLE_NAME`：
+ * 那是狼人杀专属词汇，棋类借用会被读成「棋类也有阵营」（`test/replay.test.mjs` 守住）。
+ * 棋类之外一律返回 null，调用处据此完全不渲染。
+ */
+export function sideIdentity(game, index) {
+  const marks = SIDE_MARK[game?.id]
+  if (!marks || !Number.isInteger(index) || index < 0 || index >= marks.length) return null
+  return { side: playerSide(game, index), mark: marks[index], tone: SIDE_TONE[game.id][index] }
+}
 /**
  * 席位舞台的几何契约：人数 → `{ seats, columns, rows }`。
  *
@@ -480,6 +499,77 @@ export function xiangqiPosition(moves = []) {
     board[to.row][to.col] = code
   }
   return board
+}
+/* ---------------------------------------------------------------- 象棋无进展
+   观战、离线回放、MP4 与战报共用这一份推导：从落子序列还原「连续多少半回合既没有吃子、
+   也没有兵卒向前推进」，以及距离判和的剩余手数 —— 这正是选手每手拿到的 noProgressPlies，
+   所以观众看到的进度与选手据以决策的量同源。
+
+   只在 1.1.0 展示。1.0.0 还有「三次重复判和」，那条规则可能更早结束比赛，列出
+   「距判和还有 N 手」会被读成「只会这样结束」；计数器口径本身也可能随规则改版而变，
+   所以这里按**精确版本**放开，`test/presentation.test.mjs` 守住它跟着规则版本一起走。 */
+export const XIANGQI_NO_PROGRESS_RULE_VERSION = '1.1.0'
+/** 无进展上限（半回合）。与 xiangqi.mjs 的 NO_PROGRESS_LIMIT 同值，由测试守住。 */
+export const XIANGQI_NO_PROGRESS_LIMIT = 120
+/** 走到一半仍无进展：画面不再把它称作「正常进行」。 */
+export const XIANGQI_NO_PROGRESS_STALL = XIANGQI_NO_PROGRESS_LIMIT / 2
+/** 这场比赛是否由「无进展」单独收口停滞（1.1.0 起重复不再判和）。 */
+export const hasNoProgressRule = game => game?.id === 'xiangqi' && game.version === XIANGQI_NO_PROGRESS_RULE_VERSION
+/**
+ * 逐手无进展计数：吃子或兵卒向前推进归零，其余 +1（过河兵横走可逆，故意不归零）。
+ * @returns {{ plies: number, limit: number, noProgressPlies: number, remaining: number,
+ *   stalled: boolean, clocks: number[] }} `clocks[step]` 是第 step 手之后的计数（`clocks[0] = 0`），
+ *   观战往回拖进度条、离线回放与视频逐帧查的都是这一格。数组而非 Map：它要原样进回放产物。
+ */
+export function xiangqiNoProgress(moves = []) {
+  const board = XIANGQI_INITIAL.map(row => [...row])
+  const clocks = [0]
+  let clock = 0
+  for (const move of moves) {
+    const from = coordinate(move?.from), to = coordinate(move?.to)
+    const code = from ? board[from.row][from.col] : null
+    /* 落子解释不了时保留原计数，不假装有进展，也不把计数清零。 */
+    if (!from || !to || !code) { clocks.push(clock); continue }
+    const captured = board[to.row][to.col]
+    board[from.row][from.col] = null
+    board[to.row][to.col] = code
+    const advanced = (code === 'p' || code === 'P') && from.row !== to.row
+    clock = captured || advanced ? 0 : clock + 1
+    clocks.push(clock)
+  }
+  return {
+    plies: moves.length, limit: XIANGQI_NO_PROGRESS_LIMIT, noProgressPlies: clock,
+    remaining: Math.max(0, XIANGQI_NO_PROGRESS_LIMIT - clock),
+    stalled: clock >= XIANGQI_NO_PROGRESS_STALL, clocks,
+  }
+}
+/** 第 step 手（0 = 开局）之后的计数；越过最后一手（终局那一帧）取最后一手的值。 */
+export const noProgressAt = (progress, step) => {
+  const clocks = progress?.clocks
+  if (!Array.isArray(clocks) || !clocks.length || !(step > 0)) return 0
+  return clocks[Math.min(step, clocks.length - 1)] ?? 0
+}
+/**
+ * 计数器 → 画面文案。`text` 是倒计时，`detail` 是「无进展 x/上限」。
+ * 不适用的比赛返回 null —— 观战、离线回放/视频、战报读同一条，措辞不会各自漂移。
+ * 名单页只有计数器（没有落子序列），所以这一层单独开放，不逼调用方造一份 moves。
+ */
+export function noProgressClock(game, clock = 0) {
+  if (!hasNoProgressRule(game)) return null
+  const value = Number.isInteger(clock) && clock > 0 ? clock : 0
+  const remaining = Math.max(0, XIANGQI_NO_PROGRESS_LIMIT - value)
+  const stalled = value >= XIANGQI_NO_PROGRESS_STALL
+  return {
+    limit: XIANGQI_NO_PROGRESS_LIMIT, noProgressPlies: value, remaining, stalled,
+    text: stalled ? `停滞待判和 · 还有 ${remaining} 手` : `距判和还有 ${remaining} 手`,
+    detail: `无进展 ${value}/${XIANGQI_NO_PROGRESS_LIMIT} 半回合`,
+  }
+}
+/** 落子序列 → 逐手计数 + 文案。`clocks` 供观战往回拖、回放与视频逐帧使用。 */
+export function noProgressSummary(game, moves = []) {
+  if (!hasNoProgressRule(game)) return null
+  const progress = xiangqiNoProgress(moves)
+  return { ...noProgressClock(game, progress.noProgressPlies), clocks: progress.clocks, plies: progress.plies }
 }
 export function xiangqiBoardSvg(moves = [], { opacity = 1 } = {}) {
   const margin = 38, gap = 54, width = margin * 2 + gap * 8, height = margin * 2 + gap * 9

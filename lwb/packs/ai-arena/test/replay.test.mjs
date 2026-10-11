@@ -206,6 +206,40 @@ test('象棋画面显示红黑身份、楚河汉界与起止坐标', () => {
   }
 })
 
+/* ---------------------------------------------------------------- 象棋无进展倒计时
+   观战页有这一格，离线回放与 MP4 也必须跟着有：三者读 replayData 的同一份 clocks
+   （整局只算一次），逐帧只查表。终局帧不出 —— 那一格由胜负卡说「为什么结束」。 */
+test('象棋无进展倒计时跟着本手走，终局帧与 1.0.0 都不出', () => {
+  const chess = {
+    ...gomoku, id: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    game: { id: 'xiangqi', name: '中国象棋', description: '规则', version: '1.1.0' },
+    players: [{ name: '红方模型', provider: 'test', model: 'red' }, { name: '黑方模型', provider: 'test', model: 'black' }],
+    events: [[0, 8, 2, 8, 5], [1, 1, 2, 3, 3], [0, 8, 5, 4, 5]].map(([player, fromRow, fromCol, toRow, toCol], i) => ({
+      type: 'move', moveNumber: i + 1, player,
+      action: { from: { row: fromRow, col: fromCol }, to: { row: toRow, col: toCol } }, speech: `第 ${i + 1} 手`,
+    })),
+    result: { kind: 'draw', winner: null, message: '和棋。' },
+  }
+  const data = replayData(chess)
+  assert.deepEqual(data.noProgress.clocks, [0, 1, 2, 0], '炮（1）→ 马（2）→ 炮吃卒（归零）')
+  const countdown = index => (stageHtml(data, index, { layout: 'landscape', t: 1 }).match(/距判和还有 (\d+) 手/u) || [])[1] ?? ''
+  assert.equal(countdown(0), '120', '开局满值')
+  assert.equal(countdown(1), '119')
+  assert.equal(countdown(2), '118')
+  assert.equal(countdown(3), '120', '吃子之后计数归零')
+  assert.equal(countdown(4), '', '终局帧不出：那一格整块让给胜负卡')
+  assert.match(stageHtml(data, 3, { layout: 'landscape', t: 1 }), /title="无进展 0\/120 半回合"/u, '完整计数进 title')
+  /* 倒计时排在关键手胶囊之前，所以「吃 / 将军 / 胜局」仍贴在数字那一侧的主位。 */
+  const hero = stageHtml(data, 3, { layout: 'landscape', t: 1 }).match(/<div class="heroTag">(.*?)<\/div>/u)[1]
+  assert.match(hero, /距判和还有 120 手.*class="pill cap">吃兵</u)
+  /* 竖屏也要有：它是判断「这盘还会不会继续」的唯一依据，不能只在横屏出现。 */
+  assert.equal((stageHtml(data, 1, { layout: 'portrait', t: 1 }).match(/距判和还有 (\d+) 手/u) || [])[1], '119')
+  /* 1.0.0 还有「三次重复判和」，列出倒计时会被读成「只会这样结束」 */
+  const legacy = replayData({ ...chess, game: { ...chess.game, version: '1.0.0' } })
+  assert.equal(legacy.noProgress, undefined)
+  assert.equal(/距判和还有/u.test(stageHtml(legacy, 1, { layout: 'landscape', t: 1 })), false)
+})
+
 test('音色按模型匹配，未收录的两名选手各用一条通用音色', () => {
   assert.equal(matchVoiceKey({ model: 'qwen3.8-max', provider: 'lwb' }), 'qwen')
   assert.equal(matchVoiceKey({ model: 'glm-5.3', provider: 'custom', name: '选手' }), 'zhipu')
@@ -263,8 +297,18 @@ test('每一手都有一张写明执行模型的执行者卡', () => {
   }
   /* 署名跟着画面最大的那句字幕走，不再是一行 12px 的元数据 */
   assert.match(stageHtml(data, 5, { layout: 'landscape', t: 0.5 }), new RegExp(`<b class="sn">${data.players[data.moves[4].p].name}</b><em class="stag">本手发言</em>`, 'u'))
-  /* 席号与身份是狼人杀专有的：棋类的署名与回合记录一个身份元素都不该有 */
-  assert.doesNotMatch(stageHtml(data, 5, { layout: 'landscape', t: 0.5 }), /class="sseat"|class="srole"/u)
+  /* 棋类的归属是「哪一方」：与狼人杀的席号同一个位置（模型名**之前**），棋子徽记 + 中文方名。
+     但**不能**借用狼人杀的角色词汇（sseat / srole），否则会被读成「棋类也有阵营」。 */
+  const chess = stageHtml(data, 5, { layout: 'landscape', t: 0.5 })
+  const black = playerSide(data.game, 0)
+  assert.doesNotMatch(chess, /class="sseat"|class="srole"/u, '棋类不能借用狼人杀的角色词汇')
+  assert.match(chess, new RegExp(`<img class="logo"[^>]*><em class="sside" data-side="black"><i>黑</i>${black}</em><b class="sn">${data.players[0].name}</b><em class="stag">本手发言</em>`, 'u'), '署名里的方标签要贴在模型名之前')
+  /* 回合记录逐行同样带方：停在第 5 手时，最近一条记录是第 4 手（白方） */
+  const white = playerSide(data.game, 1)
+  assert.match(chess, new RegExp(`<div class="rentry"><b>4 · <em class="sside" data-side="white"><i>白</i>${white}</em>${data.players[1].name}</b>`, 'u'), '回合记录逐行缺方标签')
+  /* 越界座位不猜方：第 0 手（开局）没有本手，署名只留「开局」 */
+  assert.match(stageHtml(data, 0, { layout: 'landscape', t: 0.5 }), /<b class="sn">开局<\/b>/u)
+  assert.doesNotMatch(stageHtml(data, 0, { layout: 'landscape', t: 0.5 }), /class="sside"/u, '开局没有本手就没有方标签')
 })
 
 test('换手节拍：执行者卡先到、落子随后、台词最后', async () => {
@@ -301,4 +345,7 @@ test('执行者卡与字幕署名的字号守住手机可读下限', async () =>
   /* 身份标签是同排的次级信息：不能小于「本手发言」胶囊与动作标签，否则加了等于没加 */
   assert.ok(px(/\n\.sseat\{[^}]*font-size:(\d+)px/u) >= 14, '署名里的席号不小于 14px')
   assert.ok(px(/\n\.srole\{[^}]*font-size:(\d+)px/u) >= 14, '署名里的身份标签不小于 14px')
+  assert.ok(px(/\n\.sside\{[^}]*font-size:(\d+)px/u) >= 14, '署名里的方标签不小于 14px')
+  /* 回合记录是 11px 的次级信息：方标签要跟着缩小，否则每条记录会被撑成两行 */
+  assert.ok(px(/\n\.rentry b \.sside\{[^}]*font-size:(\d+)px/u) <= 12, '记录行里的方标签要压到次级字号')
 })

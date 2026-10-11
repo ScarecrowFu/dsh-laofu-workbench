@@ -176,3 +176,34 @@ test('执行者卡的形象只在本手有发言时出现，且卡片高度与�
     assert.ok(declared < used, `${fn} 里本手晚于使用处声明：会被外层播放器的同名时间戳 last 顶替`)
   }
 })
+
+/**
+ * 棋类加上「哪一方」之后，署名与回合记录都必须**仍然是一行**。
+ *
+ * 署名一行现在是「logo + 方标签 + 模型名 + 本手发言 + 坐标」：方标签 flex:none，
+ * 模型名自己截断（`.sn` 已经是 nowrap + ellipsis），所以多一个元素不会把署名折成两行；
+ * 方名也不能被压掉（它就是「这个模型是盘上哪一方」的答案）。
+ * 回合记录是 11px 的次级信息，方标签不跟着缩小就会把每条记录撑成两行 —— 那是 2026-10-09
+ * 才修过的重叠缺陷的同一类事故。徽记做成棋子（圆）并与记分条的棋子配色同源。
+ */
+test('棋类的「哪一方」不占高度、不折行：署名同排一组，记录行压到次级字号', () => {
+  const sside = rule('.sside')
+  assert.match(sside, /display:inline-flex/u)
+  assert.match(sside, /flex:none/u, '方标签必须 flex:none：模型名可以先省略，方名不能被压掉')
+  assert.equal(px(sside, /font-size:(\d+)px/u, '署名里的方标签字号'), 15)
+  /* 徽记与棋盘上的子同形同色：圆 + 描边（白子白底，没描边就看不见了）。 */
+  const chip = rule('.sside i')
+  assert.match(chip, /border-radius:50%/u, '徽记要做成棋子（圆），与棋盘上的子同形')
+  assert.match(chip, /border:1px solid/u, '白子白底，描边不能省')
+  for (const tone of ['white', 'red']) {
+    assert.match(CSS, new RegExp(`\\.sside\\[data-side=${tone}\\] i\\{`, 'u'), `缺少 data-side=${tone} 的棋子配色`)
+  }
+  /* 记录行：方标签压到与 .sseat / .srole 同一档（11px / 14px 徽记）。 */
+  assert.equal(px(rule('.rentry b .sside'), /font-size:(\d+)px/u, '记录里的方标签字号'), 11)
+  assert.equal(px(rule('.rentry b .sside i'), /width:(\d+)px/u, '记录里的徽记尺寸'), 14)
+  /* 方标签与模型名在最外层署名行里是同一排：`.shead span` 是 flex，两者都是它的子项。 */
+  assert.match(rule('.shead span'), /display:flex/u)
+  assert.match(rule('.shead span'), /min-width:0/u, '署名那一排必须允许模型名收缩（min-width:0）')
+  assert.match(rule('.sn'), /text-overflow:ellipsis/u, '模型名先截断，方标签不能被压掉')
+  assert.match(rule('.sn'), /white-space:nowrap/u, '模型名折行会把回合记录挤出画面')
+})

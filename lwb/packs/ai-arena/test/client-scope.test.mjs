@@ -196,13 +196,78 @@ test('客户端源码与产物里都没有未声明的标识符', async () => {
   }
 })
 
-/* 终局图层（五连金带 / 点亮环 / 终局胶囊 / 胜和徽标）与席位身份（席号 + 徽记 + 中文名）
-   只活在呈现层：源码改了不重建产物，软件里就是「改了但没生效」。
+/* 终局图层（五连金带 / 点亮环 / 终局胶囊 / 胜和徽标）与席位归属（席号 + 徽记 + 中文名，
+   棋类是「哪一方」+ 棋子徽记）只活在呈现层：源码改了不重建产物，软件里就是「改了但没生效」。
    这里按产物里的字面量核对，不依赖未被压缩的标识符。 */
 test('客户端产物带上终局图层与席位身份，源码与样式改动必须重新 arena:build', async () => {
   const bundle = await readFile(join(HERE, '..', 'client.js'), 'utf8')
-  for (const marker of ['winband', 'winring', '#F0B429', 'ar-pill', 'ar-player-badge', 'ar-cast-badge', 'ar-winring', 'ar-seat', 'ar-role', 'ar-speaking-figure', 'ar-speaking-face']) {
+  for (const marker of ['winband', 'winring', '#F0B429', 'ar-pill', 'ar-player-badge', 'ar-cast-badge', 'ar-winring', 'ar-seat', 'ar-role', 'ar-side', 'ar-speaking-figure', 'ar-speaking-face']) {
     assert.ok(bundle.includes(marker), `client.js 缺少 ${marker}：改了 presentation.mjs / styles.mjs / client-source.mjs 之后必须执行 npm run arena:build`)
+  }
+})
+
+/* 无进展倒计时是观战 / 离线回放 / MP4 / 战报的同一份投影：措辞只出自
+   presentation.noProgressClock，离线播放器经 ArenaScene 取，视频侧走 replay/markup.mjs。
+   源码改了不重建产物，软件里就是「改了但没生效」，所以按**产物**核对，不只读源码。 */
+test('无进展倒计时在观战、离线回放与视频三处同源，且产物已重建', async () => {
+  const source = await readFile(join(HERE, '..', 'client-source.mjs'), 'utf8')
+  const markup = await readFile(join(HERE, '..', 'replay', 'markup.mjs'), 'utf8')
+  const app = await readFile(join(HERE, '..', 'replay', 'app.js'), 'utf8')
+  const bundle = await readFile(join(HERE, '..', 'client.js'), 'utf8')
+  const runtime = await readFile(join(HERE, '..', 'replay', 'runtime.js'), 'utf8')
+  /* 观战页从落子序列推（与选手拿到的 noProgressPlies 同源），回放与视频读同一份 clocks 表。 */
+  assert.match(source, /noProgressSummary\(match\.game/u, '观战页没有走 presentation.noProgressSummary')
+  assert.match(source, /progress\?\.text/u, '观战页没有渲染倒计时文案')
+  assert.match(markup, /noProgressClock\(data\.game/u, '视频侧没有走 presentation.noProgressClock')
+  assert.match(app, /S\.noProgressClock\(D\.game/u, '离线播放器没有走同一个 noProgressClock')
+  /* 离线播放器取的是 ArenaScene.noProgressClock：漏暴露就是运行时的
+     「S.noProgressClock is not a function」，而离线回放要点开才炸。 */
+  const exposed = runtime.match(/globalThis\.ArenaScene=\{([^}]*)\}/u)
+  assert.ok(exposed, 'runtime.js 里找不到 ArenaScene 的导出')
+  assert.ok(exposed[1].includes('noProgressClock'), 'runtime.js 的 ArenaScene 缺少 noProgressClock')
+  /* 产物核对只认 ASCII 标记（esbuild 把非 ASCII 字面量转成 \uXXXX），
+     中文措辞由 presentation.test.mjs 直接断言，这里证明「改动真的进了产物」。 */
+  for (const marker of ['noProgressSummary', 'noProgressClock', 'data-stalled', 'data-tone=warn', 'halfmoveClock']) {
+    assert.ok(bundle.includes(marker), `client.js 缺少 ${marker}：改了 presentation.mjs / styles.mjs / client-source.mjs 之后必须执行 npm run arena:build`)
+  }
+})
+
+/* 棋类的「哪一方」与狼人杀的「席号 + 身份」是并列的两套归属元素：位置同源（模型名之前）、
+   文案同源（presentation.sideIdentity 内部走 playerSide）、且棋类不复用狼人杀的角色词汇。
+   观战页与导出侧是各写一套渲染，这条守住「同源」。 */
+test('观战页的方标签与导出侧同源，且不借用狼人杀的角色词汇', async () => {
+  const { CSS } = await import('../styles.mjs')
+  const source = await readFile(join(HERE, '..', 'client-source.mjs'), 'utf8')
+  const markup = await readFile(join(HERE, '..', 'replay', 'markup.mjs'), 'utf8')
+  const app = await readFile(join(HERE, '..', 'replay', 'app.js'), 'utf8')
+  /* 三处都从一个函数取方，并且都渲染成 .sside / .ar-side（同一个类名才有同一套样式）。 */
+  assert.match(source, /sideIdentity\(game, index\)/u, '观战页没有走 presentation.sideIdentity')
+  assert.match(markup, /sideIdentity\(game, index\)/u, '视频侧没有走 presentation.sideIdentity')
+  assert.match(app, /S\.sideIdentity\(D\.game, i\)/u, '离线播放器没有走同一个 sideIdentity')
+  for (const [name, text] of [['markup.mjs', markup], ['app.js', app]]) {
+    assert.match(text, /class="sside" data-side="\$\{[a-z]+\.tone\}"/u, `${name} 的方标签类名与视频侧不一致`)
+  }
+  /* 离线播放器取的是 ArenaScene.sideIdentity：漏暴露就是运行时的「S.sideIdentity is not a function」，
+     而离线回放要点开才炸 —— 所以按**产物**核对，不只读源码。 */
+  const runtime = await readFile(join(HERE, '..', 'replay', 'runtime.js'), 'utf8')
+  const exposed = runtime.match(/globalThis\.ArenaScene=\{([^}]*)\}/u)
+  assert.ok(exposed, 'runtime.js 里找不到 ArenaScene 的导出')
+  assert.ok(exposed[1].includes('sideIdentity'), 'runtime.js 的 ArenaScene 缺少 sideIdentity')
+  /* 棋类不能借用 .ar-role / .srole：那是狼人杀的阵营词汇，借用会被读成「棋类也有阵营」。 */
+  const side = source.match(/function SideTag\(\{ game, index \}\)[\s\S]*?\n\}/u)?.[0] || ''
+  assert.match(side, /className: 'ar-side'/u, '观战页的方标签必须用 .ar-side')
+  assert.doesNotMatch(side, /ar-role/u, '方标签不能复用狼人杀的角色类名')
+  /* 方名走同一个 playerSide 口径（徽记只补一个字），不另写一套映射。 */
+  const { sideIdentity } = await import('../presentation.mjs')
+  assert.equal(sideIdentity({ id: 'xiangqi' }, 1).side, '黑方')
+  assert.equal(sideIdentity({ id: 'gomoku' }, 1).side, '白方')
+  /* 方标签 flex:none：模型名可以先被省略，归属不能被压掉（与 .ar-role 同一条规矩）；
+     三个配色档都要有，否则白子会画成黑子。 */
+  const base = CSS.match(/(?:^|\n)\.ar-side\{([^}]*)\}/u)
+  assert.ok(base, 'styles.mjs 缺少 .ar-side')
+  assert.match(base[1], /flex:none/u, '.ar-side 必须 flex:none：模型名可以先省略，方名不能被压掉')
+  for (const tone of ['black', 'white', 'red']) {
+    assert.match(CSS, new RegExp(`\\.ar-side\\[data-side=${tone}\\]\\{[^}]*--ar-side-fill`, 'u'), `styles.mjs 缺少 .ar-side[data-side=${tone}] 的配色档`)
   }
 })
 

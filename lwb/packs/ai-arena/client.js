@@ -382,6 +382,13 @@ function seatIdentity(match, index) {
   if (!role) return null;
   return { seat: index + 1, role, mark: ROLE_MARK[role] || "", roleName: ROLE_NAME[role] || "" };
 }
+var SIDE_MARK = Object.freeze({ gomoku: Object.freeze(["\u9ED1", "\u767D"]), xiangqi: Object.freeze(["\u7EA2", "\u9ED1"]) });
+var SIDE_TONE = Object.freeze({ gomoku: Object.freeze(["black", "white"]), xiangqi: Object.freeze(["red", "black"]) });
+function sideIdentity(game, index) {
+  const marks = SIDE_MARK[game?.id];
+  if (!marks || !Number.isInteger(index) || index < 0 || index >= marks.length) return null;
+  return { side: playerSide(game, index), mark: marks[index], tone: SIDE_TONE[game.id][index] };
+}
 function werewolfCastLayout(count = 6, layout = "landscape") {
   const seats = Number.isFinite(count) ? Math.max(1, Math.floor(count)) : 6;
   const columns = layout === "portrait" ? seats <= 6 ? 3 : seats <= 8 ? 4 : 3 : seats <= 6 ? seats : seats <= 8 ? 4 : 5;
@@ -646,6 +653,56 @@ function xiangqiPosition(moves = []) {
     board[to.row][to.col] = code;
   }
   return board;
+}
+var XIANGQI_NO_PROGRESS_RULE_VERSION = "1.1.0";
+var XIANGQI_NO_PROGRESS_LIMIT = 120;
+var XIANGQI_NO_PROGRESS_STALL = XIANGQI_NO_PROGRESS_LIMIT / 2;
+var hasNoProgressRule = (game) => game?.id === "xiangqi" && game.version === XIANGQI_NO_PROGRESS_RULE_VERSION;
+function xiangqiNoProgress(moves = []) {
+  const board = XIANGQI_INITIAL.map((row) => [...row]);
+  const clocks = [0];
+  let clock = 0;
+  for (const move of moves) {
+    const from = coordinate(move?.from), to = coordinate(move?.to);
+    const code = from ? board[from.row][from.col] : null;
+    if (!from || !to || !code) {
+      clocks.push(clock);
+      continue;
+    }
+    const captured = board[to.row][to.col];
+    board[from.row][from.col] = null;
+    board[to.row][to.col] = code;
+    const advanced = (code === "p" || code === "P") && from.row !== to.row;
+    clock = captured || advanced ? 0 : clock + 1;
+    clocks.push(clock);
+  }
+  return {
+    plies: moves.length,
+    limit: XIANGQI_NO_PROGRESS_LIMIT,
+    noProgressPlies: clock,
+    remaining: Math.max(0, XIANGQI_NO_PROGRESS_LIMIT - clock),
+    stalled: clock >= XIANGQI_NO_PROGRESS_STALL,
+    clocks
+  };
+}
+function noProgressClock(game, clock = 0) {
+  if (!hasNoProgressRule(game)) return null;
+  const value = Number.isInteger(clock) && clock > 0 ? clock : 0;
+  const remaining = Math.max(0, XIANGQI_NO_PROGRESS_LIMIT - value);
+  const stalled = value >= XIANGQI_NO_PROGRESS_STALL;
+  return {
+    limit: XIANGQI_NO_PROGRESS_LIMIT,
+    noProgressPlies: value,
+    remaining,
+    stalled,
+    text: stalled ? `\u505C\u6EDE\u5F85\u5224\u548C \xB7 \u8FD8\u6709 ${remaining} \u624B` : `\u8DDD\u5224\u548C\u8FD8\u6709 ${remaining} \u624B`,
+    detail: `\u65E0\u8FDB\u5C55 ${value}/${XIANGQI_NO_PROGRESS_LIMIT} \u534A\u56DE\u5408`
+  };
+}
+function noProgressSummary(game, moves = []) {
+  if (!hasNoProgressRule(game)) return null;
+  const progress = xiangqiNoProgress(moves);
+  return { ...noProgressClock(game, progress.noProgressPlies), clocks: progress.clocks, plies: progress.plies };
 }
 function xiangqiBoardSvg(moves = [], { opacity = 1 } = {}) {
   const margin = 38, gap = 54, width = margin * 2 + gap * 8, height = margin * 2 + gap * 9;
@@ -1380,6 +1437,10 @@ body[data-ds-dark-theme] .ar-page{
 .ar-tag[data-status=running] i{animation:ar-pulse 1.6s ease-in-out infinite}
 .ar-tag[data-status=paused],.ar-tag[data-status=pausing]{color:var(--ar-amber);background:var(--ar-amber-soft)}
 .ar-tag[data-status=finished]{color:var(--ar-green);background:var(--ar-green-soft)}
+/* \u505C\u6EDE\u7684\u8FDB\u884C\u4E2D\u6BD4\u8D5B\uFF1A\u4FDD\u7559 running \u7684\u8BED\u4E49\uFF08\u786E\u5B9E\u8FD8\u5728\u8DD1\uFF09\uFF0C\u4F46\u7528\u7425\u73C0\u628A\u5B83\u548C\u300C\u6B63\u5E38\u63A8\u8FDB\u300D\u5206\u5F00\u3002
+   \u6587\u6848\u6362\u6210\u540C\u5B57\u6570\u7684\u300C\u505C\u6EDE\u4E2D\u300D\uFF0C\u5217\u5BBD\u56E0\u6B64\u4E0D\u52A8\uFF1B\u5B8C\u6574\u89E3\u91CA\uFF08\u65E0\u8FDB\u5C55 x/\u4E0A\u9650 \xB7 \u8DDD\u5224\u548C\u8FD8\u6709 N \u624B\uFF09\u5728 title \u91CC\u3002 */
+.ar-tag[data-status=running][data-stalled=true]{color:var(--ar-amber);background:var(--ar-amber-soft)}
+.ar-tag[data-status=running][data-stalled=true] i{animation:none}
 .ar-chip[data-tone=page]{color:var(--ar-tone);background:var(--ar-tone-soft)}
 .ar-error,.ar-notice{margin:0;padding:10px 12px;border:1px solid var(--lwb-line);border-radius:7px;font-size:13px;overflow-wrap:anywhere}
 .ar-error{color:var(--ar-red);background:var(--ar-red-soft)}.ar-notice{color:var(--ar-cyan);background:var(--ar-cyan-soft)}
@@ -1577,7 +1638,7 @@ body[data-ds-dark-theme] .ar-page{
    \u4ECE\u524D\u53EA\u6709\u6A21\u578B\u540D\uFF0C\u89C2\u4F17\u5F97\u81EA\u5DF1\u628A\u540D\u5B57\u5BF9\u5230\u821E\u53F0\u5E2D\u5361\u4E0A\uFF0C\u800C\u540C\u4F9B\u5E94\u5546\u7684\u4E0D\u540C\u6A21\u578B\u7ECF\u5E38\u540C\u540D\u3002
    \u6751\u6C11\u5728\u821E\u53F0\u4E0A\u662F\u767D\u5E95\u6DF1\u5B57\uFF08\u753B\u5728\u6697\u573A\u666F\u91CC\uFF09\uFF0C\u6D45\u8272\u4FA7\u680F\u7167\u642C\u4F1A\u770B\u4E0D\u89C1\uFF0C\u6240\u4EE5\u8FD9\u91CC\u81EA\u5E26\u4E00\u5957
    \u6D45\u8272\u914D\u8272\uFF0C\u6DF1\u8272\u4E3B\u9898\u53E6\u7ED9\u4E00\u6863\u4EAE\u4E00\u70B9\u7684\u6587\u5B57\u8272\u3002\u4E24\u4E2A\u5143\u7D20\u90FD flex:none\uFF1A\u6A21\u578B\u540D\u53EF\u4EE5\u88AB\u538B\u884C\uFF0C
-   \u5E2D\u53F7\u4E0E\u8EAB\u4EFD\u4E0D\u80FD\u88AB\u538B\u6389\u3002\u68CB\u7C7B\u4E0D\u6E32\u67D3\u5B83\u4EEC\u3002 */
+   \u5E2D\u53F7\u4E0E\u8EAB\u4EFD\u4E0D\u80FD\u88AB\u538B\u6389\u3002\u68CB\u7C7B\u6E32\u67D3\u7684\u662F\u4E0B\u9762\u90A3\u4E2A .ar-side\uFF08\u54EA\u4E00\u65B9\uFF09\uFF0C\u4E0D\u501F\u7528\u8FD9\u4E24\u4E2A\u5143\u7D20\u3002 */
 .ar-seat{flex:none;color:var(--lwb-muted);font-size:11px;font-weight:650;font-variant-numeric:tabular-nums}
 .ar-speech .ar-seat{margin-right:-2px}
 .ar-role{display:inline-flex;align-items:center;gap:5px;flex:none;margin-left:-2px;font-size:11px;font-weight:700;font-style:normal;color:var(--ar-role-ink,#4A555F)}
@@ -1593,10 +1654,23 @@ body[data-ds-dark-theme] .ar-page .ar-role[data-role=seer]{--ar-role-ink:#A8C8F2
 body[data-ds-dark-theme] .ar-page .ar-role[data-role=witch]{--ar-role-ink:#C6ABEC}
 body[data-ds-dark-theme] .ar-page .ar-role[data-role=hunter]{--ar-role-ink:#EBC77E}
 body[data-ds-dark-theme] .ar-page .ar-role[data-role=villager]{--ar-role-ink:#C3CCD6}
+/* \u68CB\u7C7B\u7684\u300C\u54EA\u4E00\u65B9\u300D\uFF1A\u4E0E .ar-role \u5E76\u5217\u7684\u7B2C\u4E8C\u79CD\u5F52\u5C5E\u5143\u7D20\uFF0C\u843D\u5728\u6A21\u578B\u540D**\u4E4B\u524D**\uFF08\u5E2D\u53F7\u90A3\u4E00\u683C\uFF09\u3002
+   \u5FBD\u8BB0\u505A\u6210\u68CB\u5B50\uFF08\u5706\u5F62\uFF09\uFF0C\u914D\u8272\u4E0E\u8BB0\u5206\u6761\u7684 .ar-stone \u540C\u4E00\u5957\uFF0C\u6240\u4EE5\u300C\u8FD9\u4E2A\u6A21\u578B\u662F\u9ED1\u65B9\u300D\u548C\u76D8\u4E0A\u7684\u989C\u8272
+   \u7ACB\u523B\u5BF9\u5F97\u4E0A\uFF1B\u767D\u5B50\u767D\u5E95\uFF0C\u6240\u4EE5\u63CF\u8FB9\u4E0D\u80FD\u7701\u3002\u68CB\u7C7B\u6CA1\u6709\u9635\u8425\uFF0C\u8FD9\u91CC\u523B\u610F\u4E0D\u590D\u7528 .ar-role \u7684\u7C7B\u540D\u4E0E\u8BCD\u6C47\uFF0C
+   \u5426\u5219\u4F1A\u88AB\u8BFB\u6210\u300C\u68CB\u7C7B\u4E5F\u6709\u9635\u8425\u300D\u3002flex:none\uFF1A\u6A21\u578B\u540D\u53EF\u4EE5\u5148\u88AB\u538B\u884C\uFF0C\u65B9\u540D\u4E0D\u80FD\u88AB\u538B\u6389\u3002 */
+.ar-side{display:inline-flex;align-items:center;gap:5px;flex:none;font-size:11px;font-weight:700;font-style:normal;color:var(--ar-side-ink,#3A4640)}
+.ar-side i{display:inline-flex;width:15px;height:15px;align-items:center;justify-content:center;border-radius:50%;background:var(--ar-side-fill,#252b28);border:1px solid var(--ar-side-edge,#0f1512);color:var(--ar-side-on,#fff);font-size:8px;font-weight:800;font-style:normal}
+.ar-side[data-side=black]{--ar-side-fill:#252b28;--ar-side-edge:#0f1512;--ar-side-on:#fff;--ar-side-ink:#3A4640}
+.ar-side[data-side=white]{--ar-side-fill:#fff;--ar-side-edge:#a9b5ac;--ar-side-on:#2C3630;--ar-side-ink:#4A555F}
+.ar-side[data-side=red]{--ar-side-fill:#b83c2e;--ar-side-edge:#f0c999;--ar-side-on:#fff;--ar-side-ink:#A93127}
+body[data-ds-dark-theme] .ar-page .ar-side{--ar-side-ink:#C3CCD6}
+body[data-ds-dark-theme] .ar-page .ar-side[data-side=black]{--ar-side-ink:#B9C2BB}
+body[data-ds-dark-theme] .ar-page .ar-side[data-side=white]{--ar-side-ink:#C3CCD6;--ar-side-fill:#E8EDEA;--ar-side-edge:#8A968E}
+body[data-ds-dark-theme] .ar-page .ar-side[data-side=red]{--ar-side-ink:#F0A29B}
 .ar-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:14px 4px;border-top:1px solid var(--lwb-line);border-bottom:1px solid var(--lwb-line)}
 .ar-stat{display:grid;gap:5px;min-width:0;padding:0 16px;border-left:1px solid var(--lwb-line)}.ar-stat:first-child{border-left:0}
 .ar-stat span{color:var(--lwb-muted);font-size:12px}.ar-stat strong{font-size:20px;line-height:1.3;font-weight:650;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
-.ar-stat strong[data-tone=brand]{color:var(--ar-brand)}.ar-stat strong[data-tone=green]{color:var(--ar-green)}.ar-stat small{font-size:11px;color:var(--lwb-muted);font-weight:400}
+.ar-stat strong[data-tone=brand]{color:var(--ar-brand)}.ar-stat strong[data-tone=green]{color:var(--ar-green)}.ar-stat strong[data-tone=warn]{color:var(--ar-amber)}.ar-stat small{font-size:11px;color:var(--lwb-muted);font-weight:400}
 .ar-export{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-top:1px solid var(--lwb-line);padding-top:16px}
 .ar-export label{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--lwb-muted)}.ar-export select{width:auto;height:34px}.ar-audio input{width:16px;height:16px}
 .ar-raw{border-top:1px solid var(--lwb-line);padding-top:12px}.ar-raw summary{cursor:pointer;font-size:12px;color:var(--lwb-muted)}
@@ -1791,8 +1865,13 @@ function IconButton({ icon, title, onClick, disabled, ...rest }) {
 function Button({ icon, children, primary, className, ...rest }) {
   return h2("button", { type: "button", className: ["ar-button", primary && "ar-primary", className].filter(Boolean).join(" "), ...rest }, icon && h2(icon), children);
 }
-function Status({ status }) {
-  return h2("span", { className: "ar-tag", "data-status": status }, h2("i"), statusLabel[status] || status);
+function Status({ status, stalled, title }) {
+  return h2(
+    "span",
+    { className: "ar-tag", "data-status": status, "data-stalled": stalled ? "true" : void 0, title: title || void 0 },
+    h2("i"),
+    stalled ? "\u505C\u6EDE\u4E2D" : statusLabel[status] || status
+  );
 }
 function SeatNo({ match, index }) {
   const identity = seatIdentity(match, index);
@@ -1801,6 +1880,10 @@ function SeatNo({ match, index }) {
 function RoleTag({ match, index }) {
   const identity = seatIdentity(match, index);
   return identity?.mark ? h2("em", { className: "ar-role", "data-role": identity.role, title: identity.roleName }, h2("i", null, identity.mark), identity.roleName) : null;
+}
+function SideTag({ game, index }) {
+  const side = sideIdentity(game, index);
+  return side ? h2("em", { className: "ar-side", "data-side": side.tone, title: side.side }, h2("i", null, side.mark), side.side) : null;
 }
 function Frame({ tone, kicker, title, subtitle, actions, children }) {
   return h2(
@@ -1811,7 +1894,7 @@ function Frame({ tone, kicker, title, subtitle, actions, children }) {
   );
 }
 function StatBar({ items }) {
-  return h2("div", { className: "ar-stats" }, items.map((item) => h2("div", { key: item.label, className: "ar-stat" }, h2("span", null, item.label), h2("strong", { "data-tone": item.tone }, item.value), item.detail && h2("small", null, item.detail))));
+  return h2("div", { className: "ar-stats" }, items.map((item) => h2("div", { key: item.label, className: "ar-stat", title: item.title || void 0 }, h2("span", null, item.label), h2("strong", { "data-tone": item.tone }, item.value), item.detail && h2("small", null, item.detail))));
 }
 function useQuery(method, request, dependency = "") {
   const [value, setValue] = import_react4.default.useState(null), [error, setError] = import_react4.default.useState("");
@@ -1986,6 +2069,10 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
   const frame = match ? frameAt(match, currentStep) : null;
   const finale = match && currentStep >= moves.length ? finaleInfo(match) : null;
   const winRun = finale ? winningRun(match) : null;
+  const progress = import_react4.default.useMemo(
+    () => match ? noProgressSummary(match.game, moves.map((event) => event.action)) : null,
+    [match?.id, match?.game?.version, moves.length]
+  );
   const wolfTimeline = import_react4.default.useMemo(
     () => match?.game?.id === "werewolf" ? werewolfTimeline(match) : null,
     [match?.id, moves.length, match?.config?.seed, match?.config?.seats, match?.players?.length, match?.game?.version]
@@ -2095,7 +2182,7 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
       "div",
       { className: "ar-actions" },
       match.config.pace === "fast" && h2("span", { className: "ar-chip" }, "\u5386\u53F2\u5FEB\u68CB\u5BF9\u5C40"),
-      h2(Status, { status: match.status }),
+      h2(Status, { status: match.status, stalled: progress?.stalled, title: progress?.detail }),
       match.status === "running" && h2(IconButton, { icon: Pause, title: "\u56DE\u5408\u7ED3\u675F\u540E\u6682\u505C", disabled: !!busy, onClick: () => run("pause", () => api("control", { id, action: "pause" })) }),
       ["running", "pausing", "paused"].includes(match.status) && h2(IconButton, { icon: Square, title: "\u53D6\u6D88\u6BD4\u8D5B", disabled: !!busy, onClick: async () => {
         if (await confirm({ title: "\u53D6\u6D88\u8FD9\u573A\u6BD4\u8D5B\uFF1F", description: "\u53D6\u6D88\u540E\u505C\u6B62\u7EE7\u7EED\u843D\u5B50\uFF0C\u5DF2\u5B8C\u6210\u7684\u843D\u5B50\u3001\u9009\u624B\u53D1\u8A00\u548C\u7528\u91CF\u8BB0\u5F55\u4F1A\u4FDD\u7559\u3002", confirmLabel: "\u786E\u8BA4\u53D6\u6D88\u6BD4\u8D5B" })) run("cancel", () => api("control", { id, action: "cancel" }));
@@ -2148,7 +2235,7 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
           h2(
             "div",
             { className: "ar-speaking-body" },
-            h2("div", { className: "ar-speaking-name" }, h2(MessageCircle), actor ? h2(import_react4.default.Fragment, null, h2(SeatNo, { match, index: currentPlayer }), actor.name, h2(RoleTag, { match, index: currentPlayer })) : "\u7B49\u5F85\u9009\u624B\u884C\u52A8"),
+            h2("div", { className: "ar-speaking-name" }, h2(MessageCircle), actor ? h2(import_react4.default.Fragment, null, h2(SeatNo, { match, index: currentPlayer }), h2(SideTag, { game: match.game, index: currentPlayer }), actor.name, h2(RoleTag, { match, index: currentPlayer })) : "\u7B49\u5F85\u9009\u624B\u884C\u52A8"),
             h2("p", { role: thinking ? "status" : void 0 }, thinking ? phaseLabel : frame.current?.speech || idleHint),
             thinking ? h2("div", { className: "ar-generation" }, h2("div", null, h2("small", null, actor?.reasoningEffort ? `\u63A8\u7406\u5F3A\u5EA6\uFF1A${actor.reasoningEffort}` : "\u6A21\u578B\u9ED8\u8BA4\u63A8\u7406"), h2("small", null, `\u5DF2\u7528 ${elapsedSeconds.toFixed(1)} \u79D2`))) : frame.current && h2("small", null, `${actionLabel(frame.current.action, match.game)} \xB7 ${(frame.current.elapsedMs / 1e3).toFixed(1)} \u79D2`)
           )
@@ -2182,18 +2269,18 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
         /* 被判负的那一手没有落子，但必须在记录里占一行：否则观众只看到「记到第 18 手」然后判负。
            这一行不是可点的发言（那句话从未生效），所以用 div + data-invalid，样式与发言区分开。 */
         h2("div", { className: "ar-transcript" }, frame.speech.length || forfeit ? [
-          /* 每一行同样带席号与身份：夜刀、查验、投票这些动作由谁说出来的，看行内就知道。 */
-          ...frame.speech.map((event) => h2("button", { key: event.turnId, className: "ar-speech", onClick: () => seek(event.moveNumber), "aria-label": `\u67E5\u770B\u7B2C ${event.moveNumber} ${stepWord}` }, h2("div", { className: "ar-speech-head" }, h2("span", { className: "ar-speech-num" }, event.moveNumber), h2(SeatNo, { match, index: event.player }), h2("strong", null, match.players[event.player].name), h2(RoleTag, { match, index: event.player }), h2("small", null, actionLabel(event.action, match.game))), h2("p", null, event.speech))),
+          /* 每一行同样带席号与身份（棋类是「哪一方」）：夜刀、查验、投票这些动作由谁说出来的，看行内就知道。 */
+          ...frame.speech.map((event) => h2("button", { key: event.turnId, className: "ar-speech", onClick: () => seek(event.moveNumber), "aria-label": `\u67E5\u770B\u7B2C ${event.moveNumber} ${stepWord}` }, h2("div", { className: "ar-speech-head" }, h2("span", { className: "ar-speech-num" }, event.moveNumber), h2(SeatNo, { match, index: event.player }), h2(SideTag, { game: match.game, index: event.player }), h2("strong", null, match.players[event.player].name), h2(RoleTag, { match, index: event.player }), h2("small", null, actionLabel(event.action, match.game))), h2("p", null, event.speech))),
           forfeit && h2(
             "div",
             { key: "forfeit", className: "ar-speech", "data-invalid": "true" },
-            h2("div", { className: "ar-speech-head" }, h2("span", { className: "ar-speech-num" }, forfeit.moveNumber ?? moves.length + 1), h2(SeatNo, { match, index: forfeit.seat }), h2("strong", null, forfeit.name), h2(RoleTag, { match, index: forfeit.seat }), h2("small", null, actionWord)),
+            h2("div", { className: "ar-speech-head" }, h2("span", { className: "ar-speech-num" }, forfeit.moveNumber ?? moves.length + 1), h2(SeatNo, { match, index: forfeit.seat }), h2(SideTag, { game: match.game, index: forfeit.seat }), h2("strong", null, forfeit.name), h2(RoleTag, { match, index: forfeit.seat }), h2("small", null, actionWord)),
             h2("p", null, `\u8FDE\u7EED ${forfeit.attempts.length} \u6B21\u56DE\u590D\u672A\u88AB\u63A5\u53D7\uFF1A${forfeit.reasons.join("\uFF1B")}`)
           )
         ] : h2("div", { className: "ar-empty" }, "\u6682\u65E0\u56DE\u5408\u8BB0\u5F55"))
       )
     ),
-    h2(StatBar, { items: [{ label: match.game?.id === "werewolf" ? "\u5DF2\u5B8C\u6210\u52A8\u4F5C" : "\u5DF2\u5B8C\u6210\u8D70\u5B50", value: moves.length, tone: "brand" }, { label: "\u51B3\u7B56\u56DE\u5408", value: match.calls, detail: "\u542B\u8FDD\u89C4\u91CD\u8BD5\u4E0E\u672A\u5B8C\u6210\u56DE\u5408" }, { label: "\u7D2F\u8BA1 Token", value: match.tokens.toLocaleString(), detail: match.usageUnknown ? "\u7528\u91CF\u4E0D\u5B8C\u6574" : "\u670D\u52A1\u5546\u4E0A\u62A5\u7528\u91CF" }, { label: "\u6BD4\u8D5B\u72B6\u6001", value: statusLabel[match.status] || match.status, tone: match.status === "finished" ? "green" : void 0 }] }),
+    h2(StatBar, { items: [{ label: match.game?.id === "werewolf" ? "\u5DF2\u5B8C\u6210\u52A8\u4F5C" : "\u5DF2\u5B8C\u6210\u8D70\u5B50", value: moves.length, tone: "brand" }, { label: "\u51B3\u7B56\u56DE\u5408", value: match.calls, detail: "\u542B\u8FDD\u89C4\u91CD\u8BD5\u4E0E\u672A\u5B8C\u6210\u56DE\u5408" }, { label: "\u7D2F\u8BA1 Token", value: match.tokens.toLocaleString(), detail: match.usageUnknown ? "\u7528\u91CF\u4E0D\u5B8C\u6574" : "\u670D\u52A1\u5546\u4E0A\u62A5\u7528\u91CF" }, { label: "\u6BD4\u8D5B\u72B6\u6001", value: progress?.stalled ? "\u505C\u6EDE\u4E2D" : statusLabel[match.status] || match.status, tone: progress?.stalled ? "warn" : match.status === "finished" ? "green" : void 0, detail: progress?.text, title: progress?.detail }] }),
     (error || data.error) && h2("p", { className: "ar-error", role: "alert" }, error || data.error),
     lastError && h2("p", { className: "ar-error", role: "alert" }, lastError.error),
     h2(
@@ -2382,6 +2469,7 @@ function History({ renderConversation, focusSession, lwbAccount }) {
     h2("div", { className: "ar-history-toolbar" }, h2("h2", { className: "ar-section-title" }, "\u5BF9\u6218\u8BB0\u5F55"), h2("div", { className: "ar-actions" }, h2("input", { className: "ar-search", type: "search", placeholder: "\u641C\u7D22\u6A21\u578B\u3001\u83B7\u80DC\u65B9\u6216\u6BD4\u8D5B\u7F16\u53F7", "aria-label": "\u641C\u7D22\u6BD4\u8D5B", value: search, onChange: (event) => setSearch(event.target.value) }), h2("select", { className: "ar-select", "aria-label": "\u6BD4\u8D5B\u72B6\u6001\u7B5B\u9009", value: status, onChange: (event) => setStatus(event.target.value) }, h2("option", { value: "" }, "\u5168\u90E8\u72B6\u6001"), Object.entries(statusLabel).map(([value, label]) => h2("option", { key: value, value }, label))))),
     filtered.length ? h2("nav", { className: "ar-history-list", "aria-label": "\u5386\u53F2\u6BD4\u8D5B" }, h2("div", { className: "ar-history-columns", "aria-hidden": true }, h2("span", null, "\u53C2\u8D5B\u9009\u624B"), h2("span", null, "\u6BD4\u8D5B\u65F6\u95F4"), h2("span", null, "\u843D\u5B50"), h2("span", null, "\u7ED3\u679C"), h2("span", null, "\u72B6\u6001"), h2("span")), filtered.map((match) => {
       const outcome = matchOutcome(match), unit = match.game?.id === "werewolf" ? "\u6B65" : "\u624B", title = matchTitle(match);
+      const progress = noProgressClock(match.game, match.halfmoveClock);
       return h2(
         "button",
         { key: match.id, className: "ar-row", onClick: () => setId(match.id), "aria-label": `\u56DE\u653E ${title} \xB7 ${match.moves} ${unit}` },
@@ -2390,7 +2478,7 @@ function History({ renderConversation, focusSession, lwbAccount }) {
         h2("span", { className: "ar-row-count" }, `${match.moves} ${unit}`),
         /* 结果列：只有已裁决的比赛有文案，其余用占位保持列宽稳定；悬停给出完整裁决话术。 */
         h2("span", { className: "ar-outcome", "data-outcome": outcome?.tone || "pending", title: outcome?.detail || "" }, outcome?.label || "\u2014"),
-        h2(Status, { status: match.status }),
+        h2(Status, { status: match.status, stalled: progress?.stalled, title: progress ? `${progress.detail} \xB7 ${progress.text}` : void 0 }),
         h2(ChevronRight)
       );
     })) : h2("div", { className: "ar-empty" }, h2(Trophy), list.value ? search || status ? "\u6CA1\u6709\u7B26\u5408\u6761\u4EF6\u7684\u6BD4\u8D5B" : "\u6682\u65E0\u6BD4\u8D5B\u8BB0\u5F55" : "\u6B63\u5728\u8BFB\u53D6\u6BD4\u8D5B\u8BB0\u5F55\u2026")

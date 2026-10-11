@@ -59,6 +59,10 @@ body[data-ds-dark-theme] .ar-page{
 .ar-tag[data-status=running] i{animation:ar-pulse 1.6s ease-in-out infinite}
 .ar-tag[data-status=paused],.ar-tag[data-status=pausing]{color:var(--ar-amber);background:var(--ar-amber-soft)}
 .ar-tag[data-status=finished]{color:var(--ar-green);background:var(--ar-green-soft)}
+/* 停滞的进行中比赛：保留 running 的语义（确实还在跑），但用琥珀把它和「正常推进」分开。
+   文案换成同字数的「停滞中」，列宽因此不动；完整解释（无进展 x/上限 · 距判和还有 N 手）在 title 里。 */
+.ar-tag[data-status=running][data-stalled=true]{color:var(--ar-amber);background:var(--ar-amber-soft)}
+.ar-tag[data-status=running][data-stalled=true] i{animation:none}
 .ar-chip[data-tone=page]{color:var(--ar-tone);background:var(--ar-tone-soft)}
 .ar-error,.ar-notice{margin:0;padding:10px 12px;border:1px solid var(--lwb-line);border-radius:7px;font-size:13px;overflow-wrap:anywhere}
 .ar-error{color:var(--ar-red);background:var(--ar-red-soft)}.ar-notice{color:var(--ar-cyan);background:var(--ar-cyan-soft)}
@@ -256,7 +260,7 @@ body[data-ds-dark-theme] .ar-page{
    从前只有模型名，观众得自己把名字对到舞台席卡上，而同供应商的不同模型经常同名。
    村民在舞台上是白底深字（画在暗场景里），浅色侧栏照搬会看不见，所以这里自带一套
    浅色配色，深色主题另给一档亮一点的文字色。两个元素都 flex:none：模型名可以被压行，
-   席号与身份不能被压掉。棋类不渲染它们。 */
+   席号与身份不能被压掉。棋类渲染的是下面那个 .ar-side（哪一方），不借用这两个元素。 */
 .ar-seat{flex:none;color:var(--lwb-muted);font-size:11px;font-weight:650;font-variant-numeric:tabular-nums}
 .ar-speech .ar-seat{margin-right:-2px}
 .ar-role{display:inline-flex;align-items:center;gap:5px;flex:none;margin-left:-2px;font-size:11px;font-weight:700;font-style:normal;color:var(--ar-role-ink,#4A555F)}
@@ -272,10 +276,23 @@ body[data-ds-dark-theme] .ar-page .ar-role[data-role=seer]{--ar-role-ink:#A8C8F2
 body[data-ds-dark-theme] .ar-page .ar-role[data-role=witch]{--ar-role-ink:#C6ABEC}
 body[data-ds-dark-theme] .ar-page .ar-role[data-role=hunter]{--ar-role-ink:#EBC77E}
 body[data-ds-dark-theme] .ar-page .ar-role[data-role=villager]{--ar-role-ink:#C3CCD6}
+/* 棋类的「哪一方」：与 .ar-role 并列的第二种归属元素，落在模型名**之前**（席号那一格）。
+   徽记做成棋子（圆形），配色与记分条的 .ar-stone 同一套，所以「这个模型是黑方」和盘上的颜色
+   立刻对得上；白子白底，所以描边不能省。棋类没有阵营，这里刻意不复用 .ar-role 的类名与词汇，
+   否则会被读成「棋类也有阵营」。flex:none：模型名可以先被压行，方名不能被压掉。 */
+.ar-side{display:inline-flex;align-items:center;gap:5px;flex:none;font-size:11px;font-weight:700;font-style:normal;color:var(--ar-side-ink,#3A4640)}
+.ar-side i{display:inline-flex;width:15px;height:15px;align-items:center;justify-content:center;border-radius:50%;background:var(--ar-side-fill,#252b28);border:1px solid var(--ar-side-edge,#0f1512);color:var(--ar-side-on,#fff);font-size:8px;font-weight:800;font-style:normal}
+.ar-side[data-side=black]{--ar-side-fill:#252b28;--ar-side-edge:#0f1512;--ar-side-on:#fff;--ar-side-ink:#3A4640}
+.ar-side[data-side=white]{--ar-side-fill:#fff;--ar-side-edge:#a9b5ac;--ar-side-on:#2C3630;--ar-side-ink:#4A555F}
+.ar-side[data-side=red]{--ar-side-fill:#b83c2e;--ar-side-edge:#f0c999;--ar-side-on:#fff;--ar-side-ink:#A93127}
+body[data-ds-dark-theme] .ar-page .ar-side{--ar-side-ink:#C3CCD6}
+body[data-ds-dark-theme] .ar-page .ar-side[data-side=black]{--ar-side-ink:#B9C2BB}
+body[data-ds-dark-theme] .ar-page .ar-side[data-side=white]{--ar-side-ink:#C3CCD6;--ar-side-fill:#E8EDEA;--ar-side-edge:#8A968E}
+body[data-ds-dark-theme] .ar-page .ar-side[data-side=red]{--ar-side-ink:#F0A29B}
 .ar-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:14px 4px;border-top:1px solid var(--lwb-line);border-bottom:1px solid var(--lwb-line)}
 .ar-stat{display:grid;gap:5px;min-width:0;padding:0 16px;border-left:1px solid var(--lwb-line)}.ar-stat:first-child{border-left:0}
 .ar-stat span{color:var(--lwb-muted);font-size:12px}.ar-stat strong{font-size:20px;line-height:1.3;font-weight:650;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
-.ar-stat strong[data-tone=brand]{color:var(--ar-brand)}.ar-stat strong[data-tone=green]{color:var(--ar-green)}.ar-stat small{font-size:11px;color:var(--lwb-muted);font-weight:400}
+.ar-stat strong[data-tone=brand]{color:var(--ar-brand)}.ar-stat strong[data-tone=green]{color:var(--ar-green)}.ar-stat strong[data-tone=warn]{color:var(--ar-amber)}.ar-stat small{font-size:11px;color:var(--lwb-muted);font-weight:400}
 .ar-export{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-top:1px solid var(--lwb-line);padding-top:16px}
 .ar-export label{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--lwb-muted)}.ar-export select{width:auto;height:34px}.ar-audio input{width:16px;height:16px}
 .ar-raw{border-top:1px solid var(--lwb-line);padding-top:12px}.ar-raw summary{cursor:pointer;font-size:12px;color:var(--lwb-muted)}

@@ -193,8 +193,9 @@
 .stag{flex:none;font-size:11px;font-weight:800;font-style:normal;letter-spacing:.1em;color:var(--brand-ink);background:var(--brand-soft);border:1px solid var(--brand-edge);border-radius:999px;padding:2px 8px}
 /* 席位与身份：狼人杀的署名与回合记录要回答「这个模型是什么身份」。
    从前只有模型名——同供应商的不同模型经常同名，观众得自己把名字对到舞台席卡上。
-   只给狼人杀渲染（棋类不产出这两个元素）。两个都是 flex:none：模型名可以先省略，
-   席号与身份不能被压掉；长名在 .sn 上截断，同名信息在身份榜与执行者卡上都还有。 */
+   狼人杀渲染 .sseat + .srole，棋类渲染下面的 .sside（哪一方），两边各答一问。
+   两个（三个）都是 flex:none：模型名可以先省略，归属不能被压掉；
+   长名在 .sn 上截断，同名信息在身份榜与执行者卡上都还有。 */
 .sseat{flex:none;font-size:15px;font-weight:700;color:var(--ink3);font-variant-numeric:tabular-nums}
 .srole{display:inline-flex;align-items:center;gap:6px;flex:none;font-size:15px;font-weight:800;font-style:normal;color:var(--ink2)}
 .srole i{display:inline-flex;width:19px;height:19px;align-items:center;justify-content:center;border-radius:5px;background:#E7ECEA;color:#1B232C;font-size:11px;font-weight:800;font-style:normal}
@@ -202,6 +203,13 @@
 .srole[data-role=seer] i{background:#5B93E0;color:#FFF}
 .srole[data-role=witch] i{background:#9A6BD6;color:#FFF}
 .srole[data-role=hunter] i{background:#E0A32E;color:#3A2A08}
+/* 棋类的「哪一方」：放在模型名**之前**（狼人杀那里是席号），先答「盘上是谁」再答「哪个模型」。
+   徽记做成棋子（圆形），配色与记分条的 .black / .white / .xq-red / .xq-black 同一套，
+   白子白底所以描边不能省。刻意不复用 .srole：那是狼人杀的角色词汇。 */
+.sside{display:inline-flex;align-items:center;gap:6px;flex:none;font-size:15px;font-weight:800;font-style:normal;color:var(--ink2)}
+.sside i{display:inline-flex;width:19px;height:19px;align-items:center;justify-content:center;border-radius:50%;background:#252b28;border:1px solid #0f1512;color:#FFF;font-size:10px;font-weight:800;font-style:normal}
+.sside[data-side=white] i{background:#FFF;border-color:#a9b5ac;color:#2C3630}
+.sside[data-side=red] i{background:#b83c2e;border-color:#f0c999}
 .coord{flex:none;padding:2px 9px;border-radius:999px;background:#F1F4F2;color:var(--ink2);font-size:11px;font-style:normal;font-weight:700;white-space:nowrap}
 .coord[hidden]{display:none}
 /* 发言正文的行数钳制：条数由人数给（--ww-lines），而不是写死 5 行。
@@ -220,10 +228,12 @@
 .rtitle{font-size:11px;font-weight:800;line-height:1.2;letter-spacing:.16em;color:var(--ink3)}
 .rlist{display:flex;flex-direction:column;gap:7px;min-height:0;overflow:hidden;-webkit-mask-image:linear-gradient(180deg,#000 calc(100% - 14px),transparent);mask-image:linear-gradient(180deg,#000 calc(100% - 14px),transparent)}
 .rentry b{display:block;font-size:11px;font-weight:700;line-height:1.2;color:var(--ink3);margin-bottom:2px}
-/* 回合记录是 11px 的次级信息，身份标签按同一档缩小，避免把每条记录撑成两行。 */
+/* 回合记录是 11px 的次级信息，归属标签（角色 / 方）按同一档缩小，避免把每条记录撑成两行。 */
 .rentry b .sseat{display:inline;margin-right:3px;font-size:11px}
 .rentry b .srole{margin-left:4px;gap:4px;font-size:11px}
 .rentry b .srole i{width:14px;height:14px;border-radius:4px;font-size:9px}
+.rentry b .sside{gap:4px;margin-right:4px;font-size:11px}
+.rentry b .sside i{width:14px;height:14px;font-size:9px}
 .rentry span{display:block;font-size:12px;line-height:1.4;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .stage[data-layout="portrait"] .recent{display:none}
 .recent[hidden]{display:none}
@@ -285,8 +295,9 @@
 .stage[data-game="werewolf"][data-layout="portrait"]{--ww-rows:2;--ww-band:50%}
 .stage[data-game="werewolf"][data-layout="portrait"][data-seats="9"]{--ww-rows:3;--ww-band:57%}
 .stage[data-game="werewolf"] .board-card{flex:1;width:auto;min-width:0;height:100%;transform-origin:center center}
-/* 狼人杀的侧栏比棋类宽 96px（棋类 404px）：横屏身份榜是两列，一列 404 会把 `deepseek-v4.1-flash`
-   截成 `deepseek…`——同供应商的 max / flash 正是靠后缀区分，截断等于把身份榜的意义抹掉。 */
+/* 狼人杀的侧栏是固定宽度：横屏身份榜要两列，窄了就会把 `deepseek-v4.1-flash` 截成
+   `deepseek…`——同供应商的 max / flash 正是靠后缀区分，截断等于把身份榜的意义抹掉。
+   500px 是按「两列 + 26px 徽标位」实测定下的；棋类不固定，吃棋盘剩下的宽度。 */
 .stage[data-game="werewolf"] .side{flex:none;width:500px}
 
 /* 席位舞台的版面是「安全区契约」：抬头 → 主持人播报（终局换成胜负卡）→ 场景留白 → 席位条带，

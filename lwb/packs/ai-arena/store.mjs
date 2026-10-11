@@ -36,6 +36,9 @@ export class ArenaStore {
     return matches.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(match => full ? match : {
       id: match.id, title: match.title, game: match.game, players: match.players, status: match.status, result: match.result,
       createdAt: match.createdAt, updatedAt: match.updatedAt, moves: match.state.moves.length, calls: match.calls, export: match.export,
+      /* 列表不带上落子序列，但象棋的「距判和还有几手」要在这里就看得出来：
+         一局停滞几小时的棋不能只在点进去之后才不像卡死。计数器是规则层写的原值。 */
+      halfmoveClock: Number.isInteger(match.state?.halfmoveClock) ? match.state.halfmoveClock : null,
     })
   }
   async create(input) {

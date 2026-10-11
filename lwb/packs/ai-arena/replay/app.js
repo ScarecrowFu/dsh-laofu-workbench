@@ -58,6 +58,13 @@
 
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
   const side = i => S.playerSide(D.game, i)
+  /* 棋类的「哪一方」：与狼人杀的「席号 + 徽记 + 中文名」并列，放在模型名之前。
+     与 replay/markup.mjs 的 sideTag 同构（同一份 sideIdentity、同一个 .sside 类名），
+     否则离线回放与 MP4 会在同一行显示两种东西。 */
+  const sideTag = i => {
+    const s = S.sideIdentity(D.game, i)
+    return s ? `<em class="sside" data-side="${s.tone}"><i>${s.mark}</i>${s.side}</em>` : ''
+  }
   const visibleMoves = index => D.moves.slice(0, index)
 
   /* ---------------- 当前执行者卡（与 replay/markup.mjs 同源） ----------------
@@ -464,6 +471,16 @@
     return ''
   }
 
+  /* 象棋无进展倒计时：整局只算一次的那张表（__ARENA_DATA__.noProgress.clocks）逐手查，
+     措辞从 ArenaScene 取（与观战页、视频 markup、战报同一条），这一侧不另写一份。
+     排在关键手胶囊之前，所以「吃 / 将军 / 胜局」仍贴在数字那一侧的主位；
+     终局帧不出 —— 那一格由胜负卡说「为什么结束」。 */
+  const progressHtml = index => {
+    if (!D.noProgress || index >= FINALE) return ''
+    const progress = S.noProgressClock(D.game, D.noProgress.clocks[Math.min(index, M)] ?? 0)
+    return progress ? `<span class="pill plain" title="${esc(progress.detail)}">${esc(progress.text)}</span>` : ''
+  }
+
   /* 发言字号阶梯：长局里既不缩到看不清，也不撑爆字幕区 */
   function stepSize(n) {
     const p = isPortrait()
@@ -522,7 +539,7 @@
     heroLbl.textContent = isFinale ? '终局' : '当前手数'
     heroNum.textContent = isFinale ? M : index
     heroTot.textContent = `/ ${M} 手`
-    heroTag.innerHTML = tagHtml(key, isFinale, isDraw)
+    heroTag.innerHTML = progressHtml(index) + tagHtml(key, isFinale, isDraw)
 
     /* 当前执行者卡：开局指先手、逐手指本手、终局指胜方（与 replay/markup.mjs 同一口径）。
        右侧标出席位，让观众能把「这个模型」对上盘上的颜色。 */
@@ -552,7 +569,7 @@
       fmessage.textContent = (D.result && D.result.message) || '比赛已结束。'
       finale.dataset.kind = isDraw ? 'draw' : 'win'
     } else if (last) {
-      who.innerHTML = `<img class="logo" src="${D.players[last.p].logo || ''}" alt=""><b class="sn">${esc(D.players[last.p].name)}</b><em class="stag">本手发言</em>`
+      who.innerHTML = `<img class="logo" src="${D.players[last.p].logo || ''}" alt="">${sideTag(last.p)}<b class="sn">${esc(D.players[last.p].name)}</b><em class="stag">本手发言</em>`
       coord.textContent = S.actionLabel(last.a, D.game)
       coord.hidden = false
       text.textContent = last.s
@@ -571,7 +588,7 @@
     const entries = visibleMoves(index).slice(-5, -1).reverse()
     recentEl.hidden = entries.length === 0
     rlist.innerHTML = entries
-      .map(m => `<div class="rentry"><b>${m.n} · ${esc(D.players[m.p].name)}</b><span>${esc(m.s)}</span></div>`).join('')
+      .map(m => `<div class="rentry"><b>${m.n} · ${sideTag(m.p)}${esc(D.players[m.p].name)}</b><span>${esc(m.s)}</span></div>`).join('')
 
     /* 进度 */
     const pct = (index / FINALE) * 100

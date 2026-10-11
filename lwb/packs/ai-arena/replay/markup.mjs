@@ -7,7 +7,7 @@
  *
  * 只在浏览器/打包环境使用（不依赖 node:fs，不依赖 xiangui 规则）。
  */
-import { boardSvg, actionLabel, playerSide, ROLE_MARK, ROLE_NAME, werewolfPhaseLabel, werewolfSideName, werewolfCastColumns, isCompactTurn, werewolfVoteLine, werewolfVoteTone, werewolfDeathMark } from '../presentation.mjs'
+import { boardSvg, actionLabel, playerSide, sideIdentity, ROLE_MARK, ROLE_NAME, werewolfPhaseLabel, werewolfSideName, werewolfCastColumns, isCompactTurn, werewolfVoteLine, werewolfVoteTone, werewolfDeathMark, noProgressAt, noProgressClock } from '../presentation.mjs'
 import { WEREWOLF_ART } from '../werewolf-art.mjs'
 import { MODEL_ART } from '../model-art.mjs'
 
@@ -166,6 +166,14 @@ function turnHtml({ player = null, kicker, name, meta = '', tag = '', phase = 'm
     `<b class="turn-name">${esc(name)}</b></div>` +
     turnFigureHtml({ player, speaks, compact, t, animate }) +
     `</div>`
+}
+
+/** 棋类的「哪一方」标签：与狼人杀的「席号 + 徽记 + 中文名」并列，放在模型名**之前**
+    （先答「盘上是谁」再答「哪个模型」）。徽记是棋子形状，配色与记分条的棋子同一套；
+    方名走 presentation.sideIdentity 的 playerSide 口径。狼人杀与越界座位返回空串。 */
+function sideTag(game, index) {
+  const side = sideIdentity(game, index)
+  return side ? `<em class="sside" data-side="${side.tone}"><i>${side.mark}</i>${side.side}</em>` : ''
 }
 
 /** 棋类的执行者卡口径：开局指先手，逐手指本手，终局指胜方。
@@ -529,6 +537,12 @@ export function stageHtml(data, index, options = {}) {
   const [speechOpacity, speechShift] = after(SPEECH_DELAY, v => fadeUp(v, .2))(t)
   const [finaleOpacity, finaleShift] = fadeUp(t, .28)
   const turn = chessTurn(data, { index, isFinale, isDraw, winner, active, speech: last?.s, layout, t, animate })
+  /* 无进展倒计时：与本手同步，读整局只算一次的那张表（data.noProgress.clocks）。
+     它排在关键手胶囊**之前**，所以「吃车 / 将军 / 胜局」仍贴在数字那一侧的主位。
+     终局帧不出：那一格由胜负卡说「为什么结束」，再挂一个倒计时只会读成第二个裁决。
+     文案与观战页、战报同源（presentation.noProgressClock），三处不会各自漂移。 */
+  const progress = data.noProgress && !isFinale ? noProgressClock(data.game, noProgressAt(data.noProgress, index)) : null
+  const progressPill = progress ? `<span class="pill plain" title="${esc(progress.detail)}">${esc(progress.text)}</span>` : ''
 
   const narrative = isFinale
     ? `<div class="finale" data-kind="${isDraw ? 'draw' : 'win'}" style="opacity:${round(finaleOpacity)};transform:translateY(${round(finaleShift)}px)">` +
@@ -539,11 +553,11 @@ export function stageHtml(data, index, options = {}) {
         const entries = data.moves.slice(0, index).slice(-5, -1).reverse()
         const recent = entries.length
           ? `<div class="recent"><div class="rtitle">回合记录</div><div class="rlist">` +
-            entries.map(m => `<div class="rentry"><b>${m.n} · ${esc(data.players[m.p].name)}</b><span>${esc(m.s)}</span></div>`).join('') +
+            entries.map(m => `<div class="rentry"><b>${m.n} · ${sideTag(data.game, m.p)}${esc(data.players[m.p].name)}</b><span>${esc(m.s)}</span></div>`).join('') +
             `</div></div>`
           : ''
         const who = last
-          ? `<img class="logo" src="${data.players[last.p].logo || ''}" alt=""><b class="sn">${esc(data.players[last.p].name)}</b><em class="stag">本手发言</em>`
+          ? `<img class="logo" src="${data.players[last.p].logo || ''}" alt="">${sideTag(data.game, last.p)}<b class="sn">${esc(data.players[last.p].name)}</b><em class="stag">本手发言</em>`
           : '<b class="sn">开局</b>'
         const coord = last ? `<em class="coord">${esc(actionLabel(last.a, data.game))}</em>` : ''
         const body = last ? last.s : '比赛开始'
@@ -560,7 +574,7 @@ export function stageHtml(data, index, options = {}) {
     turn +
     `<div class="hero"><em class="hlbl">${isFinale ? '终局' : '当前手数'}</em>` +
     `<b class="n">${isFinale ? M : index}</b><span class="t">/ ${M} 手</span>` +
-    `<div class="heroTag">${pillHtml(key, isFinale, isDraw)}</div></div>` +
+    `<div class="heroTag">${progressPill}${pillHtml(key, isFinale, isDraw)}</div></div>` +
     `<div class="score">${scoreHtml(data, active, isFinale, winner, isDraw)}</div>` +
     `<div class="narrative">${narrative}</div>` +
     `<footer class="progress">${progressHtml(data, index, keyMode)}</footer>` +

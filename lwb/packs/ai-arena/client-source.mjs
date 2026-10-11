@@ -1,6 +1,6 @@
 import React from 'react'
 import { Trophy, Settings2, Play, Pause, Square, SkipBack, ChevronDown, ChevronLeft, ChevronRight, ArrowLeft, Download, FileText, Film, RefreshCw, MessageCircle, Radio, Eye, Minus, Info } from 'lucide-react'
-import { boardSvg, frameAt, movesOf, gameName, matchTitle, matchOutcome, playerSide, actionLabel, werewolfStage, winningRun, finaleInfo, forfeitDetail, seatBadge, seatIdentity, gameCard, gameCoverSvg, werewolfCoverSeats, assignPortraits } from './presentation.mjs'
+import { boardSvg, frameAt, movesOf, gameName, matchTitle, matchOutcome, playerSide, actionLabel, werewolfStage, winningRun, finaleInfo, forfeitDetail, seatBadge, seatIdentity, sideIdentity, gameCard, gameCoverSvg, werewolfCoverSeats, assignPortraits, noProgressSummary, noProgressClock } from './presentation.mjs'
 import { werewolfTimeline, werewolfStageState } from './werewolf-projection.mjs'
 import { WEREWOLF_ART } from './werewolf-art.mjs'
 import { MODEL_ART } from './model-art.mjs'
@@ -28,9 +28,15 @@ const api = async (method, request) => {
 }
 function IconButton({ icon, title, onClick, disabled, ...rest }) { return h('button', { type: 'button', className: 'ar-icon', title, 'aria-label': title, onClick, disabled, ...rest }, h(icon)) }
 function Button({ icon, children, primary, className, ...rest }) { return h('button', { type: 'button', className: ['ar-button', primary && 'ar-primary', className].filter(Boolean).join(' '), ...rest }, icon && h(icon), children) }
-function Status({ status }) { return h('span', { className: 'ar-tag', 'data-status': status }, h('i'), statusLabel[status] || status) }
+/* 状态徽标：停滞的比赛不能和「正常进行」共用一句话 —— 一局象棋可能几小时没有实质进展，
+   观众只能把它读成卡死。文案换成「停滞中」（与「比赛中」同字数，列宽不动），
+   完整解释（无进展 x/上限 · 距判和还有 N 手）进 title，窄屏也不折行。 */
+function Status({ status, stalled, title }) {
+  return h('span', { className: 'ar-tag', 'data-status': status, 'data-stalled': stalled ? 'true' : undefined, title: title || undefined },
+    h('i'), stalled ? '停滞中' : statusLabel[status] || status)
+}
 /* 狼人杀的席位与身份：观众侧取落盘那一份牌（seatIdentity），与舞台席卡同源。
-   棋类没有身份，两个元素都渲染成 null，署名与回合记录与从前一字不差。
+   棋类没有身份，这两个元素都渲染成 null，由下面的 SideTag 回答「哪一方」。
    「几号 + 徽记 + 中文名」缺一不可：同名模型靠席号区分，不熟悉图例的观众靠中文名。 */
 function SeatNo({ match, index }) {
   const identity = seatIdentity(match, index)
@@ -40,12 +46,19 @@ function RoleTag({ match, index }) {
   const identity = seatIdentity(match, index)
   return identity?.mark ? h('em', { className: 'ar-role', 'data-role': identity.role, title: identity.roleName }, h('i', null, identity.mark), identity.roleName) : null
 }
+/* 棋类的「哪一方」：与狼人杀的席号同一个位置（模型名之前），先答「盘上是谁」再答「哪个模型」。
+   徽记是棋子形状、配色与记分条同源，方名走 presentation.sideIdentity 的 playerSide 口径。
+   狼人杀不渲染（那里由席号 + 角色徽记承担），棋类也**不**借用 .ar-role —— 那是狼人杀的阵营词汇。 */
+function SideTag({ game, index }) {
+  const side = sideIdentity(game, index)
+  return side ? h('em', { className: 'ar-side', 'data-side': side.tone, title: side.side }, h('i', null, side.mark), side.side) : null
+}
 function Frame({ tone, kicker, title, subtitle, actions, children }) {
   return h('main', { className: 'ar-page', 'data-tone': tone },
     h('header', { className: 'ar-top' }, h('div', { className: 'ar-top-copy' }, h('p', { className: 'ar-kicker' }, h('i'), kicker), h('h1', null, title), subtitle && h('p', null, subtitle)), actions && h('div', { className: 'ar-top-actions' }, actions)), children)
 }
 function StatBar({ items }) {
-  return h('div', { className: 'ar-stats' }, items.map(item => h('div', { key: item.label, className: 'ar-stat' }, h('span', null, item.label), h('strong', { 'data-tone': item.tone }, item.value), item.detail && h('small', null, item.detail))))
+  return h('div', { className: 'ar-stats' }, items.map(item => h('div', { key: item.label, className: 'ar-stat', title: item.title || undefined }, h('span', null, item.label), h('strong', { 'data-tone': item.tone }, item.value), item.detail && h('small', null, item.detail))))
 }
 function useQuery(method, request, dependency = '') {
   const [value, setValue] = React.useState(null), [error, setError] = React.useState('')
@@ -169,6 +182,12 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
      `finale` 同时决定胶囊文案、配色档位与徽标归属，避免三处各推一套。 */
   const finale = match && currentStep >= moves.length ? finaleInfo(match) : null
   const winRun = finale ? winningRun(match) : null
+  /* 无进展计数器：1.1.0 起象棋的停滞只由「连续 120 半回合无吃子及兵卒向前推进」收口，
+     选手每手都拿到这个量，观众此前一点都看不到 —— 一局「双方都赢不了」的棋于是只剩
+     「卡住了」一种读法。这里按已提交落子推当前计数，与选手拿到的 noProgressPlies 同源。 */
+  const progress = React.useMemo(
+    () => match ? noProgressSummary(match.game, moves.map(event => event.action)) : null,
+    [match?.id, match?.game?.version, moves.length])
   /* 狼人杀的席位舞台不能只靠 move 列表现推：谁还活着、当时第几天、主持人说了什么，
      都要规则结算（狼刀是否被解药救下、投票是否平票、猎人是否开枪）。逐手快照与离线回放/
      视频同源（werewolf-projection.mjs），这里按「同一场比赛 + 已提交落子数」记忆化 ——
@@ -269,7 +288,7 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
      （服务端按渲染输入给每份成片算了键，键相同就是同一份文件）。 */
   const artifact = exportId => exportId === match.export?.id ? match.export : match.exports?.[exportId] || null
   return h('section', { className: 'ar-match-view', 'data-ar-match': id, 'data-game': match.game?.id },
-    h('div', { className: 'ar-match-head' }, h('div', null, h('div', { className: 'ar-match-title' }, h('h2', { className: 'ar-section-title' }, gameName(match.game)), h('span', { className: 'ar-match-count' }, `${activeCount} 场进行中`)), h('p', null, `${new Date(match.createdAt).toLocaleString('zh-CN')} · ${id.slice(0, 8)}`)), h('div', { className: 'ar-actions' }, match.config.pace === 'fast' && h('span', { className: 'ar-chip' }, '历史快棋对局'), h(Status, { status: match.status }),
+    h('div', { className: 'ar-match-head' }, h('div', null, h('div', { className: 'ar-match-title' }, h('h2', { className: 'ar-section-title' }, gameName(match.game)), h('span', { className: 'ar-match-count' }, `${activeCount} 场进行中`)), h('p', null, `${new Date(match.createdAt).toLocaleString('zh-CN')} · ${id.slice(0, 8)}`)), h('div', { className: 'ar-actions' }, match.config.pace === 'fast' && h('span', { className: 'ar-chip' }, '历史快棋对局'), h(Status, { status: match.status, stalled: progress?.stalled, title: progress?.detail }),
       match.status === 'running' && h(IconButton, { icon: Pause, title: '回合结束后暂停', disabled: !!busy, onClick: () => run('pause', () => api('control', { id, action: 'pause' })) }),
       ['running', 'pausing', 'paused'].includes(match.status) && h(IconButton, { icon: Square, title: '取消比赛', disabled: !!busy, onClick: async () => { if (await confirm({ title: '取消这场比赛？', description: '取消后停止继续落子，已完成的落子、选手发言和用量记录会保留。', confirmLabel: '确认取消比赛' })) run('cancel', () => api('control', { id, action: 'cancel' })) } }))),
     match.status === 'paused' && h(Button, { primary: true, icon: Play, disabled: !!busy, onClick: () => run('resume', () => api('control', { id, action: 'resume' })) }, '继续比赛'),
@@ -298,7 +317,7 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
         h('div', { className: 'ar-speaking', 'data-thinking': !!thinking },
           h(SpeakingFigure, { player: actor, portrait: actorPortrait, speaks: actorSpeaks }),
           h('div', { className: 'ar-speaking-body' },
-            h('div', { className: 'ar-speaking-name' }, h(MessageCircle), actor ? h(React.Fragment, null, h(SeatNo, { match, index: currentPlayer }), actor.name, h(RoleTag, { match, index: currentPlayer })) : '等待选手行动'),
+            h('div', { className: 'ar-speaking-name' }, h(MessageCircle), actor ? h(React.Fragment, null, h(SeatNo, { match, index: currentPlayer }), h(SideTag, { game: match.game, index: currentPlayer }), actor.name, h(RoleTag, { match, index: currentPlayer })) : '等待选手行动'),
             h('p', { role: thinking ? 'status' : undefined }, thinking ? phaseLabel : frame.current?.speech || idleHint),
             thinking ? h('div', { className: 'ar-generation' }, h('div', null, h('small', null, actor?.reasoningEffort ? `推理强度：${actor.reasoningEffort}` : '模型默认推理'), h('small', null, `已用 ${elapsedSeconds.toFixed(1)} 秒`))) : frame.current && h('small', null, `${actionLabel(frame.current.action, match.game)} · ${(frame.current.elapsedMs / 1000).toFixed(1)} 秒`))),
         frame.result && h('div', { className: 'ar-result', 'data-tone': finale?.tone || 'win' }, h(finale?.tone === 'win' ? Trophy : finale?.tone === 'draw' ? Minus : Info), frame.result.message),
@@ -317,15 +336,15 @@ function MatchView({ id, initial, onChange, renderConversation, focusSession, ac
         /* 被判负的那一手没有落子，但必须在记录里占一行：否则观众只看到「记到第 18 手」然后判负。
            这一行不是可点的发言（那句话从未生效），所以用 div + data-invalid，样式与发言区分开。 */
         h('div', { className: 'ar-transcript' }, frame.speech.length || forfeit ? [
-          /* 每一行同样带席号与身份：夜刀、查验、投票这些动作由谁说出来的，看行内就知道。 */
-          ...frame.speech.map(event => h('button', { key: event.turnId, className: 'ar-speech', onClick: () => seek(event.moveNumber), 'aria-label': `查看第 ${event.moveNumber} ${stepWord}` }, h('div', { className: 'ar-speech-head' }, h('span', { className: 'ar-speech-num' }, event.moveNumber), h(SeatNo, { match, index: event.player }), h('strong', null, match.players[event.player].name), h(RoleTag, { match, index: event.player }), h('small', null, actionLabel(event.action, match.game))), h('p', null, event.speech))),
+          /* 每一行同样带席号与身份（棋类是「哪一方」）：夜刀、查验、投票这些动作由谁说出来的，看行内就知道。 */
+          ...frame.speech.map(event => h('button', { key: event.turnId, className: 'ar-speech', onClick: () => seek(event.moveNumber), 'aria-label': `查看第 ${event.moveNumber} ${stepWord}` }, h('div', { className: 'ar-speech-head' }, h('span', { className: 'ar-speech-num' }, event.moveNumber), h(SeatNo, { match, index: event.player }), h(SideTag, { game: match.game, index: event.player }), h('strong', null, match.players[event.player].name), h(RoleTag, { match, index: event.player }), h('small', null, actionLabel(event.action, match.game))), h('p', null, event.speech))),
           forfeit && h('div', { key: 'forfeit', className: 'ar-speech', 'data-invalid': 'true' },
-            h('div', { className: 'ar-speech-head' }, h('span', { className: 'ar-speech-num' }, forfeit.moveNumber ?? moves.length + 1), h(SeatNo, { match, index: forfeit.seat }), h('strong', null, forfeit.name), h(RoleTag, { match, index: forfeit.seat }), h('small', null, actionWord)),
+            h('div', { className: 'ar-speech-head' }, h('span', { className: 'ar-speech-num' }, forfeit.moveNumber ?? moves.length + 1), h(SeatNo, { match, index: forfeit.seat }), h(SideTag, { game: match.game, index: forfeit.seat }), h('strong', null, forfeit.name), h(RoleTag, { match, index: forfeit.seat }), h('small', null, actionWord)),
             h('p', null, `连续 ${forfeit.attempts.length} 次回复未被接受：${forfeit.reasons.join('；')}`)),
         ] : h('div', { className: 'ar-empty' }, '暂无回合记录')),
       ),
     ),
-    h(StatBar, { items: [{ label: match.game?.id === 'werewolf' ? '已完成动作' : '已完成走子', value: moves.length, tone: 'brand' }, { label: '决策回合', value: match.calls, detail: '含违规重试与未完成回合' }, { label: '累计 Token', value: match.tokens.toLocaleString(), detail: match.usageUnknown ? '用量不完整' : '服务商上报用量' }, { label: '比赛状态', value: statusLabel[match.status] || match.status, tone: match.status === 'finished' ? 'green' : undefined }] }),
+    h(StatBar, { items: [{ label: match.game?.id === 'werewolf' ? '已完成动作' : '已完成走子', value: moves.length, tone: 'brand' }, { label: '决策回合', value: match.calls, detail: '含违规重试与未完成回合' }, { label: '累计 Token', value: match.tokens.toLocaleString(), detail: match.usageUnknown ? '用量不完整' : '服务商上报用量' }, { label: '比赛状态', value: progress?.stalled ? '停滞中' : statusLabel[match.status] || match.status, tone: progress?.stalled ? 'warn' : match.status === 'finished' ? 'green' : undefined, detail: progress?.text, title: progress?.detail }] }),
     (error || data.error) && h('p', { className: 'ar-error', role: 'alert' }, error || data.error),
     lastError && h('p', { className: 'ar-error', role: 'alert' }, lastError.error),
     h('div', { className: 'ar-export' },
@@ -447,13 +466,15 @@ function History({ renderConversation, focusSession, lwbAccount }) {
     h('div', { className: 'ar-history-toolbar' }, h('h2', { className: 'ar-section-title' }, '对战记录'), h('div', { className: 'ar-actions' }, h('input', { className: 'ar-search', type: 'search', placeholder: '搜索模型、获胜方或比赛编号', 'aria-label': '搜索比赛', value: search, onChange: event => setSearch(event.target.value) }), h('select', { className: 'ar-select', 'aria-label': '比赛状态筛选', value: status, onChange: event => setStatus(event.target.value) }, h('option', { value: '' }, '全部状态'), Object.entries(statusLabel).map(([value, label]) => h('option', { key: value, value }, label))))),
     filtered.length ? h('nav', { className: 'ar-history-list', 'aria-label': '历史比赛' }, h('div', { className: 'ar-history-columns', 'aria-hidden': true }, h('span', null, '参赛选手'), h('span', null, '比赛时间'), h('span', null, '落子'), h('span', null, '结果'), h('span', null, '状态'), h('span')), filtered.map(match => {
       const outcome = matchOutcome(match), unit = match.game?.id === 'werewolf' ? '步' : '手', title = matchTitle(match)
+      /* 停滞判定读规则层写在名单里的计数器（列表不带落子序列），与详情页同一份文案。 */
+      const progress = noProgressClock(match.game, match.halfmoveClock)
       return h('button', { key: match.id, className: 'ar-row', onClick: () => setId(match.id), 'aria-label': `回放 ${title} · ${match.moves} ${unit}` },
         h('span', { className: 'ar-row-title' }, h('strong', null, title), h('small', null, match.id.slice(0, 8))),
         h('span', { className: 'ar-row-date' }, new Date(match.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })),
         h('span', { className: 'ar-row-count' }, `${match.moves} ${unit}`),
         /* 结果列：只有已裁决的比赛有文案，其余用占位保持列宽稳定；悬停给出完整裁决话术。 */
         h('span', { className: 'ar-outcome', 'data-outcome': outcome?.tone || 'pending', title: outcome?.detail || '' }, outcome?.label || '—'),
-        h(Status, { status: match.status }), h(ChevronRight))
+        h(Status, { status: match.status, stalled: progress?.stalled, title: progress ? `${progress.detail} · ${progress.text}` : undefined }), h(ChevronRight))
     })) : h('div', { className: 'ar-empty' }, h(Trophy), list.value ? search || status ? '没有符合条件的比赛' : '暂无比赛记录' : '正在读取比赛记录…'))
 }
 /* 封面：棋盘用真实 boardSvg 现画，狼人杀复用观战页的六席舞台，其余走首字海报。

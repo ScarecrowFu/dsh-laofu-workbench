@@ -364,7 +364,8 @@ test('狼人杀的执行者卡逐手写明模型名，终局换成阵营口径',
 /* 用户报的那一处：右侧「选手发言」与「回合记录」从前只有模型名，看不出这个模型是什么身份，
    而同供应商的不同模型经常同名（9 人局里出现过两席都叫 deepseek-v4.1-flash）。
    现在四个呈现面（观战署名 / 观战回合记录 / 离线回放 / 视频）统一带「席号 + 徽记 + 中文名」，
-   身份取落盘那一份牌；棋类没有身份，一个身份元素都不产出。 */
+   身份取落盘那一份牌；棋类没有阵营，它渲染的是「哪一方」（sideIdentity → .ar-side / .sside，
+   见 test/presentation.test.mjs 与 test/replay.test.mjs），不产出这两个角色元素。 */
 test('席位身份只对狼人杀成立，且取落盘那一份牌', () => {
   const match = playedMatch()
   assert.deepEqual(seatIdentity(match, 0), { seat: 1, role: 'hunter', mark: '猎', roleName: '猎人' })

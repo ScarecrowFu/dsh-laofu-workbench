@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { actionLabel, boardSvg, finaleInfo, forfeitDetail, frameAt, matchOutcome, matchTitle, playerSide, seatBadge, werewolfSide, werewolfStage, winningRun, xiangqiPosition } from '../presentation.mjs'
+import { actionLabel, boardSvg, finaleInfo, forfeitDetail, frameAt, matchOutcome, matchTitle, playerSide, seatBadge, sideIdentity, werewolfSide, werewolfStage, winningRun, xiangqiPosition, xiangqiNoProgress, noProgressAt, noProgressClock, noProgressSummary, hasNoProgressRule, XIANGQI_NO_PROGRESS_LIMIT, XIANGQI_NO_PROGRESS_RULE_VERSION } from '../presentation.mjs'
+import { xiangqi, XIANGQI_NO_PROGRESS_LIMIT as ENGINE_NO_PROGRESS_LIMIT } from '../xiangqi.mjs'
 import { replayHtml, reportMarkdown } from '../export.mjs'
 
 const move = (fromRow, fromCol, toRow, toCol, player) => ({ from: { row: fromRow, col: fromCol }, to: { row: toRow, col: toCol }, player })
@@ -69,6 +71,27 @@ test('gomoku retains its original display alongside xiangqi', () => {
   assert.equal(actionLabel({ row: 8, col: 8 }, game), '8 行 8 列')
   assert.match(boardSvg([{ row: 8, col: 8, player: 0 }]), /五子棋棋盘，1 手/u)
   assert.match(boardSvg([], { gameId: 'xiangqi' }), /中国象棋棋盘，0 手/u)
+})
+
+/* 棋类的归属＝哪一方。与狼人杀的席位身份（seatIdentity）并列：一个答「几号、什么身份」，
+   一个答「盘上的哪一方」。方名仍由 playerSide 一处出，这里只补徽记与配色档。 */
+test('sideIdentity 只给棋类产出「哪一方」，徽记与配色与棋盘上的棋子同一套', () => {
+  const gomoku = { id: 'gomoku', name: '五子棋' }
+  assert.deepEqual(sideIdentity(gomoku, 0), { side: '黑方', mark: '黑', tone: 'black' })
+  assert.deepEqual(sideIdentity(gomoku, 1), { side: '白方', mark: '白', tone: 'white' })
+  assert.deepEqual(sideIdentity(fixture.game, 0), { side: '红方', mark: '红', tone: 'red' })
+  assert.deepEqual(sideIdentity(fixture.game, 1), { side: '黑方', mark: '黑', tone: 'black' })
+  /* 方名与 playerSide 同源：同一条链上不能出现第二套「红/黑/白」映射 */
+  for (const [game, index] of [[gomoku, 0], [gomoku, 1], [fixture.game, 0], [fixture.game, 1]]) {
+    assert.equal(sideIdentity(game, index).side, playerSide(game, index))
+  }
+  /* 狼人杀与越界/非法座位一律 null：调用处据此完全不渲染 */
+  assert.equal(sideIdentity({ id: 'werewolf', name: '狼人杀' }, 0), null)
+  assert.equal(sideIdentity(gomoku, 2), null)
+  assert.equal(sideIdentity(gomoku, -1), null)
+  assert.equal(sideIdentity(gomoku, NaN), null)
+  assert.equal(sideIdentity({ description: '未知游戏' }, 0), null)
+  assert.equal(sideIdentity(null, 0), null)
 })
 
 test('matchTitle prefixes the game name exactly once, including legacy chess titles', () => {
@@ -250,4 +273,106 @@ test('狼人杀终局席位标记：胜方阵营金框 + 每席「胜 / 负」�
   assert.deepEqual(live.seats.map(seat => seat.badge), ['', '', '', ''])
   assert.deepEqual(live.seats.map(seat => seat.winning), [false, false, false, false])
   assert.deepEqual(live.seats.map(seat => seat.active), [false, false, true, false])
+})
+
+/* ---------------------------------------------------------------- 象棋无进展计数
+   观测口径必须与选手每手拿到的 noProgressPlies 完全相同，否则观众看到的倒计时与
+   「选手据以决策的量」是两回事。presentation 是浏览器侧模块（不能 import 规则引擎），
+   所以在这里逐手比对，并把常量与规则版本一起钉住：规则改版时这几条会先炸。 */
+test('象棋无进展计数与规则层逐手一致，常量与规则版本同源', async () => {
+  assert.equal(XIANGQI_NO_PROGRESS_LIMIT, ENGINE_NO_PROGRESS_LIMIT, '上限要与规则层同值')
+  assert.equal(XIANGQI_NO_PROGRESS_RULE_VERSION, xiangqi.version, '规则改版时这里必须一起改（1.0.0 还有三次重复判和）')
+  assert.equal(hasNoProgressRule({ id: 'xiangqi', version: '1.0.0' }), false, '1.0.0 的停滞还有第二条裁决，不出倒计时')
+  assert.equal(hasNoProgressRule({ id: 'xiangqi', version: xiangqi.version }), true)
+  assert.equal(hasNoProgressRule({ id: 'gomoku', version: xiangqi.version }), false)
+  assert.equal(hasNoProgressRule(null), false)
+
+  /* 实盘 136 手：黑方全程长将、红方只剩帅仕，逐手与规则层的 halfmoveClock 比对。 */
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/xiangqi-perpetual-check-loop.json', import.meta.url), 'utf8'))
+  let state = xiangqi.create()
+  const moves = []
+  const engineClocks = [0]
+  for (const entry of fixture.moves) {
+    state = xiangqi.apply(state, { from: entry.from, to: entry.to }, entry.player)
+    moves.push({ from: entry.from, to: entry.to })
+    engineClocks.push(state.halfmoveClock)
+  }
+  const progress = xiangqiNoProgress(moves)
+  assert.equal(progress.clocks.length, moves.length + 1)
+  assert.deepEqual(progress.clocks, engineClocks, '逐手计数必须与规则层一致')
+  assert.equal(progress.noProgressPlies, 30)
+  assert.equal(progress.remaining, 90)
+  assert.equal(progress.stalled, false, '30 手还没到「停滞」那一档')
+  assert.equal(noProgressAt(progress, 0), 0)
+  assert.equal(noProgressAt(progress, 136), 30)
+  assert.equal(noProgressAt(progress, 137), 30, '终局那一帧取最后一手的值')
+  assert.equal(noProgressAt(null, 3), 0)
+  assert.equal(noProgressAt({}, 3), 0)
+  assert.equal(noProgressAt(progress, -1), 0)
+})
+
+test('吃子与兵卒向前推进归零，过河兵横走不归零', () => {
+  /* 全部着法都过规则层校验，再逐手比对：口径不靠手写期望值，靠同一局回放。 */
+  const script = [
+    [0, 7, 1, 6, 1],    // 红兵向前 → 归零
+    [1, 1, 2, 3, 3],    // 黑马 → 1
+    [0, 6, 1, 5, 1],    // 红兵再向前（过河）→ 归零
+    [1, 1, 1, 2, 1],    // 黑车 → 1
+    [0, 5, 1, 5, 2],    // 过河兵横走：可逆，**不**归零 → 2
+    [1, 2, 1, 3, 1],    // 黑车 → 3
+    [0, 8, 2, 3, 2],    // 红炮以过河兵为架吃黑炮 → 归零
+  ]
+  let state = xiangqi.create()
+  const moves = []
+  const engineClocks = [0]
+  for (const [player, fromRow, fromCol, toRow, toCol] of script) {
+    const action = { from: { row: fromRow, col: fromCol }, to: { row: toRow, col: toCol } }
+    state = xiangqi.apply(state, action, player)
+    moves.push(action)
+    engineClocks.push(state.halfmoveClock)
+  }
+  assert.deepEqual(xiangqiNoProgress(moves).clocks, engineClocks)
+  assert.equal(engineClocks[0], 0)
+  assert.equal(engineClocks[1], 0, '兵向前推进归零')
+  assert.equal(engineClocks[2], 1)
+  assert.equal(engineClocks[3], 0, '兵再向前推进仍归零')
+  assert.equal(engineClocks[4], 1)
+  assert.equal(engineClocks[5], 2, '过河兵横走不算进展')
+  assert.equal(engineClocks[6], 3)
+  assert.equal(engineClocks[7], 0, '吃子归零')
+})
+
+test('无进展文案：正常推进给倒计时，走到一半改称停滞，越界安全', () => {
+  const game = { id: 'xiangqi', version: xiangqi.version }
+  assert.equal(noProgressClock(game, 0).text, '距判和还有 120 手')
+  assert.equal(noProgressClock(game, 0).detail, '无进展 0/120 半回合')
+  assert.equal(noProgressClock(game, 59).stalled, false)
+  assert.equal(noProgressClock(game, 60).stalled, true, '一半无进展即改称停滞')
+  assert.equal(noProgressClock(game, 60).text, '停滞待判和 · 还有 60 手')
+  assert.equal(noProgressClock(game, 120).remaining, 0)
+  assert.equal(noProgressClock(game, 120).text, '停滞待判和 · 还有 0 手')
+  assert.equal(noProgressClock(game, 999).remaining, 0, '超出上限不出现负数')
+  assert.equal(noProgressClock(game, -5).noProgressPlies, 0)
+  assert.equal(noProgressClock({ id: 'xiangqi', version: '1.0.0' }, 30), null)
+  assert.equal(noProgressSummary({ id: 'gomoku', version: '1.0.0' }, []), null)
+  /* 只有 p / P 是兵卒：兵卒向前推进算进展，车走同一条纵线不算 */
+  const onlyPawn = noProgressSummary(game, [
+    { from: { row: 7, col: 1 }, to: { row: 6, col: 1 } },
+    { from: { row: 10, col: 1 }, to: { row: 9, col: 1 } },
+  ])
+  assert.equal(onlyPawn.noProgressPlies, 1)
+})
+
+test('战报与离线回放都带上无进展计数，1.0.0 历史对局不带', () => {
+  const modern = { ...fixture, game: { ...fixture.game, version: '1.1.0' }, result: { kind: 'draw', winner: null, message: '和棋。' }, status: 'finished' }
+  const report = reportMarkdown(modern)
+  assert.match(report, /无进展计数：\d+\/120 半回合；距判和还有 \d+ 手/u)
+  assert.equal(/无进展计数/u.test(reportMarkdown(fixture)), false, '1.0.0 记录不列这个量')
+  const html = replayHtml(modern)
+  const embedded = JSON.parse(html.match(/__ARENA_DATA__=(.*?);<\/script>/su)[1])
+  assert.equal(embedded.noProgress.limit, 120)
+  /* 开局三手：炮（1）→ 马（2）→ 炮吃卒（归零）。 */
+  assert.deepEqual(embedded.noProgress.clocks, [0, 1, 2, 0])
+  assert.equal(embedded.noProgress.text, '距判和还有 120 手')
+  assert.equal(JSON.parse(replayHtml(fixture).match(/__ARENA_DATA__=(.*?);<\/script>/su)[1]).noProgress, undefined)
 })

@@ -5,7 +5,7 @@ import { lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/pro
 import { createHash, randomUUID } from 'node:crypto'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { movesOf, escapeHtml, actionLabel, playerSide, matchTitle, COMPACT_TURN_GAMES } from './presentation.mjs'
+import { movesOf, escapeHtml, actionLabel, playerSide, matchTitle, COMPACT_TURN_GAMES, noProgressSummary } from './presentation.mjs'
 import { replayData } from './replay/data.mjs'
 import { stepStarts, totalFrames } from './replay/timeline.mjs'
 import { LOUDNESS_VERSION, clipDataUrl, countSpeechLines, synthesizeSpeech } from './speech.mjs'
@@ -187,7 +187,10 @@ export function reportMarkdown(match) {
   for (const event of match.events) {
     if (event.type === 'request' || event.type === 'response') turns.set(event.turnId, { ...turns.get(event.turnId), ...event })
   }
-  return [`# ${matchTitle(match)}`, '', `规则：${match.game.description}（${match.game.version}）`, `创建：${match.createdAt}`, `当前调用配置：${executionLabel(match.config?.pace)}`, `状态：${match.status}`, `结果：${match.result?.message || '尚未结束'}`, `模型调用：${match.calls}；已知 Token：${match.tokens}${match.usageUnknown ? '（部分调用未报告用量）' : ''}`, '选手发言仅对观众可见。', '', ...match.players.map((player, i) => `${playerSide(match.game, i)}：${player.provider}/${player.model}；${player.name}；所选推理强度：${player.reasoningEffort || '模型默认'}`), '', ...movesOf(match).map(event => {
+  /* 象棋的无进展计数与画面同源：战报是复盘材料，只说结果不说「这盘已经多久没有实质进展」，
+     一局几小时的和棋在纸面上和「正常下完」看不出区别。1.0.0 不出（还有三次重复判和）。 */
+  const progress = noProgressSummary(match.game, movesOf(match).map(event => event.action))
+  return [`# ${matchTitle(match)}`, '', `规则：${match.game.description}（${match.game.version}）`, `创建：${match.createdAt}`, `当前调用配置：${executionLabel(match.config?.pace)}`, `状态：${match.status}`, `结果：${match.result?.message || '尚未结束'}`, `模型调用：${match.calls}；已知 Token：${match.tokens}${match.usageUnknown ? '（部分调用未报告用量）' : ''}`, ...progress ? [`无进展计数：${progress.noProgressPlies}/${progress.limit} 半回合；${progress.text}`] : [], '选手发言仅对观众可见。', '', ...match.players.map((player, i) => `${playerSide(match.game, i)}：${player.provider}/${player.model}；${player.name}；所选推理强度：${player.reasoningEffort || '模型默认'}`), '', ...movesOf(match).map(event => {
     const turn = turns.get(event.turnId)
     const who = wolf ? `${playerSide(match.game, event.player)} · ${match.players[event.player].name}` : match.players[event.player].name
     return `## 第 ${event.moveNumber} 手 · ${who}\n\n${actionLabel(event.action, match.game)} · ${event.elapsedMs} ms\n\n${executionLabel(turn?.pace)} · ${turn?.execution?.label || turn?.model?.reasoningEffort || '模型默认推理'}\n\n${event.speech}\n`
