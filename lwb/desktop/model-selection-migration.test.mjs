@@ -23,6 +23,9 @@ const PATCH = [
   '',
 ].join('\n')
 
+/** Windows has no POSIX permission bits: `stat().mode` is always 0o666 there. */
+const POSIX_MODES = process.platform !== 'win32'
+
 test('retired tier ids rewrite only the LWB default model entry', () => {
   const migrated = rewriteAgentDefaultModelPatch(PATCH)
   assert.ok(migrated.includes('    model: deepseek-v4.1-flash'))
@@ -59,8 +62,9 @@ test('profile preparation rewrites saved selections once and stays idempotent', 
   assert.ok((await readFile(patchFile, 'utf8')).includes('    model: deepseek-v4.1-flash'))
   const stored = JSON.parse(await readFile(taskModelFile, 'utf8'))
   assert.deepEqual(stored, { mode: 'specified', provider: 'lwb', model: 'deepseek-v4.1-flash' })
-  // The rewrite keeps the pack settings store's own permissions.
-  assert.equal((await stat(taskModelFile)).mode & 0o777, 0o600)
+  // The rewrite keeps the pack settings store's own permissions, where the
+  // platform has any. The idempotency assertions below still run everywhere.
+  if (POSIX_MODES) assert.equal((await stat(taskModelFile)).mode & 0o777, 0o600)
   // A second launch finds nothing left to change.
   assert.deepEqual(await migrateLwbModelSelection({ profileHome: home, productHome: home }), [])
 })
