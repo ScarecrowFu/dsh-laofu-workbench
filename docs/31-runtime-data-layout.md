@@ -1,6 +1,6 @@
 # 运行数据目录与原生附件
 
-更新日期：2026-09-26。当前路径如下；旧数据文件保留但不迁移或回退读取。
+更新日期：2026-10-11。当前路径如下；旧数据文件保留但不迁移或回退读取。
 
 ## 目录契约
 
@@ -16,13 +16,18 @@ lwb/local/current/
 ├── electron-user-data/       # 窗口状态
 └── pack-state/
     ├── ownership.json
-    ├── workspaces/spoken-video/
-    │   ├── settings/         # media.json、publish.json；不含模型密钥
-    │   └── data/             # 账号、项目、任务、媒体
-    └── retained/
+    ├── workspaces/           # 每个能力包一个专属工作区
+    │   ├── spoken-video/
+    │   │   ├── settings/     # media.json、publish.json；不含模型密钥
+    │   │   └── data/         # 账号、项目、任务、媒体
+    │   ├── ai-arena/
+    │   │   ├── settings/     # arena-voices.json（选手与主持人的音色匹配）
+    │   │   └── data/matches/<matchId>/   # match.json、audio/、离线回放与 MP4 产物
+    │   └── model-review/     # 题库、任务历史与 runs/<taskId>/<runId>/ 会话目录
+    └── retained/             # “清空业务数据”留下的可恢复副本
 ```
 
-文件按需创建；空白实例不预置账号、会话或能力包业务数据。能力包的根目录由宿主分配，口播模块通过同一 `spokenVideoDataPath()` 函数定位 `data/`。普通工作区的源码和用户要求 Agent 创建的文件仍属于用户自己的目录，不属于产品运行状态。
+目录按需创建，上面列出当前会出现的三个能力包工作区：`spoken-video` 与 `ai-arena` 随仓库提供，`model-review` 只在加载了私有会员能力包（官方发行版）时出现。空白实例不预置账号、会话或能力包业务数据。能力包的根目录由宿主分配，口播模块通过同一 `spokenVideoDataPath()` 函数定位 `data/`，竞技台把每场比赛落在 `<工作区>/data/matches/<matchId>/` 下（`match.json` 是比赛全部输入输出与导出索引，`audio/` 是逐句语音缓存，`replay.html` 与横竖屏 MP4 是导出产物），删掉某一场的目录即从列表消失、不影响其他场。普通工作区的源码和用户要求 Agent 创建的文件仍属于用户自己的目录，不属于产品运行状态。
 
 需要隔离并行运行的包可以在工作区内为每次运行申请一个目录（`sessions.create({ cwd })`，路径限定在包工作区内并逐段拒绝符号链接）。模型博主测评使用 `<包工作区>/runs/<taskId>/<runId>/`：一次测评一个任务目录，任务下每个模型会话一个目录，产物按会话归属。见 [包内会话与官方右栏](12-capability-packs.md#包内会话与官方右栏)。
 

@@ -29,7 +29,7 @@
 
 基础 Profile 不直接装配具体领域包。仓库随附的口播包会自动出现在市场，首次需手动加载。使用 `npm run pack:install -- <包目录>` 将一个符合契约的外部包源登记到被忽略的 `lwb/local/current/packs.json`，使其出现在市场中；登记默认不启用。工作台市场加载包后会把它记为启用，使其在后续启动时自动恢复；卸载会取消该状态。加载和卸载均会在当前页面更新浏览器模块与菜单。`npm run pack:remove -- <包 id>` 只删除登记，不会删除包源码或工作区数据。
 
-当前仓库提供 `packs/spoken-video/`（口播八步创作）与 `packs/ai-arena/`（五子棋模型竞技），业务说明见[口播指南](../docs/spoken-video.md)和[AI 竞技台](../docs/ai-arena.md)。新增业务可以继续以独立包接入；开发步骤见[能力包开发入门](../docs/develop-a-pack.md)，详细契约见[场景能力包文档](../docs/12-capability-packs.md)。
+当前仓库提供 `packs/spoken-video/`（口播八步创作）与 `packs/ai-arena/`（五子棋 / 中国象棋 / 狼人杀模型竞技），业务说明见[口播指南](../docs/spoken-video.md)和[AI 竞技台](../docs/ai-arena.md)。新增业务可以继续以独立包接入；开发步骤见[能力包开发入门](../docs/develop-a-pack.md)，详细契约见[场景能力包文档](../docs/12-capability-packs.md)。
 
 每个能力包加载后自动拥有专属工作区，无需创建普通对话。卸载保留目录、数据和连接配置；详情页提供分开的“清空业务数据”和“解除工作区注册”操作。见[专属工作区说明](../docs/12-capability-packs.md#工作区与执行作用域)。
 

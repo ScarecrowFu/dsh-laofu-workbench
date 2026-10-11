@@ -6,7 +6,7 @@
 |---|---|
 | 安装、配置并完成第一次创作 | [快速开始](quickstart.md) |
 | 了解口播流程、任务详情和音视频衔接 | [口播视频指南](spoken-video.md) |
-| 使用五子棋模型竞技 | [AI 竞技台](ai-arena.md) |
+| 使用 AI 竞技台（五子棋 / 中国象棋 / 狼人杀） | [AI 竞技台](ai-arena.md) |
 | 使用 Web / Desktop 或制作发行包 | [Desktop 与 Web](37-desktop-parity.md) |
 | 排查安装、模型、媒体或包加载问题 | [故障排查](troubleshooting.md) |
 | 查数据位置、备份和可恢复副本 | [运行数据目录](31-runtime-data-layout.md) |
