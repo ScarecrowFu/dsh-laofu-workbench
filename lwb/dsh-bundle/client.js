@@ -243,7 +243,7 @@ window.__ModuleLoader__.load({
     }
     function dshClientMetadata() {
       const locale = services?.locale?.getSnapshot?.()?.active || 'zh';
-      const version = globalThis.__DSH_CLIENT_VERSION__ || globalThis.__DSH_TRANSPORT__?.clientVersion || '0.2.0-rc.2';
+      const version = globalThis.__DSH_CLIENT_VERSION__ || globalThis.__DSH_TRANSPORT__?.clientVersion || '0.2.1-rc.2';
       return { version, locale, timezoneOffsetSeconds: -new Date().getTimezoneOffset() * 60 };
     }
     function dshCallbackOrigin() {

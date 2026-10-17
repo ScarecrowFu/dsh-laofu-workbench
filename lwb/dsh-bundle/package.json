@@ -13,12 +13,12 @@
     "./cordis.patch.yml": "./cordis.patch.yml"
   },
   "peerDependencies": {
-    "@deepseek-ai/schemastery": "3.18.4",
-    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-llm-pi-ai": "0.2.0-rc.2",
-    "@earendil-works/pi-ai": "0.87.1",
-    "@deepseek-ai/cordis": "4.0.4",
-    "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
+    "@deepseek-ai/schemastery": "3.18.5",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm-pi-ai": "0.2.1-rc.2",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.2",
     "@scitiger-ai/lwb-pack-sdk": "0.1.0"
   },
   "dsh": {

@@ -14,10 +14,12 @@ test('the pinned builder disables release signing, policy and updater only in un
   const adapted = adaptUnsignedBuilder(source)
   assert.match(adapted, /identity: unsigned \? '-' : macOSSigning/u)
   assert.match(adapted, /notarize: !unsigned/u)
-  assert.match(adapted, /env\.DSH_DESKTOP_UNSIGNED === '1' \? undefined : resolveDesktopPolicyEnvironment/u)
+  assert.match(adapted, /forceCodeSigning: !unsigned/u)
+  assert.match(adapted, /const policy = unsigned \? undefined : resolveDesktopPolicyEnvironment/u)
   assert.match(adapted, /const update = unsigned \? undefined : resolveDesktopAutoUpdateConfig/u)
   assert.match(adapted, /resolvedPlatform === 'win32' && env\.LWB_DESKTOP_PORTABLE !== '1'/u)
-  assert.throws(() => adaptUnsignedBuilder(source.replace('forceCodeSigning: true,', 'forceCodeSigning: false,')), /no longer matches/u)
+  assert.match(adapted, /resolvedPlatform !== 'win32' \|\| env\.LWB_DESKTOP_PORTABLE === '1'/u)
+  assert.throws(() => adaptUnsignedBuilder(source.replace("const unsigned = env.DSH_DESKTOP_UNSIGNED === '1'", 'const unsigned = false')), /no longer matches/u)
 })
 
 test('preparation keeps official runtime checks and uses verified ad-hoc signatures', async () => {

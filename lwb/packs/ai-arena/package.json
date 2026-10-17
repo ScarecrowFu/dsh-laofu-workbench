@@ -16,7 +16,7 @@
     "lucide-react": "0.468.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.2",
     "@scitiger-ai/lwb-pack-sdk": "0.1.0"
   },
   "dsh": {

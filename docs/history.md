@@ -44,7 +44,10 @@
 
 | 2026-10-11 起 | 象棋的终局图层：观众看得出「为什么赢」 | 五子棋终局会在棋盘上点亮五连（金带 + 五环），象棋此前只有判词——观战页、离线回放与视频都写「将死获胜 / 困毙获胜」，但盘上没有任何证据，观众无法一眼看出是哪一手、黑方哪位将帅再也动不了。象棋没有连子（动作是 `from/to`，`winningRun` 对它恒为 `null`），所以单有一份 `presentation.xiangqiFinaleMark`：胜法直接取**规则层自己的裁决键** `state.result`（`capture-general` / `checkmate` / `stalemate`）、胜方取 `result.winner`，展示层不重推规则，1.0.0 的历史对局只要 `state.result` 是胜法也照画；败方将帅的位置从落子序列现推（吃将那一档它已经不在盘上，只给制胜手、不凭空造坐标）。棋盘上只画两件事——制胜一手的起点与落点各一环（金）、败方将帅另挂一环（红，与「将军」那条红环同色），同行 / 同列时再铺一条金线；马走日、相走田、仕走斜格不连线（直线连过去会骗人）。**和棋与判负不画图层**（和棋没有胜因，判负裁决的是协议遵守度而非棋力，借用胜局图层会读成棋力失败，与 `finaleInfo` 配色档同规矩），`xiangqiBoardSvg` 只认那三种胜法、误传别的形状也不画。三处同源：观战页（`client-source.mjs`）与离线回放 / 视频的数据投影（`replay/data.mjs` 新增 `finaleMark`，与 `winRun` 并列、恒在但可为 `null`）调同一个函数，画面侧（`replay/markup.mjs` / `replay/app.js`）只按帧点亮（动画节奏与五子棋那套对齐）。夹具 `test/fixtures/xiangqi-checkmate-game.json`（25 手将死）与 `xiangqi-stalemate-game.json`（105 手困毙）是固定种子跑出来的合法终局，测试先用规则引擎回放校验；`test/presentation.test.mjs` 守形状与画层、`test/replay.test.mjs` 守逐帧与和棋帧、`test/client-scope.test.mjs` 守三处同源与产物重建（新增用例 5 条，203/203 通过）。纯显示层改动，不动规则版本、`match.json` 与 RPC。见[AI 竞技台](ai-arena.md#画面与视频) |
 
-旧记录的测试数量、版本、路径和夹具只描述当时状态，不能替代当前 UI、付费服务或签名验收；淘汰实现不构成兼容承诺。
+| 2026-10-17 起 | DSH 0.2.1-rc.2 基线 | 上游 1925 commits 跨度，运行时接缝全部为加法：Loader `builtins.group`、`createRuntimeResolution` / `loadProfileDirectory`、`clientModules.graph()` 形状、cordis `fiber` 事件与 `inertia` 均未变，官方插槽目录 90 → 100 条且本项目所用的座位未动（仅 standardProps 增加 `useRemoteAccess` / `useSessionAccess` / `useWorkspaceAccess`）。**唯一的破坏点是桌面打包**：上游已原生支持未签名构建（签名、公证、staple、更新器全部由 `DSH_DESKTOP_UNSIGNED` 管），`lwb/desktop/unsigned-policy.mjs` 原来那 12 条文本替换有一半在给已存在的代码再打一次；改为「逐条断言上游未签名行为 + 只补 LWB 自己的便携包差异（跳过 NSIS、跳过依赖收集、任意平台未签名均不解析策略）」，签名准备块的结构化定位放宽到 `&&` 复合条件。见[基座升级](08-base-lock.md) |
+
+旧记录的测试数量、版本、路径和夹具只描述当时状态，不能替代当前 UI、付费服务或签名验收；淘汰实现不构成兼容承诺。 |
+
 
 ## 查阅原文
 

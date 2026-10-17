@@ -1,17 +1,17 @@
 # Harness 基座锁定与升级核验
 
-当前基线为 DeepSeek Harness `dsh-v0.2.0-rc.2`（developer preview）。必须按精确 commit 复现，不跟随浮动分支或 tag 自动更新。
+当前基线为 DeepSeek Harness `dsh-v0.2.1-rc.2`（developer preview）。必须按精确 commit 复现，不跟随浮动分支或 tag 自动更新。
 
 ## 锁定锚点
 
 | 项 | 值 |
 |---|---|
 | 上游仓库 | `https://github.com/deepseek-ai/deepseek-harness.git` |
-| tag | `dsh-v0.2.0-rc.2` |
-| commit | `639ed015397290b3745d163aafe02ffee4aa3f84` |
-| 核验日期 | `2026-09-30` |
+| tag | `dsh-v0.2.1-rc.2` |
+| commit | `687f282e8625c6b8d11ff58211a90524be2e4317` |
+| 核验日期 | `2026-10-17` |
 | Node | `^22.19.0 \|\| >=24.0.0` |
-| 上游包管理器 | `pnpm@11.7.0` |
+| 上游包管理器 | `pnpm@11.28.5` |
 
 机器事实源是 [UPSTREAM.lock.json](../lwb/UPSTREAM.lock.json)。锁定便于审查和回滚，不代表上游已稳定。首次安装使用[快速开始](quickstart.md)。
 
@@ -39,6 +39,7 @@ npm run test:integration
 - `ui-plugin-manager` 的 `sidebar.panellist` / `main` 配对、AppFrame 默认对话和 layout 方法。
 - 官方右栏可见性、`main.conversation` 优先级覆盖、`uiSession.adapter.current` 与独立 composer。
 - Desktop 内存入口策略的精确 `needsWelcome` 谓词和调用点。
+- 桌面未签名打包：上游 `electron-builder-config.mjs` 的 unsigned 分支与 `prepare-dsh.ts` 的签名准备块。上游自 0.2.1 起原生支持未签名构建，适配器只应保留 LWB 自己的便携包差异；替换文本失配必须失败，不能静默跳过。
 
 失败时修正当前 LWB 接缝，不静默打补丁或回退旧 API。架构见[总体架构](01-architecture.md)，UI 约定见[能力包契约](12-capability-packs.md)。付费模型/媒体、计费和签名发行需单独验收；历史测试数量不代表当前结果。
 
