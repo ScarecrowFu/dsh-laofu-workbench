@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import { once } from 'node:events'
-import { requestPackagedHost } from './pack-smoke.mjs'
+import { acceptanceBudgets, requestPackagedHost } from './pack-smoke.mjs'
 
 test('packaged host requests bypass global download agents and preserve cookies and JSON', async () => {
   const server = http.createServer((req, res) => {
@@ -47,4 +47,17 @@ test('an unresponsive acceptance endpoint is aborted at its deadline', async () 
     server.closeAllConnections()
     await new Promise(resolve => server.close(resolve))
   }
+})
+
+test('cross-architecture acceptance widens the first-launch budgets', () => {
+  const native = acceptanceBudgets({ platform: 'darwin', arch: 'arm64' }, { platform: 'darwin', arch: 'arm64' })
+  assert.equal(native.crossArch, false)
+  assert.equal(native.start, 30_000)
+
+  const rosetta = acceptanceBudgets({ platform: 'darwin', arch: 'x64' }, { platform: 'darwin', arch: 'arm64' })
+  assert.equal(rosetta.crossArch, true)
+  assert.ok(rosetta.start >= 120_000, 'a first Rosetta launch must not be mistaken for a hung host')
+  assert.ok(rosetta.ready >= native.ready)
+
+  assert.equal(acceptanceBudgets(undefined).crossArch, false, 'an unknown target keeps the native budgets')
 })

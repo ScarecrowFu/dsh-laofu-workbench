@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import {
   artifactDirectory, probeDownload, resolveBuildNumber, resolveCommercialPackDir,
-  resolveEditionName, resolveElectronMirror, resolveHostTarget,
+  resolveEditionName, resolveElectronMirror, resolveHostTarget, resolveTargetArch,
 } from '../lwb/desktop/package-inputs.mjs'
 import { artifactSnapshot, reportArtifacts } from '../lwb/desktop/package-report.mjs'
 
@@ -42,6 +42,9 @@ Options:
   --community            shorthand for --edition community
   --host <mac|win>       refuse to run unless the build host matches
                          (--dry-run still prints that platform's command)
+  --arch <arm64|x64>     target architecture; default is the build host's.
+                         Windows always targets x64; macOS x64 builds on Apple
+                         Silicon run the x64 Electron through Rosetta.
   --build-number <n>     test build number; default is the local date (YYYYMMDD)
   --signed               use the official signing environment instead of an unsigned test build
   --release              name the artifact as a release build (no -test.<n> suffix)
@@ -57,6 +60,7 @@ Options:
 Environment:
   LWB_COMMERCIAL_PACK_DIR   commercial pack checkout; discovered beside this repository when unset
   LWB_DESKTOP_BUILD_NUMBER  test build number; the local date is used when unset
+  LWB_DESKTOP_TARGET_ARCH   same as --arch, and what the option sets
   ELECTRON_MIRROR           Electron download source; only probed when unset
   LWB_ELECTRON_MIRROR=off   keep the default release host without probing it
   DSH_DESKTOP_NPM_REGISTRY  same as --npm-registry, and what the option sets
@@ -92,14 +96,19 @@ async function resolveInputs(values, manifest) {
   const expected = values.host === undefined ? undefined : values.host === 'mac' ? 'darwin' : 'win32'
   // A named host also names the target, so --dry-run can print another
   // platform's command from any build machine.
-  const target = resolveHostTarget(expected ?? process.platform, process.arch)
-  if (expected !== undefined && expected !== process.platform) {
+  const hostMatches = expected === undefined || expected === process.platform
+  if (!hostMatches) {
     const message = `--host ${values.host} needs a ${expected} build host, but this host is ${process.platform}. `
-      + 'Windows packages are built on Windows, locally or on the release runner.'
+      + 'Windows packages are built on Windows, locally or on the release runner; macOS packages on a Mac.'
     if (values['dry-run'] !== true) fail(message)
     console.log(`Note: ${message}`)
     console.log('      Printing the command this host would refuse to run.\n')
   }
+  const targetPlatform = expected ?? process.platform
+  // Host feasibility is checked only for a build that runs here; a dry-run for
+  // another host needs the requested architecture to be valid, not buildable.
+  const arch = resolveTargetArch(targetPlatform, values.arch, hostMatches ? process.arch : undefined)
+  const target = resolveHostTarget(targetPlatform, arch)
   const pack = edition === 'commercial'
     ? resolveCommercialPackDir({
       env: process.env,
@@ -117,7 +126,7 @@ async function resolveInputs(values, manifest) {
   const mirror = values['no-mirror-fallback']
     ? { mirror: process.env.ELECTRON_MIRROR?.trim() || undefined, source: 'no probe requested' }
     : await resolveElectronMirror({ env: process.env, version: electron, probe: url => probeDownload(url) })
-  return { edition, target, pack, buildNumber, electron, mirror, npmRegistry }
+  return { edition, arch, target, pack, buildNumber, electron, mirror, npmRegistry }
 }
 
 /**
@@ -155,6 +164,7 @@ function packagingCommand(values, inputs) {
   const env = {
     ...process.env,
     LWB_DESKTOP_BUILD_NUMBER: inputs.buildNumber,
+    LWB_DESKTOP_TARGET_ARCH: inputs.arch,
     ...(inputs.pack === undefined ? {} : { LWB_COMMERCIAL_PACK_DIR: inputs.pack.directory }),
     ...(inputs.mirror.mirror === undefined ? {} : { ELECTRON_MIRROR: inputs.mirror.mirror }),
     ...(inputs.npmRegistry === undefined ? {} : { DSH_DESKTOP_NPM_REGISTRY: inputs.npmRegistry }),
@@ -164,7 +174,7 @@ function packagingCommand(values, inputs) {
 
 /** Human-readable environment prefix that reproduces the run by hand. */
 function reproduction(env, forward) {
-  const names = ['ELECTRON_MIRROR', 'DSH_DESKTOP_NPM_REGISTRY', 'LWB_COMMERCIAL_PACK_DIR', 'LWB_DESKTOP_BUILD_NUMBER']
+  const names = ['ELECTRON_MIRROR', 'DSH_DESKTOP_NPM_REGISTRY', 'LWB_COMMERCIAL_PACK_DIR', 'LWB_DESKTOP_BUILD_NUMBER', 'LWB_DESKTOP_TARGET_ARCH']
   const prefix = names.filter(name => env[name] !== undefined).map(name => `${name}=${env[name]}`)
   const command = `npm run package:desktop -- ${forward.join(' ')}`
   return prefix.length === 0 ? command : `${prefix.join(' \\\n  ')} \\\n${command}`
@@ -178,6 +188,7 @@ async function main() {
       community: { type: 'boolean' },
       host: { type: 'string' },
       'build-number': { type: 'string' },
+      arch: { type: 'string' },
       signed: { type: 'boolean' },
       release: { type: 'boolean' },
       dir: { type: 'boolean' },
@@ -209,7 +220,7 @@ async function main() {
 
   if (values['dry-run']) {
     console.log('\nEnvironment overrides:')
-    for (const name of ['LWB_DESKTOP_BUILD_NUMBER', 'LWB_COMMERCIAL_PACK_DIR', 'ELECTRON_MIRROR', 'DSH_DESKTOP_NPM_REGISTRY']) {
+    for (const name of ['LWB_DESKTOP_BUILD_NUMBER', 'LWB_DESKTOP_TARGET_ARCH', 'LWB_COMMERCIAL_PACK_DIR', 'ELECTRON_MIRROR', 'DSH_DESKTOP_NPM_REGISTRY']) {
       console.log(`  ${name}=${command.env[name] ?? '(unset)'}`)
     }
     console.log(`\nCommand:\n  npm ${command.args.join(' ')}`)

@@ -20,6 +20,8 @@
     "package:plan": "node lwb/desktop/package.mjs --plan",
     "package:oneclick": "node scripts/package-desktop.mjs",
     "package:mac": "node scripts/package-desktop.mjs --host mac",
+    "package:mac:arm64": "node scripts/package-desktop.mjs --host mac --arch arm64",
+    "package:mac:x64": "node scripts/package-desktop.mjs --host mac --arch x64",
     "package:win": "node scripts/package-desktop.mjs --host win",
     "snapshot:product": "node scripts/pack-product-source.mjs",
     "setup": "node scripts/setup-upstream.mjs",

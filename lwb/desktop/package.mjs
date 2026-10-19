@@ -1,5 +1,5 @@
 /** Package LWB around the unmodified official shell and verified runtime. */
-import { execFile, spawn } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import { cp, mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
@@ -11,7 +11,7 @@ import { desktopPnpmInvocation } from './toolchain.mjs'
 import { loadEditionManifest, resolveEdition } from './editions.mjs'
 import { assembleProductPayload } from './payload.mjs'
 import { relinkDarwinLibraries } from './darwin-library-paths.mjs'
-import { unsignedPackagingEnvironment } from './package-inputs.mjs'
+import { payloadInstallArguments, resolveHostTarget, resolveTargetArch, unsignedPackagingEnvironment } from './package-inputs.mjs'
 
 assertUpstream()
 const { values } = parseArgs({
@@ -20,12 +20,26 @@ const { values } = parseArgs({
     check: { type: 'boolean' },
     plan: { type: 'boolean' },
     edition: { type: 'string' },
+    arch: { type: 'string' },
     unsigned: { type: 'boolean' },
     portable: { type: 'boolean' },
     release: { type: 'boolean' },
   },
 })
-if (!['darwin', 'win32'].includes(process.platform)) throw new Error('Official Desktop packaging supports macOS and Windows build hosts.')
+/**
+ * macOS x64 packaging executes the target Electron while preparing the runtime,
+ * so an Apple Silicon host needs Rosetta 2.
+ * @param targetArch - Architecture being packaged.
+ */
+function assertRosetta(targetArch) {
+  if (process.platform !== 'darwin' || targetArch !== 'x64' || process.arch === 'x64') return
+  try {
+    execFileSync('/usr/bin/arch', ['-x86_64', '/usr/bin/true'], { stdio: 'ignore' })
+  } catch {
+    throw new Error('macOS x64 packaging on Apple Silicon needs Rosetta 2; install it with "softwareupdate --install-rosetta --agree-to-license".')
+  }
+}
+const arch = resolveTargetArch(process.platform, values.arch ?? process.env.LWB_DESKTOP_TARGET_ARCH, process.arch)
 const execFileAsync = promisify(execFile)
 // A capability pack ships only when this repository owns its manifest. A pack
 // cloned or copied into lwb/packs/ is a local installation, not product source;
@@ -57,6 +71,8 @@ if (values.plan) {
   console.log(`  productName ${edition.productName} | productHome ${edition.productHome} | scheme ${edition.protocolScheme}://`)
   process.exit(0)
 }
+// Only a real package preparation executes the target Electron; a plan does not.
+assertRosetta(arch)
 const appRoot = join(DSH_ROOT, 'apps/desktop')
 const { loadDesktopPackageEnvironment, validateDesktopPackageEnvironment } = await import(pathToFileURL(join(appRoot, 'scripts/desktop-package-environment.mjs')))
 const unsigned = values.unsigned === true
@@ -82,8 +98,10 @@ if (!unsigned && (env.DSH_DESKTOP_AUTO_UPDATE_ENV !== 'test' || !env.DOWNLOAD_TE
 for (const key of ['DOWNLOAD_TEST_ORIGIN', 'DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN']) {
   if (env[key] && /(^|\.)deepseek\.com$/u.test(new URL(env[key]).hostname)) throw new Error(`LWB requires a product-owned ${key}`)
 }
-const arch = process.platform === 'win32' ? 'x64' : process.arch
 Object.assign(env, { DSH_DESKTOP_TARGET_PLATFORM: process.platform, DSH_DESKTOP_TARGET_ARCH: arch })
+if (process.platform === 'darwin' && arch !== process.arch) {
+  console.log(`Packaging mac-${arch} on an ${process.arch} host through Rosetta; the first launch of the bundle is slower than native.`)
+}
 if (!unsigned) validateDesktopPackageEnvironment(env, { platform: process.platform, arch })
 if (values.check) { console.log(`LWB packaging environment passed for edition "${edition.name}" (${packList}).`); process.exit(0) }
 const run = (command, args, cwd, environment = env) => new Promise((resolve, reject) => {
@@ -101,6 +119,10 @@ const payload = join(stage, 'product')
 await mkdir(payload)
 const digest = createHash('sha256')
   .update(UPSTREAM.commit)
+  // The target fixes the bundled interpreter and native-dependency
+  // architecture; without it one architecture could reuse the other's
+  // writable runtime copy under the same build id.
+  .update(`target:${resolveHostTarget(process.platform, arch)}`)
   .update(`edition:${edition.name}`)
   .update(`product:${edition.productName}:${edition.productHome}:${edition.protocolScheme}`)
 // Packs come only from the resolved edition; see lwb/desktop/payload.mjs.
@@ -116,8 +138,11 @@ for (const path of ['bootstrap.mjs', 'entry-policy.mjs', 'registry-migration.mjs
 for (const path of ['package.json', 'package-lock.json']) await cp(join(LWB_RUNTIME.projectRoot, path), join(payload, path))
 // Install only the product's declared production dependencies; never package
 // checkout node_modules, credentials, local state, or upstream source backups.
+// A cross-architecture build selects this target's optional packages instead of
+// the host's, so the payload never carries the other architecture's binaries.
 if (!process.env.npm_execpath) throw new Error('Run Desktop packaging through npm run package:desktop.')
-await run(process.execPath, [process.env.npm_execpath, 'ci', '--omit=dev', '--no-audit', '--no-fund'], payload)
+await run(process.execPath, [process.env.npm_execpath, 'ci', '--omit=dev', '--no-audit', '--no-fund',
+  ...payloadInstallArguments(process.platform, arch)], payload)
 // The product signature below carries the hardened runtime, which refuses
 // relative library paths; native dependencies must load from their own
 // directory. The rewritten bytes are part of the build id, so an existing
@@ -143,10 +168,14 @@ const identity = {
   artifactName: edition.artifactName.replace('.${ext}', `${portable ? '-portable' : ''}${unsigned ? '-unsigned' : ''}.${'${ext}'}`),
   protocolScheme: edition.protocolScheme,
   portable,
+  targetPlatform: process.platform,
+  targetArch: arch,
   ...(unsigned ? { unsigned: true, version: release ? productVersion : `${productVersion}-test.${buildNumber}`, output: join(LWB_RUNTIME.projectRoot, '.tooling', 'artifacts', edition.name, `${process.platform === 'darwin' ? 'mac' : 'win'}-${arch}`) } : {}),
 }
 const config = join(stage, 'electron-builder.config.mjs')
 await writeFile(config, `export default await (await import(${JSON.stringify(new URL('./package-config.mjs', import.meta.url).href)})).createLwbPackageConfig(${JSON.stringify(payload)}, ${JSON.stringify(identity)})\n`)
-await pnpm(['exec', 'electron-builder', '--config', config, '--publish', 'never', ...(values.dir ? ['--dir'] : [])])
+// The target architecture is explicit: the builder otherwise follows the
+// process architecture, which is the build host rather than the package.
+await pnpm(['exec', 'electron-builder', '--config', config, '--publish', 'never', `--${arch}`, ...(values.dir ? ['--dir'] : [])])
 assertUpstream()
 console.log(`LWB Desktop package created for edition "${edition.name}" through the official builder; no artifacts were published.`)

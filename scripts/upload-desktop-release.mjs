@@ -9,7 +9,7 @@ const { values } = parseArgs({ options: {
   edition: { type: 'string' }, target: { type: 'string' }, tag: { type: 'string' },
 } })
 const { edition, target, tag } = values
-if (edition !== 'commercial' || !['win-x64', 'mac-arm64'].includes(target)) throw new Error('Official release uploads require the commercial build and a supported target')
+if (edition !== 'commercial' || !['win-x64', 'mac-arm64', 'mac-x64'].includes(target)) throw new Error('Official release uploads require the commercial build and a supported target')
 const directory = resolve('.tooling/artifacts', edition, target)
 const report = JSON.parse(await readFile(join(directory, 'build-report.json'), 'utf8'))
 if (tag !== `v${report.version}` || report.edition !== edition || report.target !== target) throw new Error('Release tag and build report must match')

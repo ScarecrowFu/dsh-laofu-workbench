@@ -5,9 +5,9 @@ import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 
 const { values } = parseArgs({ options: { edition: { type: 'string' }, target: { type: 'string' } } })
-if (!['community', 'commercial'].includes(values.edition) || !['mac-arm64', 'win-x64'].includes(values.target)) throw new Error('Specify a Desktop edition and supported test target')
+if (!['community', 'commercial'].includes(values.edition) || !['mac-arm64', 'mac-x64', 'win-x64'].includes(values.target)) throw new Error('Specify a Desktop edition and supported test target')
 const directory = resolve('.tooling', 'artifacts', values.edition, values.target)
-const extensions = values.target === 'mac-arm64' ? ['.zip'] : ['.exe']
+const extensions = values.target.startsWith('mac-') ? ['.zip'] : ['.exe']
 const files = (await readdir(directory)).filter(file => extensions.some(ext => file.endsWith(ext))).sort()
 for (const ext of extensions) if (!files.some(file => file.endsWith(ext))) throw new Error(`Missing ${ext} Desktop artifact`)
 const records = []

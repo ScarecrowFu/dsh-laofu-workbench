@@ -3,8 +3,8 @@ import { basename, join } from 'node:path'
 import test from 'node:test'
 import {
   COMMERCIAL_PACK_ID, ELECTRON_MIRROR_FALLBACK, artifactDirectory, artifactExtensions, commercialPackCandidates,
-  releaseChecksumUrl, resolveBuildNumber, resolveCommercialPackDir, resolveEditionName, resolveElectronMirror, resolveHostTarget,
-  unpackedApp, unsignedPackagingEnvironment,
+  payloadInstallArguments, releaseChecksumUrl, resolveBuildNumber, resolveCommercialPackDir, resolveEditionName,
+  resolveElectronMirror, resolveHostTarget, resolveTargetArch, unpackedApp, unsignedPackagingEnvironment,
 } from './package-inputs.mjs'
 
 const ROOT = '/repo'
@@ -43,6 +43,31 @@ test('the target follows the build host and rejects unsupported hosts', () => {
   assert.throws(() => resolveHostTarget('linux', 'x64'), /supports macOS and Windows build hosts/u)
 })
 
+test('the target architecture follows the host unless one is requested', () => {
+  assert.equal(resolveTargetArch('darwin', undefined, 'arm64'), 'arm64')
+  assert.equal(resolveTargetArch('darwin', 'arm64', 'arm64'), 'arm64')
+  assert.equal(resolveTargetArch('darwin', 'x64', 'arm64'), 'x64', 'Apple Silicon builds x64 through Rosetta')
+  assert.equal(resolveTargetArch('darwin', undefined, 'x64'), 'x64')
+  assert.equal(resolveTargetArch('win32', undefined, 'x64'), 'x64')
+  assert.equal(resolveTargetArch('win32', 'x64', 'x64'), 'x64')
+  assert.equal(resolveTargetArch('darwin', 'arm64', undefined), 'arm64', 'a dry-run for another host skips feasibility')
+})
+
+test('the target architecture rejects what the platform cannot produce', () => {
+  assert.throws(() => resolveTargetArch('darwin', 'arm64', 'x64'), /Apple Silicon build host/u)
+  assert.throws(() => resolveTargetArch('win32', 'arm64', 'x64'), /x64 only/u)
+  assert.throws(() => resolveTargetArch('win32', 'x64', 'arm64'), /Windows x64 build host/u)
+  assert.throws(() => resolveTargetArch('linux', 'x64', 'x64'), /macOS and Windows build hosts/u)
+  assert.throws(() => resolveTargetArch('darwin', 'ia32', 'arm64'), /Unknown Desktop architecture "ia32"/u)
+})
+
+test('cross-architecture payload installs select the target optional dependencies', () => {
+  assert.deepEqual(payloadInstallArguments('darwin', 'arm64', 'darwin', 'arm64'), [], 'a native build needs no override')
+  assert.deepEqual(payloadInstallArguments('win32', 'x64', 'win32', 'x64'), [])
+  assert.deepEqual(payloadInstallArguments('darwin', 'x64', 'darwin', 'arm64'), ['--os=darwin', '--cpu=x64'])
+  assert.deepEqual(payloadInstallArguments('win32', 'x64', 'darwin', 'arm64'), ['--os=win32', '--cpu=x64'])
+})
+
 test('artifact paths and extensions follow the resolved target', () => {
   assert.equal(artifactDirectory(ROOT, 'commercial', 'mac-arm64'), join(ROOT, '.tooling', 'artifacts', 'commercial', 'mac-arm64'))
   assert.deepEqual(artifactExtensions('mac-arm64'), ['.zip', '.dmg'])
@@ -55,6 +80,9 @@ test('the unpacked app path follows the target layout', () => {
   assert.equal(mac.app, join('/out', 'mac-arm64', 'mac-arm64', 'Laofu Workbench.app'))
   assert.equal(mac.manifest, join(mac.app, 'Contents', 'Resources', 'lwb-product', 'build.json'))
   assert.equal(mac.launch, `open "${mac.app}"`)
+
+  const macX64 = unpackedApp(join('/out', 'mac-x64'), 'mac-x64', 'Laofu Workbench')
+  assert.equal(macX64.app, join('/out', 'mac-x64', 'mac', 'Laofu Workbench.app'), 'electron-builder names the x64 bundle directory `mac`')
 
   const win = unpackedApp(join('/out', 'win-x64'), 'win-x64', 'Laofu Workbench')
   assert.equal(win.app, join('/out', 'win-x64', 'win-unpacked', 'Laofu Workbench.exe'))

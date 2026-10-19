@@ -71,17 +71,78 @@ export function resolveEditionName(value, fallback = 'commercial') {
 }
 
 /**
- * Resolve the Desktop target of the build host. The official preparation binds
- * the target platform to the host, so cross-building is not supported: a Windows
- * package is built on Windows, on the release runner or a local Windows host.
- * @param platform - `process.platform` of the build host.
- * @param arch - `process.arch` of the build host.
+ * Resolve the Desktop target name of one build host and target architecture.
+ *
+ * The build host runs the packaging toolchain; the architecture is what the
+ * package contains. macOS produces x64 on an Intel host, or on an Apple Silicon
+ * host through Rosetta; arm64 needs an Apple Silicon host. Windows always
+ * targets x64.
+ * @param platform - Build-host platform (`process.platform`).
+ * @param arch - Target architecture (`arm64` or `x64`).
  * @returns the supported target name.
  */
 export function resolveHostTarget(platform, arch) {
   if (platform === 'darwin') return arch === 'x64' ? 'mac-x64' : 'mac-arm64'
   if (platform === 'win32') return 'win-x64'
   throw new Error(`Desktop packaging supports macOS and Windows build hosts; this host is ${platform}.`)
+}
+
+/** Architectures a Desktop package may target. */
+export const TARGET_ARCHES = ['arm64', 'x64']
+
+/**
+ * Resolve the architecture to package for one build host.
+ *
+ * Without an explicit request the target follows the host, except that Windows
+ * is always x64. An explicit request is validated against what the platform can
+ * actually produce: arm64 needs an Apple Silicon host, while x64 stays buildable
+ * on Apple Silicon because the preparation runs the target Electron under
+ * Rosetta. Passing no host architecture skips the feasibility checks, which is
+ * what a `--dry-run` for another host needs.
+ * @param platform - Build-host platform (`darwin` or `win32`).
+ * @param requested - `--arch` value, or undefined for the host default.
+ * @param hostArch - Build-host architecture; undefined skips host feasibility.
+ * @returns the validated target architecture.
+ */
+export function resolveTargetArch(platform, requested, hostArch) {
+  if (platform !== 'darwin' && platform !== 'win32') {
+    throw new Error(`Desktop packaging supports macOS and Windows build hosts; this host is ${platform}.`)
+  }
+  const value = (requested ?? '').trim()
+  const arch = value === '' ? (platform === 'win32' ? 'x64' : hostArch ?? 'arm64') : value
+  if (!TARGET_ARCHES.includes(arch)) {
+    throw new Error(`Unknown Desktop architecture "${arch}"; expected one of ${TARGET_ARCHES.join(', ')}.`)
+  }
+  if (platform === 'win32' && arch !== 'x64') {
+    throw new Error('Windows Desktop packaging targets x64 only.')
+  }
+  if (hostArch === undefined || hostArch === null) return arch
+  if (platform === 'win32' && hostArch !== 'x64') {
+    throw new Error(`Windows Desktop packaging requires a Windows x64 build host; this host is Windows ${hostArch}.`)
+  }
+  if (platform === 'darwin' && arch === 'arm64' && hostArch !== 'arm64') {
+    throw new Error('mac-arm64 requires an Apple Silicon build host.')
+  }
+  return arch
+}
+
+/**
+ * Extra `npm ci` arguments that install optional dependencies for the target.
+ *
+ * npm selects optional platform packages from the running process architecture,
+ * so a cross-architecture build would otherwise install the host's binaries —
+ * for example an arm64 Remotion compositor inside an x64 app. Both flags make
+ * the install resolve that target's packages, and are omitted for a native
+ * build where they would change nothing.
+ * @param platform - Target platform.
+ * @param arch - Target architecture.
+ * @param hostPlatform - Build-host platform.
+ * @param hostArch - Build-host architecture.
+ * @returns arguments to append, or an empty array for a native build.
+ */
+export function payloadInstallArguments(platform, arch, hostPlatform = process.platform, hostArch = process.arch) {
+  if (platform === hostPlatform && arch === hostArch) return []
+  return [`--os=${platform}`, `--cpu=${arch}`]
 }
 
 /**
@@ -115,7 +176,9 @@ export function artifactDirectory(projectRoot, edition, target) {
  */
 export function unpackedApp(directory, target, productName) {
   if (target.startsWith('mac-')) {
-    const app = join(directory, target, `${productName}.app`)
+    // electron-builder names the x64 bundle directory `mac` and the arm64 one
+    // `mac-arm64`; both sit inside the target's artifact directory.
+    const app = join(directory, target === 'mac-arm64' ? 'mac-arm64' : 'mac', `${productName}.app`)
     return { app, manifest: join(app, 'Contents', 'Resources', 'lwb-product', 'build.json'), launch: `open "${app}"` }
   }
   const app = join(directory, 'win-unpacked', `${productName}.exe`)

@@ -28,7 +28,42 @@ export function requestPackagedHost(address, { method = 'GET', headers, body, ti
   })
 }
 
-export async function verifyPackagedPacks({ executable, resources }) {
+/**
+ * Acceptance time budgets for one packaged app.
+ *
+ * A cross-architecture bundle starts through Rosetta on macOS. Its first launch
+ * translates a freshly assembled Electron bundle and can take tens of seconds,
+ * so the native preparation budget would abort a healthy build.
+ * @param target - Package platform and architecture, when known.
+ * @param host - Host platform and architecture (`process` by default).
+ * @returns the cross-architecture mode and the budgets it needs.
+ */
+export function acceptanceBudgets(target, host = process) {
+  const crossArch = target?.platform !== undefined && target?.arch !== undefined
+    && (target.platform !== host.platform || target.arch !== host.arch)
+  const scale = crossArch ? 4 : 1
+  return {
+    crossArch,
+    start: 30_000 * scale,
+    ready: 120_000 * scale,
+    call: 30_000 * scale,
+    auth: 10_000 * scale,
+  }
+}
+
+/**
+ * Exercise the packaged host, capability packs and upgrade paths without using
+ * checkout dependencies or the user's product data.
+ * @param options - Packaged executable, its resources directory, and its target.
+ * @param options.executable - Packaged application executable.
+ * @param options.resources - Packaged `Resources` directory.
+ * @param options.target - Target platform and architecture, when known.
+ */
+export async function verifyPackagedPacks({ executable, resources, target }) {
+  const budget = acceptanceBudgets(target)
+  if (budget.crossArch) {
+    console.log(`Packaged acceptance runs ${target.platform}-${target.arch} on ${process.platform}-${process.arch}; the first launch may take a minute.`)
+  }
   const home = await realpath(await mkdtemp(join(tmpdir(), 'lwb-packaged-packs-')))
   const runtime = join(home, 'runtime', 'current-build')
   const dsh = join(resources, 'app.asar', 'dsh')
@@ -73,7 +108,7 @@ export async function verifyPackagedPacks({ executable, resources }) {
     child.stdout.on('data', recordOutput)
     child.stderr.on('data', recordOutput)
     const address = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { reject(new Error('Packaged host readiness timed out')) }, 120_000)
+      const timer = setTimeout(() => { reject(new Error('Packaged host readiness timed out')) }, budget.ready)
       const cleanup = () => { clearTimeout(timer); child.off('message', onMessage); child.off('exit', onExit); child.off('error', onError) }
       const onMessage = message => {
         if (message.type === 'ready') { cleanup(); resolve(message.url) }
@@ -85,7 +120,7 @@ export async function verifyPackagedPacks({ executable, resources }) {
     })
     const origin = new URL(address).origin
     let auth
-    try { auth = await requestPackagedHost(address, { timeout: 10_000 }) }
+    try { auth = await requestPackagedHost(address, { timeout: budget.auth }) }
     catch (error) { throw new Error(`Packaged acceptance host ${generation} authentication failed: ${error.message}`, { cause: error }) }
     const cookie = auth.headers['set-cookie']?.[0]?.split(';')[0]
     assert.ok(cookie, 'packaged host must issue its native authentication cookie')
@@ -94,7 +129,7 @@ export async function verifyPackagedPacks({ executable, resources }) {
     return async (method, args = {}) => {
       // Host readiness precedes enabled-pack restoration. The first list waits
       // for that cold startup using the same deadline as host readiness.
-      const timeout = first && method === 'lwbPacks/list' ? 120_000 : 30_000
+      const timeout = first && method === 'lwbPacks/list' ? budget.ready : budget.call
       first = false
       const started = performance.now()
       console.log(`Packaged acceptance host ${generation}: ${method} started`)
@@ -123,7 +158,7 @@ export async function verifyPackagedPacks({ executable, resources }) {
       })
       const { prepareLwbProfile } = await import(pathToFileURL(join(process.env.LWB_SMOKE_RUNTIME, 'lwb', 'profile-setup.mjs')))
       await prepareLwbProfile()
-    `], { env, cwd: home, timeout: 30_000 })
+    `], { env, cwd: home, timeout: budget.start })
   }
   async function seedUpgrade(packs, enabled) {
     const records = []
@@ -202,7 +237,7 @@ export async function verifyPackagedPacks({ executable, resources }) {
       const ctx = new Context()
       await ctx.plugin(PluginPackages, { resolution: await createRuntimeResolution({ installAnchor, profile, home: process.env.DSH_HOME }) }).await()
       for (const pack of packs) await import(pathToFileURL(join(pack.source, pack.hostEntry)))
-    `], { env, cwd: home, timeout: 30_000 })
+    `], { env, cwd: home, timeout: budget.start })
     console.log(`Packaged pack acceptance passed: disabled/enabled upgrade links, ${free.length} load/unload/restore lifecycle(s), ${packs.length} host imports, browser graph and persistent account.`)
   } catch (error) {
     console.error(output.replace(/token=[^\s&]+/gu, 'token=[redacted]'))

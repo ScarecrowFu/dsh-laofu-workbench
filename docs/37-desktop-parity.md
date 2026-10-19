@@ -70,6 +70,8 @@ npm run package:desktop
 ```bash
 npm run package:oneclick                 # commercial + 未签名便携包，版本号带 -test.<构建号>
 npm run package:mac                      # 同上，但构建机不是 macOS 时直接报错
+npm run package:mac:arm64                # macOS Apple Silicon 包
+npm run package:mac:x64                  # macOS Intel 包（Intel 原生，或在 Apple Silicon 上经 Rosetta）
 npm run package:win                      # 同上，但构建机不是 Windows 时直接报错
 npm run package:oneclick -- --dry-run    # 只打印解析后的输入与将要执行的命令
 npm run package:oneclick -- --plan       # 只解析版别与随带能力包
@@ -82,9 +84,40 @@ npm run package:oneclick -- --community --release
 | --- | --- |
 | `LWB_COMMERCIAL_PACK_DIR` | 未设置时按 `../dsh-laofu-workbench-commercial`、`../laofu-commercial-pack` 顺序探测；显式设置的值不合法时直接失败，不会静默降级成 community |
 | `LWB_DESKTOP_BUILD_NUMBER` | 未设置时用本地日期 `YYYYMMDD`；环境里的 `GITHUB_RUN_NUMBER` 次之 |
+| `LWB_DESKTOP_TARGET_ARCH` / `--arch` | 未指定时跟随构建机；Windows 恒为 x64。macOS 的 `x64` 可在 Intel 上原生构建，也可在 Apple Silicon 上经 Rosetta 构建 |
 | `ELECTRON_MIRROR` | 未设置时先探测 `github.com`；不可达才切到 `https://cdn.npmmirror.com/binaries/electron/`（`LWB_ELECTRON_MIRROR=off` 可关掉探测） |
 
-目标平台由构建机决定（官方准备把 target 绑定到 host），所以 Windows 包在 Windows 上构建：本机或发行 runner；`--host win --dry-run` 可以在 macOS 上查看 Windows 那条命令的确切内容。
+目标平台由构建机决定，目标架构由 `--arch`（或 `LWB_DESKTOP_TARGET_ARCH`）决定，未指定时跟随构建机。Windows 包在 Windows x64 上构建：本机或发行 runner；`--host win --dry-run` 可以在 macOS 上查看 Windows 那条命令的确切内容。
+
+macOS 的 arm64 包需要 Apple Silicon 构建机；x64 包可以在 Intel Mac 上原生构建，也可以在 Apple Silicon 上经 Rosetta 构建——准备阶段会用目标 Electron（x64）跑运行时冒烟，缺少 Rosetta 时打包在任何耗时步骤之前就报错。
+
+### macOS 双架构（Apple Silicon / Intel）
+
+两个 macOS 目标共用同一份产品代码和同一套构建输入，区别只在目标架构：
+
+| 目标 | 产出 | 构建宿主 | 用户侧运行 |
+| --- | --- | --- | --- |
+| `mac-arm64` | `laofu-workbench-<版本>-mac-arm64-portable-unsigned.zip` | Apple Silicon Mac | Apple Silicon 原生 |
+| `mac-x64` | `laofu-workbench-<版本>-mac-x64-portable-unsigned.zip` | Intel Mac 原生，或装了 Rosetta 2 的 Apple Silicon Mac | Intel 原生；Apple Silicon 经 Rosetta |
+
+目标架构决定的不只是 Electron：内置 Node、Python 与 wheel、LibreOffice 引擎、Remotion compositor 以及 `node-pty` / `koffi` / `sharp` 都必须匹配。打包链为此做了四件事：
+
+- `DSH_DESKTOP_TARGET_ARCH` 让官方准备下载并冒烟目标架构的 Electron 与解释器；
+- payload 的 `npm ci` 在交叉架构时带上 `--os=darwin --cpu=x64`，否则会把宿主架构的可选依赖（例如 arm64 的 Remotion compositor）装进 x64 包；
+- electron-builder 显式收到 `--x64` / `--arm64`，不再跟随构建进程架构；
+- 构建 id 纳入目标架构，因此两个架构的可写 runtime 副本不会共用同一个 `runtime/<id>` 目录。
+
+最低系统版本由 Electron 44.7.0 决定，macOS 13.0 起。
+
+交叉架构构建的验收要按 Rosetta 的首次启动成本理解：新组装的 x64 bundle 在 Apple Silicon 上第一次执行要付一次翻译与系统扫描成本，实测 26–45 秒；同一路径第二次约 2–3 秒。打包内置的能力包验收会把超时预算按 4 倍放宽，因此构建耗时变长属于正常现象，不是宿主卡死。
+
+```bash
+npm run package:mac:x64                   # 本机 Apple Silicon 经 Rosetta 出 Intel 包
+npm run package:mac:arm64                 # 本机 Apple Silicon 出 arm64 包
+npm run package:oneclick -- --arch x64    # 等价的一键写法
+npm run package:mac:x64 -- --dry-run      # 只看解析结果，不执行
+node scripts/collect-desktop-artifacts.mjs --edition commercial --target mac-x64
+```
 
 ### Windows 构建输入（产品源码快照）
 
@@ -115,21 +148,25 @@ npm run package:desktop:portable                 # 公开源码开发包
 LWB_COMMERCIAL_PACK_DIR=/absolute/path/to/commercial-pack npm run package:desktop:official -- --portable
 ```
 
-Windows 产物是可直接运行的 portable `.exe`，macOS 产物是包含 `.app` 的 `.zip`，不生成 NSIS 安装器或 DMG。程序数据写入用户数据目录，不要求把压缩包目录作为可写目录。未签名模式不读取签名环境文件，不调用 Apple 公证或 Windows 签名硬件。macOS 原生组件使用临时 ad-hoc 签名满足 Apple Silicon 的加载要求，不代表 Developer ID 签名或公证；首次打开仍可能受到 Gatekeeper 或 SmartScreen 提示。
+Windows 产物是可直接运行的 portable `.exe`，macOS 产物是包含 `.app` 的 `.zip`，不生成 NSIS 安装器或 DMG。程序数据写入用户数据目录，不要求把压缩包目录作为可写目录。未签名模式不读取签名环境文件，不调用 Apple 公证或 Windows 签名硬件。macOS 原生组件使用临时 ad-hoc 签名满足对应架构的加载要求，不代表 Developer ID 签名或公证；首次打开仍可能受到 Gatekeeper 或 SmartScreen 提示。
 
 macOS payload 的原生依赖在签名之前会重写加载路径。`@remotion/compositor-darwin-*` 的 `ffmpeg` / `ffprobe` / `remotion` 与七个 `libav*` dylib 用的是裸相对名（`libavdevice.dylib`），dyld 只在未硬化的进程里才肯按工作目录解析这些名字；而产物给整个 payload（含 `lwb-product/node_modules`）做的是 hardened runtime 签名，于是这些引用会被直接拒绝——`Library not loaded: libavdevice.dylib` / `relative path not allowed in hardened program`，打包版里所有视频导出都因此 SIGABRT，而开发态用仓库里那份未硬化的副本，永远复现不出来。打包步骤把它们改成 `@loader_path/<name>`：保留 hardened runtime（上游强制、公证预期），也不再有工作目录依赖。重写后的字节计入构建 id（否则同一 id 的旧 runtime 副本会继续被沿用），`lwb/desktop/darwin-library-paths.test.mjs` 会在硬化签名下真的把二进制跑一遍；打包时若仍有裸名残留则直接失败。
 
 官方便携版关闭自动更新与强制更新服务，使用 LWB 根版本号；构建编号仅用于 Windows 构建目录和两端构建关联。文件名明确带 `-portable-unsigned`，官方发行版统一使用 `LaofuWorkbench` 的应用身份和数据目录。
 
-Windows 官方发行版在商业私有仓库的自托管 Windows x64 Runner 上构建，通过 Actions 的 `Desktop portable test builds` 手动触发，填写构建编号。macOS 官方发行版在本机 Apple Silicon Mac 构建：
+Windows 官方发行版在商业私有仓库的自托管 Windows x64 Runner 上构建，通过 Actions 的 `Desktop portable test builds` 手动触发，填写构建编号。macOS 官方发行版在本机构建：Apple Silicon 出 arm64 包，Intel 包在 Intel Mac 上原生构建，或在 Apple Silicon 上经 Rosetta 构建：
 
 ```bash
 export LWB_DESKTOP_BUILD_NUMBER=20261003
-LWB_COMMERCIAL_PACK_DIR=/absolute/path/to/commercial-pack npm run package:desktop:official -- --unsigned --portable --release
+LWB_COMMERCIAL_PACK_DIR=/absolute/path/to/commercial-pack npm run package:desktop:official -- --unsigned --portable --release --arch arm64
 node scripts/collect-desktop-artifacts.mjs --edition commercial --target mac-arm64
+LWB_COMMERCIAL_PACK_DIR=/absolute/path/to/commercial-pack npm run package:desktop:official -- --unsigned --portable --release --arch x64
+node scripts/collect-desktop-artifacts.mjs --edition commercial --target mac-x64
 ```
 
-官方产物必须通过实际打包宿主的能力包加载、卸载、重新加载、浏览器模块注册和重启恢复验收。验收还要包含一次**打包版视频导出**（竞技台导出 MP4 与口播成片各一次）：这类原生依赖只在打包版里被硬化签名，开发态用的是仓库副本，渲染链路必须实测，不能用开发态结果代替。Windows workflow 和本机 macOS 构建将成品、SHA256 校验值和构建报告汇总到公开仓库的同一个 Draft Release，验收通过后发布为正式 Release。未签名状态会在发布说明和构建报告中明确标注。
+两个架构的产物文件名都带架构后缀，可以同时挂到同一个 Draft Release。
+
+官方产物必须通过实际打包宿主的能力包加载、卸载、重新加载、浏览器模块注册和重启恢复验收。验收还要包含一次**打包版视频导出**（竞技台导出 MP4 与口播成片各一次）：这类原生依赖只在打包版里被硬化签名，开发态用的是仓库副本，渲染链路必须实测，不能用开发态结果代替。交叉架构构建（Apple Silicon 上打 x64）还要预留首次启动时间：内置验收已按 4 倍放宽超时，人工复验时同样不要用 30 秒内的启动结果判断失败。Windows workflow 和本机 macOS 构建将成品、SHA256 校验值和构建报告汇总到公开仓库的同一个 Draft Release，验收通过后发布为正式 Release。未签名状态会在发布说明和构建报告中明确标注。
 
 官方源码保持原样。未签名模式通过仅在构建子进程启用的内存适配复用官方运行时准备、完整性校验与烟雾测试；适配与锁定的上游结构不匹配时会报错。此模式只用于测试分发，正式签名构建仍使用原有校验。
 

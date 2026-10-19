@@ -6,7 +6,7 @@
 
 **当前随带两个公开能力包**：「口播视频内容创作」覆盖从发现素材、确定选题到写稿、配音字幕、制作视频和准备发布资料的完整链路，并支持定时内容生产；「AI 竞技台」让模型在五子棋、中国象棋和 6 / 8 / 9 人狼人杀的真实规则下对局，支持观战、逐手回放与横竖屏视频导出。会员场景能力包由 LWB 账号权限控制。
 
-> 当前为开发预览版，面向本机单用户使用，主要验证环境为 macOS。支持 Web 和桌面开发入口；当前桌面发布格式为 Windows x64 与 macOS Apple Silicon 未签名便携包。运行时锁定 DSH `dsh-v0.2.1-rc.2`，具体版本以 [UPSTREAM.lock.json](lwb/UPSTREAM.lock.json) 为准。
+> 当前为开发预览版，面向本机单用户使用，主要验证环境为 macOS。支持 Web 和桌面开发入口；当前桌面发布格式为 Windows x64 与 macOS（Apple Silicon / Intel）未签名便携包。运行时锁定 DSH `dsh-v0.2.1-rc.2`，具体版本以 [UPSTREAM.lock.json](lwb/UPSTREAM.lock.json) 为准。
 
 [公开源码与官方发行版](#公开源码与官方发行版) · [安装与启动](#快速开始) · [口播创作](#口播视频内容创作) · [AI 竞技台](#ai-竞技台) · [账号与能力包](#账号与能力包) · [文档地图](#文档地图)
 
@@ -30,7 +30,7 @@
 
 产物分发有两条需要留意的纪律：
 
-- **macOS 官方发行版在本机 Apple Silicon Mac 构建。**
+- **macOS 官方发行版在本机构建：Apple Silicon 出 arm64 包；Intel 包在 Intel Mac 上原生构建，或在 Apple Silicon 上经 Rosetta 构建。**
 - **Windows 包由维护者的私有仓库构建。** 它的自托管 Windows x64 Runner 不克隆本仓库，而是取用签入私有仓库的**产品源码快照**。因此本仓库推送之后必须执行 `npm run snapshot:product` 刷新该快照，否则 Windows 包仍是上一版内容。
 
 两端产物汇总到本仓库的同一个 Draft Release。构建输入、快照命令与发行边界见 [Desktop 与 Web](docs/37-desktop-parity.md)。

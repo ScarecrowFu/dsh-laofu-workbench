@@ -41,7 +41,16 @@ export async function createLwbPackageConfig(payload, identity) {
     const executable = context.electronPlatformName === 'darwin'
       ? join(context.appOutDir, `${filename}.app`, 'Contents', 'MacOS', filename)
       : join(context.appOutDir, `${filename}.exe`)
-    await verifyPackagedPacks({ executable, resources: context.packager.getResourcesDir(context.appOutDir) })
+    await verifyPackagedPacks({
+      executable,
+      resources: context.packager.getResourcesDir(context.appOutDir),
+      // Acceptance budgets widen when the package architecture differs from the
+      // host: a first launch of a fresh x64 bundle on Apple Silicon runs through
+      // Rosetta and can take far longer than a native start.
+      ...(identity.targetPlatform === undefined || identity.targetArch === undefined
+        ? {}
+        : { target: { platform: identity.targetPlatform, arch: identity.targetArch } }),
+    })
   }
   return config
 }
