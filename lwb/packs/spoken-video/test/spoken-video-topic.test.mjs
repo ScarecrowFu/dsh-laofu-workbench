@@ -12,6 +12,7 @@ import {
   parseProfile,
   parseTopicInput,
   summarizeInput,
+  topicAttemptPlans,
   TOPIC_CANDIDATES_SCHEMA,
 } from '../spoken-video-topic.mjs'
 
@@ -188,4 +189,21 @@ test('candidate schema stays an object-rooted supported subset', () => {
   assert.equal(candidateItem.type, 'object')
   assert.deepEqual(candidateItem.required, ['title'])
   assert.equal(candidateItem.properties.signalIds.items.type, 'string')
+})
+
+
+test('topicAttemptPlans removes risk sources one at a time and ends with a signal-free attempt', () => {
+  const plans = topicAttemptPlans(['36kr', 'ai-daily-import', 'weibo-hot', 'infoq'])
+  assert.deepEqual(plans.map((plan) => plan.sourceIds), [
+    ['36kr', 'ai-daily-import', 'weibo-hot', 'infoq'],
+    ['36kr', 'weibo-hot', 'infoq'],
+    ['36kr', 'infoq'],
+    ['infoq'],
+    [],
+  ])
+  assert.deepEqual(plans.map((plan) => plan.removedSourceId), [null, 'ai-daily-import', 'weibo-hot', '36kr', null])
+  assert.deepEqual(topicAttemptPlans(['36kr']), [
+    { index: 0, sourceIds: ['36kr'], removedSourceId: null },
+    { index: 1, sourceIds: [], removedSourceId: null },
+  ])
 })

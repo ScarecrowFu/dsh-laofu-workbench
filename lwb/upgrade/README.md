@@ -12,7 +12,7 @@ npm run test:integration  # 临时数据根，真实 Host 加载/卸载/重启�
 
 升级时同步锁文件、DSH peer 依赖及适配实现，再执行上述门禁和两种载体的 UI 回归。失败时修正 LWB 接缝；不能自动回退旧 API，也不能静默打补丁。只有新版本验收通过才更新产品基线。
 
-`upstream:check` 会直接 import 锁定版本的 built 模块，检查能力包实际调用的服务端表面（`subagents.startActivation` / `start`、`Agent.followup` / `whenIdle` / `cancel`、`Session.seq` 与 `session/event`、`AgentRegistry.create/get`、`SessionController.create/selectModel/prompt`，以及 `dsh-tools` / `dsh-llm` / `dsh-typert-protocol` 的导出）。任何改名应在这一步失败，而不是在用户点“生成”时失败。检查清单与 2026-10-19 的两次断点（`subagents.start` → `startActivation`；`Session.events` 移除）见[基座升级](../../docs/08-base-lock.md#能力包-ai-执行接缝)。
+`upstream:check` 会直接 import 锁定版本的 built 模块，检查能力包实际调用的服务端表面（`subagents.startActivation` / `start`、`Agent.followup` / `whenIdle` / `cancel`、`Session.seq` 与 `session/event`、Session format v4 的 `assertV4RowAdmission` 消息来源规则、`AgentRegistry.create/get`、`SessionController.create/selectModel/prompt`，以及 `dsh-tools` / `dsh-llm` / `dsh-typert-protocol` 的导出）。任何改名应在这一步失败，而不是在用户点“生成”时失败。检查清单与 2026-10-19 的三次断点（`subagents.start` → `startActivation`；`Session.events` 移除；v4 拒绝 `plugin` 消息来源）见[基座升级](../../docs/08-base-lock.md#能力包-ai-执行接缝)。
 
 能力包不得直接 import `@deepseek-ai/dsh-subagent` 或调用 `subagents.start` / `startActivation`；结构化生成与多轮创作都走 `@scitiger-ai/lwb-pack-sdk/execution`，由该适配层吸收版本差异。新增能力包或改动执行路径后，除单测外还要各跑一次结构化生成与多轮创作（最低成本模型或 stub 均可）。
 

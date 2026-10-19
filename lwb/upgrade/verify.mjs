@@ -127,6 +127,27 @@ if (!Object.getOwnPropertyDescriptor(sessionClass.prototype, 'seq')?.get) {
   throw new Error('Session no longer exposes the `seq` getter; the LWB turn boundary must be re-derived')
 }
 
+// Session format v4 retired the catch-all `plugin` message source. Exercise
+// the real row admission in both directions: LWB's producer-owned kind must be
+// accepted, and the retired wrapper must still be rejected. This is the rule
+// that failed a live video task with "format v4 message requires a
+// producer-owned source kind".
+const v4Format = await builtModule('@deepseek-ai/dsh-session-format-v3-to-v4')
+if (typeof v4Format.assertV4RowAdmission !== 'function') {
+  throw new Error('session format v3-to-v4 no longer exports assertV4RowAdmission(); the message-source gate must be re-derived')
+}
+const sourceRow = kind => ({ type: 'user/message', data: { source: { kind } } })
+v4Format.assertV4RowAdmission(sourceRow('lwb'))
+let retiredSourceRejected = false
+try {
+  v4Format.assertV4RowAdmission(sourceRow('plugin'))
+} catch (error) {
+  retiredSourceRejected = /producer-owned source kind/u.test(String(error?.message))
+}
+if (!retiredSourceRejected) {
+  throw new Error('session format v4 no longer rejects the retired `plugin` message source; the LWB source-kind adaptation must be re-derived')
+}
+
 // Agent turn-driving methods are on the implementation type, not an exported
 // value; the locked build's declaration is the machine-readable contract.
 const agentRuntimeTypes = readFileSync(join(dshPackageDirectory('@deepseek-ai/dsh-agent'), 'lib', 'types', 'runtime-types.d.ts'), 'utf8')

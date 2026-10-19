@@ -425,6 +425,125 @@ test('topic generation accepts a fresh source request and records failure withou
   assert.ok(record.error.includes('topicExecutor'))
 })
 
+test('topic generation reduces sources after a content-inspection rejection and succeeds', async (t) => {
+  const { currentAgent } = await setup(t)
+  const prompts = []
+  const fetch = async (url) => String(url).includes('daily.json')
+    ? new Response(JSON.stringify({ items_by_platform: { 抖音: [{ title: '敏感标题' }] } }), { status: 200, headers: { 'content-type': 'application/json' } })
+    : new Response(rss('36氪安全标题'), { status: 200, headers: { 'content-type': 'application/rss+xml' } })
+  const executor = async (request) => {
+    prompts.push(request.prompt)
+    if (request.prompt.includes('敏感标题')) {
+      throw new Error('生成未正常结束（error）：INVALID_REQUEST：400: {"code":"data_inspection_failed","message":"Input text data may contain inappropriate content"}')
+    }
+    return { candidates: [{ title: '降级后的候选', signalIds: [] }] }
+  }
+  const store = new SpokenVideoContentStore({
+    workspacePath: currentAgent.session.header.cwd, fetch, resolveHostname: resolver, now, topicExecutor: executor,
+  })
+  const started = await store.startTopicGeneration(currentAgent, { sourceIds: ['36kr', 'ai-daily-import'], platforms: ['抖音'] })
+  const record = await settled(store, currentAgent, started.id)
+  assert.equal(record.status, 'completed')
+  assert.equal(prompts.length, 2)
+  assert.ok(prompts[0].includes('敏感标题'))
+  assert.ok(!prompts[1].includes('敏感标题'))
+  assert.ok(prompts[1].includes('36氪安全标题'))
+  assert.equal(record.attempts.length, 2)
+  assert.equal(record.attempts[0].status, 'content-inspection')
+  assert.equal(record.attempts[1].status, 'completed')
+  assert.deepEqual(record.effectiveSourceIds, ['36kr'])
+  assert.match(record.reductionNote, /内容安全审核拦截后降级 1 次/u)
+})
+
+test('topic generation keeps every signal in the first attempt', async (t) => {
+  const { currentAgent } = await setup(t)
+  const titles = Array.from({ length: 9 }, (_, index) => `完整信号 ${index}`)
+  const items = titles.map((title, index) => `<item><title>${title}</title><description>可用于内容创作的真实线索</description><link>https://example.com/${index}</link><pubDate>Sun, 31 Aug 2026 00:00:00 GMT</pubDate></item>`).join('')
+  const fetch = async () => new Response(`<?xml version="1.0"?><rss><channel>${items}</channel></rss>`, { status: 200, headers: { 'content-type': 'application/rss+xml' } })
+  const prompts = []
+  const executor = async (request) => {
+    prompts.push(request.prompt)
+    return { candidates: [{ title: '全量候选', signalIds: [] }] }
+  }
+  const store = new SpokenVideoContentStore({
+    workspacePath: currentAgent.session.header.cwd, fetch, resolveHostname: resolver, now, topicExecutor: executor,
+  })
+  const started = await store.startTopicGeneration(currentAgent, { sourceIds: ['36kr'] })
+  const record = await settled(store, currentAgent, started.id)
+  assert.equal(record.status, 'completed')
+  assert.equal(record.materialSnapshot.length, 9)
+  assert.equal((prompts[0].match(/完整信号/gu) || []).length, 9)
+})
+
+test('topic generation detects a content-inspection failure carried only by the DSH trace', async (t) => {
+  const { currentAgent } = await setup(t)
+  const prompts = []
+  const fetch = async (url) => String(url).includes('daily.json')
+    ? new Response(JSON.stringify({ items_by_platform: { 抖音: [{ title: '敏感标题' }] } }), { status: 200, headers: { 'content-type': 'application/json' } })
+    : new Response(rss('36氪安全标题'), { status: 200, headers: { 'content-type': 'application/rss+xml' } })
+  const executor = async ({ prompt, onDshEvent }) => {
+    prompts.push(prompt)
+    if (prompt.includes('敏感标题')) {
+      await onDshEvent?.({
+        seq: 6,
+        type: 'turn/end',
+        data: { reason: { kind: 'error', error: { code: 'INVALID_REQUEST', message: 'data_inspection_failed: Input text data may contain inappropriate content' } } },
+      })
+      throw new Error('生成未正常结束（error）')
+    }
+    return { candidates: [{ title: 'trace 降级候选', signalIds: [] }] }
+  }
+  const store = new SpokenVideoContentStore({
+    workspacePath: currentAgent.session.header.cwd, fetch, resolveHostname: resolver, now, topicExecutor: executor,
+  })
+  const started = await store.startTopicGeneration(currentAgent, { sourceIds: ['36kr', 'ai-daily-import'], platforms: ['抖音'] })
+  const record = await settled(store, currentAgent, started.id)
+  assert.equal(record.status, 'completed')
+  assert.equal(prompts.length, 2)
+  assert.equal(record.attempts[0].status, 'content-inspection')
+  assert.match(record.attempts[0].error, /data_inspection_failed/u)
+  assert.deepEqual(record.effectiveSourceIds, ['36kr'])
+})
+
+test('topic generation stops after the bounded ladder and reports a clear content-inspection error', async (t) => {
+  const { currentAgent } = await setup(t)
+  let calls = 0
+  const executor = async () => {
+    calls += 1
+    throw new Error('生成未正常结束（error）：INVALID_REQUEST：400: {"code":"data_inspection_failed","message":"Input text data may contain inappropriate content"}')
+  }
+  const store = new SpokenVideoContentStore({
+    workspacePath: currentAgent.session.header.cwd, fetch: fetcher(), resolveHostname: resolver, now, topicExecutor: executor,
+  })
+  const started = await store.startTopicGeneration(currentAgent, { sourceIds: ['36kr'] })
+  const record = await settled(store, currentAgent, started.id)
+  assert.equal(record.status, 'failed')
+  assert.match(record.error, /内容审核拦截/u)
+  assert.equal(calls, 2)
+  assert.deepEqual(record.attempts.map((attempt) => attempt.status), ['content-inspection', 'content-inspection'])
+  assert.equal(record.attempts.at(-1).signalCount, 0)
+  assert.equal(record.steps[2].status, 'error')
+})
+
+test('topic generation does not retry a non-content provider error', async (t) => {
+  const { currentAgent } = await setup(t)
+  let calls = 0
+  const executor = async () => {
+    calls += 1
+    throw new Error('上游网络错误')
+  }
+  const store = new SpokenVideoContentStore({
+    workspacePath: currentAgent.session.header.cwd, fetch: fetcher(), resolveHostname: resolver, now, topicExecutor: executor,
+  })
+  const started = await store.startTopicGeneration(currentAgent, { sourceIds: ['36kr'] })
+  const record = await settled(store, currentAgent, started.id)
+  assert.equal(record.status, 'failed')
+  assert.match(record.error, /上游网络错误/u)
+  assert.equal(calls, 1)
+  assert.equal(record.attempts.length, 1)
+  assert.equal(record.attempts[0].status, 'failed')
+})
+
 test('topic generation creates a visible queued task and drains the next task after a bounded worker completes', async (t) => {
   const { currentAgent, root } = await setup(t)
   const gates = []

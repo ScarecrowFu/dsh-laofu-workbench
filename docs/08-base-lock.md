@@ -51,6 +51,7 @@ npm run test:integration
 | 结构化生成 | `SubagentRuntime.startActivation()`（0.2.1+）或 `start()`（0.1.x） | built prototype |
 | 多轮创作 / 修复 | `Agent.followup()` / `whenIdle()` / `cancel()` | `dsh-agent` 的 `runtime-types.d.ts` |
 | 多轮会话事件 | `Session.seq` + `ctx.on('session/event')`；`Session` 不再有 `.events` | built prototype + 带抛错 getter 的 pack fake |
+| 消息来源 | `source.kind` 必须是生产者自有 kind；v4 拒绝 `plugin`，LWB 用 `lwb` | v4 row admission 双向自检 |
 | 包内会话 | `AgentRegistry.create/get`、`SessionController.create/selectModel/prompt` | built prototype |
 | 结构化 schema / 工具 | `dsh-tools.assertObjectJsonSchema` / `defineTool` | built export |
 | 流式投影 / 消息 | `dsh-llm.createUserMessage` / `expandAssistantStream` | built export |
@@ -69,6 +70,10 @@ npm run test:integration
 - `upstream:check` 增加上述 built 方法面断言，单测改为 mock LWB 执行契约而不是某个 DSH 版本的服务形状。
 
 **同日第二个断点**：上述修复让视频导演成功启动后，多轮执行器又读 `agent.session.events.length`，而 DSH 0.2.1 的 `Session` 已不再暴露 `.events`，视频创作在 `directing` 阶段、第一次模型请求之前直接抛 `Cannot read properties of undefined (reading 'length')`。修复为：用 `agent.session.seq` 做轮次 boundary，用已经注册的 `ctx.on('session/event')` 捕获 `turn/end` / `assistant/message`，不再回读 Session 历史；单测的假 `Session` 改成 0.2.1 形状（只有 `seq`，读取 `events` 直接抛错），防止同类问题再次被宽松 fake 掩盖。`Session.snapshotEvents()` / `ownEvents()` 今天仍可用，但已标记为“禁止新增调用”，不作为修复方向。
+
+**同日第三个断点**：`Session.events` 修好后，视频导演的首个 `followup` 又被 Session format v4 拒绝：`format v4 message requires a producer-owned source kind`。旧代码把插件提示写成 `source: { kind: 'plugin', plugin: packId }`，而 v4 明确拒绝 catch-all 的 `plugin` kind，要求每个生产者使用自有 kind。修复：LWB 使用 `source: { kind: 'lwb' }`；`upstream:check` 用真实的 `assertV4RowAdmission` 双向自检（`lwb` 必须通过、`plugin` 必须被拒绝），单测断言 followup 的 source kind 为 `lwb`。三条断点都属于同一类问题：**不能拿旧版 DSH 的对象/消息形状去 fake 新版宿主**。
+
+**同日第四个问题（provider 内容审核，不是 API 断点）**：「内容安排 → 立即执行」在选题阶段收到 Bailian `data_inspection_failed`；原因是选题 prompt 把 423 条、17 个来源的原始信号全部送入，其中热榜/日报条目触发百炼输入审核。这类错误重试同一批信号不会改变结果。`runTopicGeneration` 现在在首次命中该错误后按固定阶梯降级：**首次保持全部来源的全量最新信号**；之后按 AI 日报、社交热榜优先逐个移除来源，保留来源仍发全量信号；最多移除 8 个来源，再做一次不带渠道信号的诊断；每次尝试记录来源、信号数、子会话与错误，全部失败时提示调整账号定位/角度/历史候选或更换模型。非内容审核错误不重试。见[口播指南](spoken-video.md)。
 
 升级时除 `npm run upstream:check`，还要跑 `npm test` 和 `npm run test:integration`；打包后按[开发入门](develop-a-pack.md#3-加入真实业务能力)的 AI 任务清单，至少各跑一次结构化生成与多轮创作（最低成本模型或 stub 均可）。
 

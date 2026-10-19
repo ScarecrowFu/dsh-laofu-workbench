@@ -101,7 +101,7 @@ test('gateway observes only stored child addresses, preserves live frames and ca
   const lifetime = new AbortController(); const viewer = new AbortController(); let receivedSignal
   const receiver = { ctx: { spokenVideoScope: { request: (operation) => operation(ctx), signal: lifetime.signal }, sessionController: {
     async *follow(request, signal) {
-      assert.deepEqual(request.address, { kind: 'subagent', mode: 'one-shot', parentSessionId: 'owned-parent', childSessionId: 'owned-child' })
+      assert.deepEqual(request.address, { kind: 'subagent', mode: 'unknown', parentSessionId: 'owned-parent', childSessionId: 'owned-child' })
       assert.equal(request.assistantStream, true); receivedSignal = signal
       yield { type: 'snapshot', cursor: -1, records: [], hasMore: false }
       yield { type: 'assistant-stream', frame: { type: 'start', attemptId: 'a', revision: 1 } }

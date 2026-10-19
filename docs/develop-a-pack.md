@@ -121,7 +121,7 @@ npm run pack:remove -- my-pack
 
 - **专属数据**：host 声明 `lwbPackServices` 依赖，使用 SDK 的 `getLwbPackScope(ctx, manifest)` 获取作用域；`scope.context()` 提供宿主分配的工作区。不要由浏览器传入任意路径决定存储位置。
 - **前后端通信**：注册包自己的 DSH RPC 服务，页面调用业务接口；参考口播包的 [gateway.mjs](../lwb/packs/spoken-video/gateway.mjs)。
-- **AI 任务**：通过 `scope.withAgent()` 获取受管理的内部 Agent，使用工作台的「场景任务默认模型」；该设置可跟随 DSH 默认模型，也可指定独立模型。普通页面数据读取无需创建 Agent。结构化/一次性生成使用 `@scitiger-ai/lwb-pack-sdk/execution` 的 `createDshExecutor(..., true)`；多轮创作与修复使用同一 SDK 的非结构化执行器（在 `scope.withAgent()` 的根 Agent 上 `followup` / `whenIdle`）。**不要直接 import `@deepseek-ai/dsh-subagent` 或调用 `subagents.start` / `startActivation`**：DSH 的版本差异由 SDK 适配层吸收，能力包只依赖 LWB 契约。多轮会话不要读 `Session.events`（0.2.1 已移除）；用 `session.seq` 做轮次边界，用 `ctx.on('session/event')` 消费 `turn/end` 与 `assistant/message`。
+- **AI 任务**：通过 `scope.withAgent()` 获取受管理的内部 Agent，使用工作台的「场景任务默认模型」；该设置可跟随 DSH 默认模型，也可指定独立模型。普通页面数据读取无需创建 Agent。结构化/一次性生成使用 `@scitiger-ai/lwb-pack-sdk/execution` 的 `createDshExecutor(..., true)`；多轮创作与修复使用同一 SDK 的非结构化执行器（在 `scope.withAgent()` 的根 Agent 上 `followup` / `whenIdle`）。**不要直接 import `@deepseek-ai/dsh-subagent` 或调用 `subagents.start` / `startActivation`**：DSH 的版本差异由 SDK 适配层吸收，能力包只依赖 LWB 契约。多轮会话不要读 `Session.events`（0.2.1 已移除）；用 `session.seq` 做轮次边界，用 `ctx.on('session/event')` 消费 `turn/end` 与 `assistant/message`。注入提示的 `source.kind` 必须是生产者自有 kind（LWB 用 `lwb`）；Session format v4 拒绝旧的 `plugin` 来源。
 - **后台生命周期**：使用 `scope.request()`、`scope.background()` 跟踪完整操作，接入取消信号与 `scope.onStop()`；卸载必须能停止计时器并等待写入结束。
 - **业务配置**：使用包级设置命名空间及凭据接口，勿将密钥写入 manifest、前端脚本或 Git。
 - **样式与页面**：动态样式设置自己的 `data-plugin` 包名，样式选择器避免污染其他包；遵循工作台的主题与可用画布。

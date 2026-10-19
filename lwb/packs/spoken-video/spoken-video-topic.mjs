@@ -19,6 +19,23 @@ const SIGNAL_REF_LIMIT = 8
 const ACCOUNT_ID = /^[a-f0-9-]{36}$/iu
 export const AI_DAILY_SOURCE_ID = 'ai-daily-import'
 
+/** Source-removal retries before the final signal-free diagnostic attempt. */
+export const TOPIC_SOURCE_REDUCTIONS = 8
+/**
+ * Content-inspection risk order. The provider's filter is opaque, so this list
+ * is a deterministic heuristic: user-generated daily feeds and social hot lists
+ * go first, then the remaining selected sources in their request order.
+ */
+export const TOPIC_SOURCE_RISK_ORDER = Object.freeze([
+  AI_DAILY_SOURCE_ID,
+  'weibo-hot',
+  'douyin-hot',
+  'baidu',
+  'toutiao',
+  'zhihu-hot',
+  'bilibili-popular',
+])
+
 export const TOPIC_INPUT_KEYS = Object.freeze(['angle', 'sourceIds', 'platforms', 'excludeSignalIds', 'accountId'])
 
 export function fail(message) { return new Error(`选题生成：${message}`) }
@@ -156,6 +173,39 @@ export function assembleMaterial(input, pool, options = {}) {
     signals.push(compact(item))
   }
   return { signals, sourceIds: [...new Set(signals.map((item) => item.sourceId))], mode: options.mode || 'latest-batches' }
+}
+
+/**
+ * Build the bounded retry ladder for one topic generation.
+ *
+ * The first attempt sends every selected source with every signal, preserving
+ * the normal material. Each following attempt removes one source in risk order
+ * while keeping every signal from the remaining sources; after at most
+ * {@link TOPIC_SOURCE_REDUCTIONS} removals, the last attempt sends no channel
+ * signals so the caller can tell a source-content rejection from a rejection of
+ * the account/profile prompt.
+ *
+ * @param sourceIds - selected sources for the request.
+ * @returns attempts with their source sets and the single removed source.
+ */
+export function topicAttemptPlans(sourceIds) {
+  const selected = [...new Set(sourceIds)]
+  const plans = [{ index: 0, sourceIds: selected, removedSourceId: null }]
+  if (!selected.length) return plans
+  const ordered = [
+    ...TOPIC_SOURCE_RISK_ORDER.filter((id) => selected.includes(id)),
+    ...selected.filter((id) => !TOPIC_SOURCE_RISK_ORDER.includes(id)),
+  ]
+  const remaining = [...selected]
+  for (const removedSourceId of ordered.slice(0, TOPIC_SOURCE_REDUCTIONS)) {
+    const position = remaining.indexOf(removedSourceId)
+    if (position === -1) continue
+    remaining.splice(position, 1)
+    if (!remaining.length) break
+    plans.push({ index: plans.length, sourceIds: [...remaining], removedSourceId })
+  }
+  plans.push({ index: plans.length, sourceIds: [], removedSourceId: null })
+  return plans
 }
 
 export function buildGenerationSteps() {

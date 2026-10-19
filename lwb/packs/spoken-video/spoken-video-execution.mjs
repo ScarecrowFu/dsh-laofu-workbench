@@ -146,7 +146,11 @@ export async function executionAddress(context, request) {
   const detail = await executionDetail(context, request)
   const session = detail.sessions.find((item) => item.role === request.role)
   if (!session) throw new Error('该阶段没有可读取的 DSH 会话。')
-  return { kind: 'subagent', parentSessionId: session.parentSessionId, childSessionId: session.childSessionId, mode: 'one-shot' }
+  // The history reader only needs durable lineage. DSH 0.2.1 creates
+  // `startActivation` children as continuable, while older `start` children
+  // were one-shot; `unknown` skips the descriptor-mode equality check without
+  // weakening the parent/child authorization above.
+  return { kind: 'subagent', parentSessionId: session.parentSessionId, childSessionId: session.childSessionId, mode: 'unknown' }
 }
 
 // Keep the native stream/cursors and their settlement semantics. Request headers,

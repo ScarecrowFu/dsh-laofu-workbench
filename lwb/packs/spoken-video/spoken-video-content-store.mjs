@@ -24,6 +24,7 @@ import {
   parseTopicInput,
   snapshotAccount,
   summarizeInput,
+  topicAttemptPlans,
   TOPIC_CANDIDATES_SCHEMA,
 } from './spoken-video-topic.mjs'
 import {
@@ -97,6 +98,17 @@ function failureMessage(error, trace) {
   const detail = lastDshFailureDetail(trace)
   if (!detail || base.includes(detail)) return base
   return `${base}：${detail}`
+}
+
+/**
+ * Whether a provider refused the prompt through its input content inspection.
+ * The provider reports this as HTTP 400 `data_inspection_failed`; the executor
+ * wraps it in `生成未正常结束（error）`, so inspect the wrapped message and cause.
+ */
+function isContentInspectionFailure(error, trace) {
+  const values = [error?.message, error?.cause?.message, String(error), lastDshFailureDetail(trace)]
+  return values.some((value) => typeof value === 'string'
+    && /data_inspection_failed|DataInspectionFailed|Input text data may contain inappropriate content/iu.test(value))
 }
 
 async function workspaceFor(agent) {
@@ -850,6 +862,8 @@ export class SpokenVideoContentStore {
       const trace = ensureDshTrace(record)
       trace.childSessionId = childSessionId
       trace.parentSessionId = typeof run.parentSessionId === 'string' ? run.parentSessionId : null
+      const attempt = Array.isArray(record.attempts) ? record.attempts.at(-1) : undefined
+      if (attempt) attempt.childSessionId = childSessionId
       appendDshTrace(trace, dshChildStarted(this.now()))
     })
   }
@@ -1055,6 +1069,7 @@ export class SpokenVideoContentStore {
       materialSignalIds: [], materialSnapshot: [], materialBatches: [], refreshedSourceIds: [], unavailableSources: [],
       summary: `${accountSnapshot?.name ? `账号「${accountSnapshot.name}」` : '通用（无账号定位）'} · 已提交，等待确认渠道最新采集`, account: accountSnapshot, steps: buildGenerationSteps(),
       dsh: dshTrace(), candidates: [], requested: 5, returned: 0, error: null, completedAt: null, elapsedMs: null,
+      attempts: [], effectiveSourceIds: [], reductionNote: null,
     }
     await this.saveGeneration(workspace, generations, record)
     this.enqueueTopicGeneration(workspace, { id, input, accountSnapshot, signals, generations, startedAt, agent })
@@ -1070,7 +1085,6 @@ export class SpokenVideoContentStore {
       })
       if (!begun || begun.status !== 'running') return
       const prepared = await this.prepareLatestTopicMaterial(workspace, signals, input)
-      const material = assembleMaterial(input, prepared.latest.signals, { mode: 'latest-batches' })
       const sourceLabels = Object.fromEntries(prepared.data.sources.map((item) => [item.id, item.name]))
       const prior = await this.topicGenerations(generationsPath)
       const recentCandidates = prior.generations
@@ -1080,55 +1094,127 @@ export class SpokenVideoContentStore {
         .slice(0, 20)
         .map((item) => `${String(item.title || '').slice(0, 160)}${item.contentCore ? `：${String(item.contentCore).slice(0, 180)}` : ''}`)
         .filter(Boolean)
-      const prompt = buildTopicPrompt({ input, material, profile: accountSnapshot, sourceLabels, recentCandidates, unavailableSources: prepared.unavailableSources })
-      activeStep = 'generate'
-      const preparedRecord = await this.mutateGeneration(workspace, generationsPath, id, (record) => {
+      const baseRecord = await this.mutateGeneration(workspace, generationsPath, id, (record) => {
         record.steps[0].status = 'done'; record.steps[0].detail = prepared.unavailableSources.length
           ? `${prepared.refreshedSourceIds.length ? `已补采 ${prepared.refreshedSourceIds.length} 个渠道；` : ''}${prepared.unavailableSources.length} 个渠道未获得当天数据，继续使用其余渠道`
           : prepared.refreshedSourceIds.length ? `已补采 ${prepared.refreshedSourceIds.length} 个渠道` : '所选渠道均已在今天完成采集'
-        record.steps[1].status = 'done'; record.steps[1].detail = `使用 ${material.signals.length} 条最新批次信号，覆盖 ${prepared.latest.batches.length} 个渠道`
-        record.steps[2].status = 'running'; record.materialMode = material.mode
-        record.materialSignalIds = material.signals.map((item) => item.id)
-        record.materialSnapshot = material.signals; record.materialBatches = prepared.latest.batches; record.refreshedSourceIds = prepared.refreshedSourceIds; record.unavailableSources = prepared.unavailableSources
-        record.summary = summarizeInput(input, material, accountSnapshot)
+        record.attempts = []
+        record.effectiveSourceIds = []
+        record.reductionNote = null
       })
-      if (!preparedRecord) return
+      if (!baseRecord) return
+      activeStep = 'generate'
       if (typeof this.topicExecutor !== 'function') throw fail('选题生成执行器未接入（需要 topicExecutor）。')
-      const structured = await this.topicExecutor({
-        prompt,
-        schema: TOPIC_CANDIDATES_SCHEMA,
-        agent,
-        onDshStarted: (run) => this.recordTopicDshStarted(workspace, generationsPath, id, run),
-        onDshEvent: (event) => this.recordTopicDshEvent(workspace, generationsPath, id, event),
-      })
-      activeStep = 'normalize'
-      const result = normalizeCandidates(structured, material)
-      await this.mutateGeneration(workspace, generationsPath, id, (record) => {
-        record.steps[2].status = 'done'; record.steps[2].detail = `返回 ${result.returned} 个候选`
-        record.candidates = result.candidates.map((candidate) => ({
-          ...candidate,
-          id: randomUUID(),
-          selection: { state: 'available', projectId: null, selectedAt: null, deselectedAt: null, source: null, error: null },
-        }))
-        record.returned = result.returned; record.summaryNote = result.summary
-        record.steps[3].status = result.returned ? 'running' : 'done'
-        record.steps[3].detail = result.returned ? '正在将推荐选题加入待写稿' : '本轮没有可加入的候选'
-      })
-      let autoError = null
-      const generated = await this.topicGenerationStatus(agent, { id })
-      if (generated.candidates[0]) {
+      const plans = topicAttemptPlans(prepared.sourceIds)
+      let lastContentError = null
+      for (const plan of plans) {
+        const attemptInput = { ...input, sourceIds: [...plan.sourceIds] }
+        const material = plan.sourceIds.length
+          ? assembleMaterial(attemptInput, prepared.latest.signals, { mode: 'latest-batches' })
+          : { signals: [], sourceIds: [], mode: 'latest-batches' }
+        const batches = prepared.latest.batches.filter((item) => plan.sourceIds.includes(item.sourceId))
+        const unavailableSources = prepared.unavailableSources.filter((item) => plan.sourceIds.includes(item.id))
+        const refreshedSourceIds = prepared.refreshedSourceIds.filter((sourceIdValue) => plan.sourceIds.includes(sourceIdValue))
+        const prompt = buildTopicPrompt({ input: attemptInput, material, profile: accountSnapshot, sourceLabels, recentCandidates, unavailableSources })
+        const removal = plan.removedSourceId
+          ? `移除来源 ${sourceLabels[plan.removedSourceId] || plan.removedSourceId}`
+          : plan.sourceIds.length ? null : '不使用渠道信号'
+        const attempt = {
+          index: plan.index, sourceIds: [...plan.sourceIds], removedSourceId: plan.removedSourceId || null,
+          signalCount: material.signals.length, status: 'running', startedAt: this.now(), completedAt: null, error: null, childSessionId: null,
+        }
+        const attemptRecord = await this.mutateGeneration(workspace, generationsPath, id, (record) => {
+          record.dsh = dshTrace()
+          record.attempts = [...(record.attempts || []), attempt]
+          record.effectiveSourceIds = [...plan.sourceIds]
+          record.materialMode = material.mode
+          record.materialSignalIds = material.signals.map((item) => item.id)
+          record.materialSnapshot = material.signals
+          record.materialBatches = batches
+          record.refreshedSourceIds = refreshedSourceIds
+          record.unavailableSources = unavailableSources
+          record.summary = summarizeInput(attemptInput, material, accountSnapshot)
+          record.steps[1].status = 'done'
+          record.steps[1].detail = `使用 ${material.signals.length} 条最新批次信号，覆盖 ${batches.length} 个渠道${removal ? ` · ${removal}` : ''}`
+          record.steps[2].status = 'running'
+          record.steps[2].detail = plan.index
+            ? `模型内容审核拦截，正在降级重试（第 ${plan.index} 次${removal ? `，${removal}` : ''}）`
+            : '正在请求模型生成候选'
+        })
+        if (!attemptRecord) return
+        activeStep = 'generate'
         try {
-          await this.changeCandidateSelection(agent, { id, candidateId: generated.candidates[0].id, selected: true }, { allowRunning: true, source: 'recommended' })
+          const structured = await this.topicExecutor({
+            prompt,
+            schema: TOPIC_CANDIDATES_SCHEMA,
+            agent,
+            onDshStarted: (run) => this.recordTopicDshStarted(workspace, generationsPath, id, run),
+            onDshEvent: (event) => this.recordTopicDshEvent(workspace, generationsPath, id, event),
+          })
+          activeStep = 'normalize'
+          const result = normalizeCandidates(structured, material)
+          await this.mutateGeneration(workspace, generationsPath, id, (record) => {
+            const current = Array.isArray(record.attempts) ? record.attempts.at(-1) : undefined
+            if (current) {
+              current.status = 'completed'; current.completedAt = this.now()
+              current.childSessionId = record.dsh?.childSessionId || current.childSessionId
+            }
+            record.reductionNote = plan.index
+              ? `内容安全审核拦截后降级 ${plan.index} 次；实际使用 ${material.sourceIds.length} 个来源 / ${material.signals.length} 条信号`
+              : null
+            record.steps[2].status = 'done'; record.steps[2].detail = `返回 ${result.returned} 个候选${plan.index ? `（第 ${plan.index} 次降级后）` : ''}`
+            record.candidates = result.candidates.map((candidate) => ({
+              ...candidate,
+              id: randomUUID(),
+              selection: { state: 'available', projectId: null, selectedAt: null, deselectedAt: null, source: null, error: null },
+            }))
+            record.returned = result.returned; record.summaryNote = result.summary
+            record.steps[3].status = result.returned ? 'running' : 'done'
+            record.steps[3].detail = result.returned ? '正在将推荐选题加入待写稿' : '本轮没有可加入的候选'
+          })
+          let autoError = null
+          const generated = await this.topicGenerationStatus(agent, { id })
+          if (generated.candidates[0]) {
+            try {
+              await this.changeCandidateSelection(agent, { id, candidateId: generated.candidates[0].id, selected: true }, { allowRunning: true, source: 'recommended' })
+            } catch (error) {
+              autoError = String(error?.message || error).slice(0, 300)
+            }
+          }
+          await this.mutateGeneration(workspace, generationsPath, id, (record) => {
+            record.steps[3].status = autoError ? 'error' : 'done'
+            record.steps[3].detail = autoError || (record.returned ? '推荐选题已自动加入待写稿' : '本轮没有可加入的候选')
+            record.autoSelectionError = autoError
+            record.status = 'completed'; record.completedAt = this.now(); record.elapsedMs = ms(startedAt, record.completedAt)
+          })
+          return
         } catch (error) {
-          autoError = String(error?.message || error).slice(0, 300)
+          const failureRecord = await this.topicGenerationStatus(agent, { id }).catch(() => null)
+          const content = isContentInspectionFailure(error, failureRecord?.dsh)
+          await this.mutateGeneration(workspace, generationsPath, id, (record) => {
+            const current = Array.isArray(record.attempts) ? record.attempts.at(-1) : undefined
+            if (current) {
+              current.status = content ? 'content-inspection' : 'failed'
+              current.error = failureMessage(error, record.dsh).slice(0, 500)
+              current.completedAt = this.now()
+              current.childSessionId = record.dsh?.childSessionId || current.childSessionId
+            }
+            if (content) {
+              record.steps[2].detail = `内容审核拦截：${plan.sourceIds.length ? `剩余 ${plan.sourceIds.length} 个来源` : '已无渠道信号'}`
+            }
+          })
+          if (!content) throw error
+          lastContentError = error
         }
       }
       await this.mutateGeneration(workspace, generationsPath, id, (record) => {
-        record.steps[3].status = autoError ? 'error' : 'done'
-        record.steps[3].detail = autoError || (record.returned ? '推荐选题已自动加入待写稿' : '本轮没有可加入的候选')
-        record.autoSelectionError = autoError
-        record.status = 'completed'; record.completedAt = this.now(); record.elapsedMs = ms(startedAt, record.completedAt)
+        record.reductionNote = `内容审核拦截：共尝试 ${plans.length} 次`
+        record.steps[1].detail = `已尝试 ${plans.length} 次，最后一次不使用渠道信号`
+        record.steps[2].status = 'error'
+        record.steps[2].detail = '模型内容审核拒绝了全部降级尝试'
       })
+      const last = lastContentError ? String(lastContentError.message || lastContentError).slice(0, 400) : '未知错误'
+      throw fail(`选题生成连续 ${plans.length} 次被模型内容审核拦截（最后一次已不带渠道信号）；请调整账号定位/选题角度/历史候选，或更换场景任务模型。最后一次错误：${last}`)
     } catch (error) {
       await this.failTopicGeneration(workspace, generationsPath, id, startedAt, error, activeStep)
     }

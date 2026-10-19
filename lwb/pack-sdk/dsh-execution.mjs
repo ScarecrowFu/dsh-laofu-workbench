@@ -25,6 +25,11 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 
 const MAX_REPAIRS = 2
 
+// Session format v4 retired the catch-all `plugin` source kind and requires a
+// producer-owned kind. LWB owns this kind for prompts it injects into its own
+// pack sessions (the root session is hidden from ordinary conversation).
+const PACK_MESSAGE_SOURCE = Object.freeze({ kind: 'lwb' })
+
 function patchName(agent) {
   return typeof agent?.id === 'string' ? agent.id : null
 }
@@ -300,7 +305,7 @@ async function runTurns({ agent, prompt, runSignal, packId, maxTokenContinuation
   let boundary = agent.session.seq
   agent.followup(createUserMessage({
     content: [{ type: 'text', text: prompt }],
-    source: { kind: 'plugin', plugin: packId },
+    source: PACK_MESSAGE_SOURCE,
   }))
   let continuations = 0
   while (true) {
@@ -320,7 +325,7 @@ async function runTurns({ agent, prompt, runSignal, packId, maxTokenContinuation
       boundary = agent.session.seq
       agent.followup(createUserMessage({
         content: [{ type: 'text', text: continuationPrompt({ attempt: continuations, maximum: maxTokenContinuations }) }],
-        source: { kind: 'plugin', plugin: packId },
+        source: PACK_MESSAGE_SOURCE,
       }))
       continue
     }

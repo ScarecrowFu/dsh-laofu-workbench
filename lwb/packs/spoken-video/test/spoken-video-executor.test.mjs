@@ -180,6 +180,8 @@ test('the video director reads turns from delivered events, not the removed Sess
   assert.equal(result.childSessionId, 'root-session-1')
   assert.deepEqual(result.output, [{ type: 'text', text: 'completed' }])
   assert.equal(root.followups.length, 1)
+  // Format v4 retired the catch-all `plugin` source; LWB supplies its own kind.
+  assert.equal(root.followups[0].source.kind, 'lwb')
 })
 
 test('the video director preserves the route captured by its caller', async () => {
