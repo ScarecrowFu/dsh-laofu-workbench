@@ -1,6 +1,6 @@
 import manifest from './lwb-pack.json' with { type: 'json' }
 import z from '@deepseek-ai/schemastery'
-import { createDshExecutor } from '@scitiger-ai/lwb-pack-sdk/execution'
+import { assertDshExecution, createDshExecutor } from '@scitiger-ai/lwb-pack-sdk/execution'
 import { assertObjectJsonSchema } from '@deepseek-ai/dsh-tools'
 import SpokenVideoGateway from './gateway.mjs'
 import { SpokenVideoProjectStore } from './spoken-video-store.mjs'
@@ -38,6 +38,9 @@ export async function apply(ctx, config = {}) {
     throw new Error('The spoken-video pack must be loaded by an LWB Profile.')
   }
   assertObjectJsonSchema(VIDEO_REVIEW_SCHEMA)
+  // Fail at pack load, with a version-specific message, instead of surfacing a
+  // misleading "no subagent seam" error on the first generation request.
+  assertDshExecution(ctx, ctx.subagents, manifest.id)
   const scope = ctx.lwbPackServices.forPack(manifest.id)
   const context = await scope.context()
   ctx.provide('spokenVideoScope', scope)

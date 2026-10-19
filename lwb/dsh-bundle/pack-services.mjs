@@ -127,7 +127,7 @@ export class LwbPackServices {
         tasks.signal.throwIfAborted()
         return globalThis.fetch(url, { ...options, signal: options.signal ? AbortSignal.any([options.signal, tasks.signal]) : tasks.signal })
       },
-      withAgent: (operation, signal = tasks.signal) => tasks.track(this.withAgent(id, operation, AbortSignal.any([signal, tasks.signal]))),
+      withAgent: (operation, signal = tasks.signal, options = {}) => tasks.track(this.withAgent(id, operation, AbortSignal.any([signal, tasks.signal]), options)),
       // Long-lived, pack-owned DSH sessions. The pack chooses the model route
       // explicitly and owns the returned handle until it disposes the session.
       sessions: Object.freeze({
@@ -226,13 +226,33 @@ export class LwbPackServices {
     }))
   }
 
-  async withAgent(id, operation, signal) {
+  /**
+   * Run one pack-owned operation on a fresh internal Agent.
+   *
+   * The Agent is a root in the pack workspace, recorded as pack-owned so it
+   * stays out of ordinary conversation history, and disposed when the operation
+   * settles. `options.agentOptions` lets a caller preserve the route captured by
+   * an outer task (for example an unattended round); omission uses the scene
+   * task default. `options.presetId` is the tool/persona composition to mount.
+   *
+   * @param id - capability pack id.
+   * @param operation - receives the published Agent and returns the task result.
+   * @param signal - caller cancellation, combined with the pack lifetime.
+   * @param options - optional route and preset overrides.
+   * @returns the operation result after the internal Agent is disposed.
+   */
+  async withAgent(id, operation, signal, options = {}) {
     signal.throwIfAborted()
     const scope = this.forPack(id)
     const context = await scope.context()
-    const selection = this.defaultSelection()
+    const candidate = options.agentOptions ?? this.defaultSelection()
+    const selection = typeof candidate?.provider === 'string' && candidate.provider.trim()
+      && typeof candidate?.model === 'string' && candidate.model.trim()
+      ? { provider: candidate.provider.trim(), model: candidate.model.trim(),
+        ...(candidate.reasoningEffort === undefined ? {} : { reasoningEffort: candidate.reasoningEffort }) }
+      : null
     if (!selection) throw new Error('尚未选择场景任务模型，请在“设置 → 场景任务默认模型”中完成配置。')
-    const preset = await this.ctx.agentPresets.resolve('standard')
+    const preset = await this.ctx.agentPresets.resolve(options.presetId ?? 'standard')
     const sessionId = `lwb-pack-${id}-${randomUUID()}`
     await this.workspaces.recordSession(id, sessionId)
     const handle = await this.ctx.agents.create({

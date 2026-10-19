@@ -1,5 +1,7 @@
+import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { assertUpstream, DSH_ROOT, UPSTREAM } from '../upstream.mjs'
 import { dshPackageDirectory } from '../dsh-bundle/dsh-adapter/package-paths.mjs'
 import { applyLwbEntryPolicy } from '../desktop/entry-policy.mjs'
@@ -83,4 +85,79 @@ if (!/name: 'main\.conversation'/u.test(conversationApply)) {
   throw new Error('ui-conversation no longer registers main.conversation; pack mode must be re-derived to avoid duplicate composers')
 }
 applyLwbEntryPolicy(readFileSync(join(DSH_ROOT, 'apps/desktop/lib/main.js'), 'utf8'))
+
+// Exercise the built server surfaces the capability-pack execution adapter
+// calls. A DSH rename must fail HERE, at upgrade acceptance, instead of on the
+// first generation request with a misleading "no subagent seam" error.
+async function builtModule(name) {
+  const entry = join(dshPackageDirectory(name), 'lib', 'index.js')
+  if (!existsSync(entry)) throw new Error(`Missing official build entry for ${name}: ${entry}; run npm run setup`)
+  return import(pathToFileURL(entry).href)
+}
+function requireMethods(label, value, methods) {
+  if (!value) throw new Error(`${label} is not exported by the locked DSH build`)
+  for (const method of methods) {
+    if (typeof value[method] !== 'function') throw new Error(`${label} no longer exposes ${method}(); the LWB execution adapter must be re-derived`)
+  }
+}
+
+const subagent = await builtModule('@deepseek-ai/dsh-subagent')
+const subagentRuntime = subagent.SubagentRuntime
+if (!subagentRuntime) throw new Error('@deepseek-ai/dsh-subagent no longer exports SubagentRuntime; the LWB structured executor cannot start a child')
+if (typeof subagentRuntime.prototype.startActivation !== 'function' && typeof subagentRuntime.prototype.start !== 'function') {
+  throw new Error('SubagentRuntime exposes neither startActivation() nor start(); update lwb/pack-sdk/dsh-execution.mjs and accept the new signature')
+}
+
+const agent = await builtModule('@deepseek-ai/dsh-agent')
+requireMethods('AgentRegistry', agent.AgentRegistry?.prototype, ['create', 'get'])
+const sessionController = await builtModule('@deepseek-ai/dsh-api-session-controller')
+requireMethods('SessionController', sessionController.SessionController?.prototype, ['create', 'selectModel', 'prompt'])
+
+// DSH 0.2.1 removed the public `Session.events` array. Multi-turn execution
+// uses `session.seq` for turn boundaries and the session/event listener for
+// turn records; keep the replacement surface asserted so a future rename fails
+// here instead of throwing "reading 'length'" during video direction.
+const sessionModule = await builtModule('@deepseek-ai/dsh-session')
+const sessionClass = sessionModule.Session
+if (!sessionClass) throw new Error('@deepseek-ai/dsh-session no longer exports Session; the LWB multi-turn executor cannot observe turns')
+if (typeof sessionClass.prototype.snapshotEvents !== 'function') {
+  throw new Error('Session no longer exposes snapshotEvents(); re-derive the LWB turn observation seam')
+}
+if (!Object.getOwnPropertyDescriptor(sessionClass.prototype, 'seq')?.get) {
+  throw new Error('Session no longer exposes the `seq` getter; the LWB turn boundary must be re-derived')
+}
+
+// Agent turn-driving methods are on the implementation type, not an exported
+// value; the locked build's declaration is the machine-readable contract.
+const agentRuntimeTypes = readFileSync(join(dshPackageDirectory('@deepseek-ai/dsh-agent'), 'lib', 'types', 'runtime-types.d.ts'), 'utf8')
+for (const signature of ['cancel(cause:', 'whenIdle():', 'followup(message:']) {
+  if (!agentRuntimeTypes.includes(signature)) throw new Error(`Agent runtime no longer declares ${signature}; the LWB multi-turn executor must be re-derived`)
+}
+
+const tools = await builtModule('@deepseek-ai/dsh-tools')
+for (const name of ['assertObjectJsonSchema', 'defineTool']) {
+  if (typeof tools[name] !== 'function') throw new Error(`@deepseek-ai/dsh-tools no longer exports ${name}; the capability-pack contract must be re-derived`)
+}
+const llm = await builtModule('@deepseek-ai/dsh-llm')
+for (const name of ['createUserMessage', 'expandAssistantStream']) {
+  if (typeof llm[name] !== 'function') throw new Error(`@deepseek-ai/dsh-llm no longer exports ${name}; the capability-pack execution adapter must be re-derived`)
+}
+const typert = await builtModule('@deepseek-ai/dsh-typert-protocol')
+for (const name of ['Remote', 'TypertRemoteService']) {
+  if (typeof typert[name] !== 'function') throw new Error(`@deepseek-ai/dsh-typert-protocol no longer exports ${name}; every pack gateway must be re-derived`)
+}
+
+// The `subagents` service is version-sensitive and belongs to the SDK adapter.
+// A capability pack that binds to it directly would have to change on every DSH
+// seam rename; keep that coupling in one reviewed module instead.
+const repoRoot = fileURLToPath(new URL('../..', import.meta.url))
+const packSources = execFileSync('git', ['ls-files', 'lwb/packs/**/*.mjs'], { cwd: repoRoot, encoding: 'utf8' })
+  .split('\n').map(line => line.trim()).filter(Boolean)
+for (const file of packSources) {
+  const source = readFileSync(join(repoRoot, file), 'utf8')
+  if (/@deepseek-ai\/dsh-subagent/u.test(source) || /\bsubagents\.start(?:Activation)?\s*\(/u.test(source)) {
+    throw new Error(`Capability pack ${file} binds directly to the version-sensitive subagents service; route it through @scitiger-ai/lwb-pack-sdk/execution`)
+  }
+}
+
 console.log(`LWB upstream contract passed: ${UPSTREAM.tag} (${result.commit}); official source clean.`)

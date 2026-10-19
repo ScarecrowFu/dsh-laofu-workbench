@@ -31,6 +31,7 @@ function packHarness(workspacePath, { executionStatus, modelRoute } = {}) {
     request: (operation) => operation({ packId: PACK_ID, workspacePath }),
     onStop: () => {},
     assertAgent: async () => ({ packId: PACK_ID, workspacePath }),
+    withAgent: async (operation) => operation({ id: 'entry-test-agent', session: { events: [] }, options: {}, whenIdle: async () => {}, followup: () => {} }),
   }
   const services = {
     forPack: (id) => { assert.equal(id, PACK_ID); return scope },
@@ -43,6 +44,7 @@ function packHarness(workspacePath, { executionStatus, modelRoute } = {}) {
     provide: (name, value) => { provided.set(name, value); return value },
     plugin: () => {},
     effect: (fn) => fn(),
+    on: () => () => {},
     get: () => null,
     subagents: { start: async () => { throw new Error('no child may start') } },
     tools: { register: (tool) => tool },

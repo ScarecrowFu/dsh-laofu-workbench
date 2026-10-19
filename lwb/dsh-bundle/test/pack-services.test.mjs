@@ -28,7 +28,7 @@ async function setup(t) {
       register: (name) => name,
       mutate: async (ns, ops) => { assert.equal(ns, 'llm-pi-ai'); for (const op of ops) settings.providers[op.path[1]] = op.value },
     },
-    agentPresets: { register: async options => calls.push(['preset.register', options]), resolve: async () => ({ id: 'standard' }), mount: async (_, id) => calls.push(['preset', id]) },
+    agentPresets: { register: async options => calls.push(['preset.register', options]), resolve: async id => ({ id }), mount: async (_, id) => calls.push(['preset', id]) },
     permissionPresets: { set: (_, value) => calls.push(['permission', value]) },
     agents: {
       create: async (options) => {
@@ -216,6 +216,17 @@ test('AI roots use DSH defaults without pack model credentials and keep owned cw
   assert.deepEqual(calls.filter(([kind]) => kind !== 'create'), [['preset', 'standard'], ['permission', 'workspace-write'], ['dispose']])
   assert.deepEqual(settings, originalSettings)
   assert.deepEqual([...keys], originalKeys)
+})
+
+test('a withAgent caller can preserve a captured route and preset', async (t) => {
+  const { first, calls } = await setup(t)
+  await first.withAgent(() => {}, undefined, {
+    agentOptions: { provider: 'captured', model: 'captured-model', reasoningEffort: 'low', maxTokens: 999 },
+    presetId: 'captured-preset',
+  })
+  const options = calls.find(([kind]) => kind === 'create')[1]
+  assert.deepEqual(options.agentOptions, { provider: 'captured', model: 'captured-model', reasoningEffort: 'low' })
+  assert.ok(calls.some(([kind, value]) => kind === 'preset' && value === 'captured-preset'))
 })
 
 test('new pack sessions follow updated DSH defaults while each in-flight session keeps its snapshot', async (t) => {
