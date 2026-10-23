@@ -1,6 +1,6 @@
 {
   "name": "dsh-laofu-workbench",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": true,
   "license": "PolyForm-Noncommercial-1.0.0",
   "description": "Laofu Workbench product profile built on the pinned DeepSeek Harness composition.",
