@@ -35,6 +35,7 @@
 | 配音/字幕提示未配置 | 到「配音 / 字幕 → 连接配置」选择 LWB 账号或百炼。LWB 路径需先登录且服务可用；BYOK 路径需保存媒体服务凭据。AI 模型凭据不会自动成为媒体凭据。 |
 | 封面生成提示未配置 | 到「发布 → 封面生图」选择 LWB 账号或百炼，确认账号服务或 BYOK 图片模型可用。该配置独立于配音和 AI 模型。 |
 | LWB 服务提示积分不足，或百炼提示额度/权限错误 | LWB 服务在「设置」查看积分、会员和服务状态，必要时购买积分或切换到 BYOK；百炼则检查供应商账户余额、模型权限与 API 区域/工作空间。 |
+| 百炼配音报 `Model not exist.`（如「百炼 TTS 第 1/6 段失败」） | 请求里的模型名已不在百炼在架清单里，不是网络或积分问题。百炼会不定期下线历史模型，**名字带日期的是快照模型，下线前仅提前 30 天通知**，过期后调用直接报此错。内置默认值已改为不带日期的现行模型（`qwen-audio-3.1-tts-plus`、创音色 `voice-enrollment`）；若你手动覆盖过模型环境变量，请对照百炼「语音合成概述」的现行清单改回主线模型。注意**复刻音色绑定创建时的 `target_model`**，换合成模型必须重新创建音色。另：共享域名 `dashscope.aliyuncs.com` 已进入维护状态，建议改用业务空间专属域名。 |
 | `ffmpeg` / `ffprobe` 不存在 | 在启动服务的同一终端验证两个命令，安装 FFmpeg 并配置 PATH，重启服务。 |
 | 打包版（桌面 App）导出视频报 `Library not loaded: libavdevice.dylib`，或 `relative path not allowed in hardened program` | 这不是缺 FFmpeg，而是 macOS hardened runtime 与 Remotion 自带原生库加载路径的冲突：产物给整个 payload 做了硬化签名，而 `@remotion/compositor-darwin-*` 用的是裸相对名。开发态用仓库里未硬化的副本，所以只在打包版复现。需要用带修复的版本重新打包（`lwb/desktop/darwin-library-paths.mjs` 在签名前把引用改写成 `@loader_path`）；旧产物不会自行变好，runtime 目录按构建 id 隔离，换新构建即可。 |
 | 找不到渲染浏览器 | 运行 `npx --no-install remotion browser ensure`，或设置 `LWB_REMOTION_BROWSER_EXECUTABLE` 为实际可执行文件绝对路径。 |

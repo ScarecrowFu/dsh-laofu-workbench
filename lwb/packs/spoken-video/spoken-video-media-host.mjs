@@ -461,6 +461,11 @@ async function defaultVoiceReference() {
   return { ...DEFAULT_VOICE_PROFILE, path: DEFAULT_VOICE_FILE, audio }
 }
 
+/** Bailian requires the enrolment prefix to be alphanumeric and at most 10 characters. */
+function bailianVoicePrefix(reference, cacheKey) {
+  return `${reference.id === DEFAULT_VOICE_PROFILE.id ? 'lwbtiffy' : 'lwbvoice'}${cacheKey.slice(0, 2)}`
+}
+
 function nested(value, path) {
   let current = value
   for (const key of path) {
@@ -879,6 +884,15 @@ export class SpokenVideoMediaHost {
         lwb: await this.#accountStatus('tts'),
       },
     }
+  }
+
+  /**
+   * The saved media connection preference, i.e. the source the audio page
+   * persists. Unattended rounds read it so an automation picks up whatever the
+   * user last chose, instead of the normalizer's hard default.
+   */
+  async preferredProvider() {
+    return (await this.connection()).provider
   }
 
   async configureConnection(request) {
@@ -1807,10 +1821,10 @@ export class SpokenVideoMediaHost {
   async #bailianTtsSegment(config, apiKey, model, voice, segment, details, source, output) {
     let lastError = null
     for (let attempt = 1; attempt <= BAILIAN_TTS_SEGMENT_ATTEMPTS; attempt += 1) {
-      const body = await this.#externalJson(`${config.bailianBaseUrl}/services/aigc/multimodal-generation/generation`, {
+      const body = await this.#externalJson(`${config.bailianBaseUrl}/services/audio/tts/SpeechSynthesizer`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, input: { text: segment, voice, language_type: 'Chinese' } }),
+        body: JSON.stringify({ model, input: { text: segment, voice, format: 'wav', sample_rate: 24000 } }),
         signal: AbortSignal.timeout(MAX_POLL_MS),
       }, `百炼 TTS 第 ${details.index}/${details.total} 段`)
       const audioUrl = stringAt(body, ['output', 'audio', 'url'])
@@ -1927,16 +1941,16 @@ export class SpokenVideoMediaHost {
       body: JSON.stringify({
         model: config.bailianVoiceEnrollmentModel,
         input: {
-          action: 'create',
+          action: 'create_voice',
           target_model: config.bailianVoiceCloneModel,
-          preferred_name: `${reference.id === DEFAULT_VOICE_PROFILE.id ? 'lwb_tiffy' : 'lwb_voice'}_${cacheKey.slice(0, 6)}`,
-          audio: { data: `data:${reference.mediaType};base64,${reference.audio.toString('base64')}` },
-          language: 'zh',
+          prefix: bailianVoicePrefix(reference, cacheKey),
+          audio: `data:${reference.mediaType};base64,${reference.audio.toString('base64')}`,
+          language_hints: ['zh'],
         },
       }),
       signal: AbortSignal.timeout(MAX_POLL_MS),
     }, '百炼参考音色复刻')
-    const voice = stringAt(body, ['output', 'voice'])
+    const voice = stringAt(body, ['output', 'voice_id'], ['output', 'voice'])
     if (!voice) fail('SPOKEN_VIDEO_MEDIA_SERVICE_FAILED', '百炼参考音色复刻没有返回有效结果。')
     this.bailianReferenceVoices.set(cacheKey, voice)
     await this.#storeBailianReferenceVoice(cacheKey, voice)

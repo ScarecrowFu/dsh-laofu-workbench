@@ -628,14 +628,15 @@ test('enrols the packaged reference voice through the active Bailian endpoint an
         observed.enrollments += 1
         const payload = JSON.parse(init.body)
         assert.equal(new Headers(init.headers).get('authorization'), 'Bearer sk-bailian-reference')
-        assert.equal(payload.model, 'qwen-voice-enrollment')
-        assert.equal(payload.input.target_model, 'qwen3-tts-vc-2026-01-22')
-        assert.match(payload.input.preferred_name, /^lwb_tiffy_[a-f0-9]{6}$/u)
-        assert.equal(payload.input.audio.data.startsWith('data:audio/mpeg;base64,'), true)
-        assert.equal(payload.input.language, 'zh')
-        return new Response(JSON.stringify({ output: { voice: 'tiffy-enrolled-voice' } }))
+        assert.equal(payload.model, 'voice-enrollment')
+        assert.equal(payload.input.action, 'create_voice')
+        assert.equal(payload.input.target_model, 'qwen-audio-3.1-tts-plus')
+        assert.match(payload.input.prefix, /^lwbtiffy[a-f0-9]{2}$/u)
+        assert.equal(payload.input.audio.startsWith('data:audio/mpeg;base64,'), true)
+        assert.deepEqual(payload.input.language_hints, ['zh'])
+        return new Response(JSON.stringify({ output: { voice_id: 'tiffy-enrolled-voice' } }))
       }
-      if (parsed.pathname === '/api/v1/services/aigc/multimodal-generation/generation') {
+      if (parsed.pathname === '/api/v1/services/audio/tts/SpeechSynthesizer') {
         const payload = JSON.parse(init.body)
         observed.tts.push(payload)
         assert.equal(new Headers(init.headers).get('authorization'), 'Bearer sk-bailian-reference')
@@ -662,7 +663,7 @@ test('enrols the packaged reference voice through the active Bailian endpoint an
   }
   assert.equal(observed.enrollments, 1)
   assert.equal(observed.tts.length, 3)
-  assert.equal(observed.tts.every((payload) => payload.model === 'qwen3-tts-vc-2026-01-22' && payload.input.voice === 'tiffy-enrolled-voice'), true)
+  assert.equal(observed.tts.every((payload) => payload.model === 'qwen-audio-3.1-tts-plus' && payload.input.voice === 'tiffy-enrolled-voice'), true)
   assert.equal(JSON.stringify(settings.get()).includes('sk-bailian-reference'), false)
   assert.equal(Object.keys(settings.get().bailianReferenceVoices).length, 1)
 })
@@ -686,9 +687,9 @@ test('enrols an uploaded reference audio before Bailian synthesis', async (t) =>
       const parsed = new URL(String(url))
       if (parsed.pathname === '/api/v1/services/audio/tts/customization') {
         observed.enrollment = JSON.parse(init.body)
-        return new Response(JSON.stringify({ output: { voice: 'uploaded-enrolled-voice' } }))
+        return new Response(JSON.stringify({ output: { voice_id: 'uploaded-enrolled-voice' } }))
       }
-      if (parsed.pathname === '/api/v1/services/aigc/multimodal-generation/generation') {
+      if (parsed.pathname === '/api/v1/services/audio/tts/SpeechSynthesizer') {
         observed.synthesis = JSON.parse(init.body)
         return new Response(JSON.stringify({ request_id: 'tts_uploaded_bailian', output: { audio: { url: 'https://media.test/uploaded-bailian.wav' } } }))
       }
@@ -704,10 +705,10 @@ test('enrols an uploaded reference audio before Bailian synthesis', async (t) =>
   })
   const finished = await waitForAudioTask(host, currentAgent, started.id)
   assert.equal(finished.status, 'succeeded', finished.error)
-  assert.match(observed.enrollment.input.preferred_name, /^lwb_voice_[a-f0-9]{6}$/u)
-  const encoded = observed.enrollment.input.audio.data.replace(/^data:audio\/wav;base64,/u, '')
+  assert.match(observed.enrollment.input.prefix, /^lwbvoice[a-f0-9]{2}$/u)
+  const encoded = observed.enrollment.input.audio.replace(/^data:audio\/wav;base64,/u, '')
   assert.deepEqual(Buffer.from(encoded, 'base64'), referenceAudio)
-  assert.equal(observed.synthesis.model, 'qwen3-tts-vc-2026-01-22')
+  assert.equal(observed.synthesis.model, 'qwen-audio-3.1-tts-plus')
   assert.equal(observed.synthesis.input.voice, 'uploaded-enrolled-voice')
   assert.equal(finished.result.voiceId, 'uploaded-enrolled-voice')
 })
@@ -731,11 +732,13 @@ test('accepts Bailian WAVs with an unbounded RIFF size, retries incomplete segme
     environment: { LWB_SPOKEN_VIDEO_BAILIAN_BASE_URL: 'https://workspace.test/api/v1' },
     fetch: async (url, init = {}) => {
       const parsed = new URL(String(url))
-      if (parsed.hostname === 'workspace.test' && parsed.pathname === '/api/v1/services/aigc/multimodal-generation/generation') {
+      if (parsed.hostname === 'workspace.test' && parsed.pathname === '/api/v1/services/audio/tts/SpeechSynthesizer') {
         requests.tts += 1
         const payload = JSON.parse(init.body)
-        assert.equal(payload.model, 'qwen3-tts-flash')
+        assert.equal(payload.model, 'qwen-audio-3.1-tts-plus')
         assert.equal(payload.input.voice, 'test-voice')
+        assert.equal(payload.input.format, 'wav')
+        assert.equal(payload.input.sample_rate, 24000)
         assert.equal(payload.input.text.length <= 400, true)
         return new Response(JSON.stringify({
           request_id: `tts_segment_${requests.tts}`,

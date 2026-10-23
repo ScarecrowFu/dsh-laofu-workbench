@@ -856,11 +856,34 @@ export class SpokenVideoScheduleHost {
     const voice = schedule.production.voice
     const request = { projectId, expectedRevision: detail.revision }
     if (step === 'subtitles') {
-      Object.assign(request, { language: 'zh', aiOptimize: true })
-    } else if (voice) {
+      // Subtitles follow the provider that actually produced the voiceover,
+      // not the schedule's own preference: the committed voiceover artifact
+      // records the provider that ran. A voiceover can be re-recorded or
+      // switched by hand after the schedule was saved, and transcribing it
+      // with a different vendor than the one that synthesized it would be
+      // wrong. The preference is only a fallback for a legacy voiceover that
+      // predates the recorded provider.
+      const spoken = detail.artifacts?.voiceover?.data
+      const preferred = typeof this.media.preferredProvider === 'function' ? await this.media.preferredProvider() : null
+      const provider = spoken?.provider || voice?.provider || preferred
       Object.assign(request, {
-        provider: voice.provider, voiceSource: voice.voiceSource, voiceId: voice.voiceId,
-        voiceName: voice.voiceName, rate: voice.rate, volume: voice.volume, pitch: voice.pitch,
+        language: 'zh', aiOptimize: true,
+        ...(provider ? { provider } : {}),
+      })
+    } else {
+      // A schedule may pin its own voice; otherwise the round honours the
+      // saved media connection preference, which is the same source the audio
+      // page writes. Without this fallback the normalizer's hard default
+      // ('lwb') silently ignored the user's chosen provider. The probe is
+      // optional so a host that does not expose it keeps the old behaviour.
+      const preferred = typeof this.media.preferredProvider === 'function' ? await this.media.preferredProvider() : null
+      const provider = voice?.provider || preferred
+      Object.assign(request, {
+        ...(provider ? { provider } : {}),
+        ...(voice ? {
+          voiceSource: voice.voiceSource, voiceId: voice.voiceId,
+          voiceName: voice.voiceName, rate: voice.rate, volume: voice.volume, pitch: voice.pitch,
+        } : { voiceSource: 'system' }),
       })
     }
     const started = step === 'subtitles'

@@ -115,19 +115,26 @@ export function mediaServiceConfig(environment = process.env) {
     bailianBaseUrl,
     bailianAsrWebSocketUrl: websocketEndpoint(environment.LWB_SPOKEN_VIDEO_BAILIAN_ASR_WS_URL || 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime'),
     bailianAsrModel: optionalText(environment.LWB_SPOKEN_VIDEO_BAILIAN_ASR_MODEL, '百炼 ASR 模型', 120) || 'qwen3-asr-flash-realtime',
-    bailianModel: optionalText(environment.LWB_SPOKEN_VIDEO_BAILIAN_TTS_MODEL, '百炼 TTS 模型', 120) || 'qwen3-tts-flash',
-    bailianDefaultVoice: optionalText(environment.LWB_SPOKEN_VIDEO_BAILIAN_DEFAULT_VOICE, '百炼默认音色', 80) || 'Cherry',
-    bailianVoiceEnrollmentModel: optionalText(environment.LWB_SPOKEN_VIDEO_BAILIAN_VOICE_ENROLLMENT_MODEL, '百炼声音复刻模型', 120) || 'qwen-voice-enrollment',
-    bailianVoiceCloneModel: optionalText(environment.LWB_SPOKEN_VIDEO_BAILIAN_VOICE_CLONE_MODEL, '百炼复刻 TTS 模型', 120) || 'qwen3-tts-vc-2026-01-22',
+    bailianModel: optionalText(environment.LWB_SPOKEN_VIDEO_BAILIAN_TTS_MODEL, '百炼 TTS 模型', 120) || 'qwen-audio-3.1-tts-plus',
+    bailianDefaultVoice: optionalText(environment.LWB_SPOKEN_VIDEO_BAILIAN_DEFAULT_VOICE, '百炼默认音色', 80) || 'longanhuan_v3.1',
+    bailianVoiceEnrollmentModel: optionalText(environment.LWB_SPOKEN_VIDEO_BAILIAN_VOICE_ENROLLMENT_MODEL, '百炼声音复刻模型', 120) || 'voice-enrollment',
+    bailianVoiceCloneModel: optionalText(environment.LWB_SPOKEN_VIDEO_BAILIAN_VOICE_CLONE_MODEL, '百炼复刻 TTS 模型', 120) || 'qwen-audio-3.1-tts-plus',
   }
 }
 
 export function normalizeVoiceoverRequest(value) {
   const input = object(value ?? {}, '配音请求')
+  const provider = oneOf(input.provider, '生成方式', MEDIA_PROVIDERS, 'lwb')
   const voiceSource = oneOf(input.voiceSource, '音色来源', VOICE_SOURCES, 'system')
   const voiceId = optionalText(input.voiceId, '音色标识', 160)
   if (voiceSource === 'preset' && !voiceId) {
     throw fail('SPOKEN_VIDEO_MEDIA_INVALID_INPUT', '指定预置音色时必须填写音色标识。')
+  }
+  // A preset voice is a Bailian system voice ID. Sending it to another
+  // provider would pass a foreign identifier as that service's own voice, so
+  // reject the combination instead of letting it fail upstream.
+  if (voiceSource === 'preset' && provider !== 'bailian') {
+    throw fail('SPOKEN_VIDEO_MEDIA_INVALID_INPUT', '预置音色仅适用于百炼渠道，请切换到百炼后重试。')
   }
   const referenceInput = input.referenceAudio == null ? null : object(input.referenceAudio, '参考音频')
   const referenceAudio = referenceInput ? {
@@ -140,7 +147,7 @@ export function normalizeVoiceoverRequest(value) {
     throw fail('SPOKEN_VIDEO_MEDIA_INVALID_INPUT', '使用自定义音色时请先上传参考音频。')
   }
   return {
-    provider: oneOf(input.provider, '生成方式', MEDIA_PROVIDERS, 'lwb'),
+    provider,
     voiceSource,
     voiceId,
     voiceName: optionalText(input.voiceName, '音色名称', 120)

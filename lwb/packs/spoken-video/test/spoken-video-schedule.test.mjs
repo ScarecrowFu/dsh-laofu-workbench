@@ -155,6 +155,16 @@ test('parseScheduleRequest rejects unknown depths and validates voice through th
     production: { voice: { provider: 'bailian', voiceSource: 'upload' } },
   }), /音色设置无效/u)
   assert.throws(() => parseScheduleRequest({ name: '坏方向', days: [1], time: '09:00', depth: 'topic', production: { orientation: 'square' } }), /portrait 或 landscape/u)
+  // A preset voice is a Bailian system voice ID; another provider must reject
+  // it rather than forward a foreign identifier as its own voice.
+  assert.throws(() => parseScheduleRequest({
+    name: '预置音色配错渠道', days: [1], time: '09:00', depth: 'video',
+    production: { voice: { provider: 'lwb', voiceSource: 'preset', voiceId: 'longanhuan_v3.1' } },
+  }), /预置音色仅适用于百炼渠道/u)
+  assert.equal(parseScheduleRequest({
+    name: '预置音色配百炼', days: [1], time: '09:00', depth: 'video',
+    production: { voice: { provider: 'bailian', voiceSource: 'preset', voiceId: 'longanhuan_v3.1' } },
+  }).production.voice.voiceId, 'longanhuan_v3.1')
 })
 
 test('parseScheduleRequest drops unknown AI daily platforms instead of storing them', () => {
@@ -237,7 +247,7 @@ test('scheduleFile drops one corrupt run but keeps the rest of the file readable
  * A scripted pipeline double. Each stage resolves after `advance` polls so the
  * orchestrator's sequencing, not the real media chain, is what gets asserted.
  */
-function fakeHosts({ depth = 'packaging', perRunLimit = 1, failStep = null, neverDone = null, candidates = 2 } = {}) {
+function fakeHosts({ depth = 'packaging', perRunLimit = 1, failStep = null, neverDone = null, candidates = 2, voiceoverProvider = null } = {}) {
   const calls = []
   const record = (name, value) => { calls.push({ name, ...(value || {}) }); return value }
   const projectIdFor = (index) => `1111111${index}-1111-4111-8111-111111111111`.slice(0, 36)
@@ -329,7 +339,20 @@ function fakeHosts({ depth = 'packaging', perRunLimit = 1, failStep = null, neve
 
   const media = {
     async status() { return { ttsConfigured: true, connection: { provider: 'bailian', providers: { bailian: { configured: true, source: 'user', writable: true } } }, renderers: { remotion: true, 'local-ffmpeg': true }, providers: { legacy: { configured: false } } } },
-    async startVoiceover(currentAgent, request) { record('startVoiceover', { request }); return { id: `voiceover:${request.projectId}` } },
+    // Mirrors the real host: the unattended round reads the saved media
+    // preference when the schedule does not pin a voice of its own.
+    async preferredProvider() { return 'bailian' },
+    async startVoiceover(currentAgent, request) {
+      record('startVoiceover', { request })
+      // The real host commits the provider that actually ran, which is what the
+      // subtitle stage reads back. `voiceoverProvider` simulates a voiceover
+      // that was re-recorded outside this schedule (e.g. by hand), so the
+      // recorded provider differs from what the schedule would have picked.
+      const project = projects.get(request.projectId)
+      const recorded = voiceoverProvider || request.provider || 'lwb'
+      if (project) project.artifacts.voiceover = { revision: 4, data: { mode: 'tts', provider: recorded, audio: { file: 'media/voiceovers/test.wav' } } }
+      return { id: `voiceover:${request.projectId}` }
+    },
     async startSubtitles(currentAgent, request) { record('startSubtitles', { request }); return { id: `subtitles:${request.projectId}` } },
     async startVideoRender(currentAgent, request) { record('startVideoRender', { request }); return { id: `video:${request.projectId}` } },
     async operations(currentAgent, { projectId }) {
@@ -579,6 +602,36 @@ test('depth topic stops after the candidates are queued for writing', async (t) 
   assert.equal(run.items[0].status, 'completed')
   assert.deepEqual(run.items[0].stages.map((stage) => stage.step), ['topic'])
   assert.match(run.message, /待写稿选题/u)
+})
+
+test('an unattended round honours the saved media preference and subtitles follow the voiceover', async (t) => {
+  // The saved preference is 'bailian', the schedule pins 'lwb', and the
+  // committed voiceover was produced by 'bailian'. Three different sources, so
+  // the assertion can tell which one the subtitle stage actually read.
+  const { host, currentAgent, fake } = await setup(t, { voiceoverProvider: 'bailian' })
+  const created = await createTask(host, currentAgent, { production: { orientation: 'landscape', voice: { provider: 'lwb', voiceSource: 'system', rate: 1, volume: 1, pitch: 0 } } })
+  const { runId } = await host.runSchedule(currentAgent, { scheduleId: created.id })
+  const run = await settleRun(host, currentAgent, runId)
+
+  assert.equal(run.status, 'completed')
+  // A pinned voice wins over the saved preference.
+  assert.equal(fake.calls.find((call) => call.name === 'startVoiceover').request.provider, 'lwb')
+  // Subtitles read the provider recorded on the voiceover artifact
+  // ('bailian'), not the schedule's pinned 'lwb'.
+  assert.equal(fake.calls.find((call) => call.name === 'startSubtitles').request.provider, 'bailian')
+})
+
+test('an unattended round falls back to the saved media preference when no voice is pinned', async (t) => {
+  const { host, currentAgent, fake } = await setup(t)
+  const created = await createTask(host, currentAgent)
+  const { runId } = await host.runSchedule(currentAgent, { scheduleId: created.id })
+  const run = await settleRun(host, currentAgent, runId)
+
+  assert.equal(run.status, 'completed')
+  // The schedule pins no voice, so the round must fall back to the saved media
+  // preference ('bailian') instead of the normalizer's hard default ('lwb').
+  assert.equal(fake.calls.find((call) => call.name === 'startVoiceover').request.provider, 'bailian')
+  assert.equal(fake.calls.find((call) => call.name === 'startVoiceover').request.voiceSource, 'system')
 })
 
 test('subtitles off drops the subtitle stage from the run', async (t) => {
