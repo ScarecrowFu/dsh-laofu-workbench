@@ -36,7 +36,7 @@
     "pack:profile-check": "node lwb/pack-profile-smoke.mjs",
     "test": "npm run check && npm run profile:check && npm run pack:profile-check && npm run unit:test && npm run arena:test",
     "upstream:check": "node lwb/upgrade/verify.mjs",
-    "unit:test": "node --test lwb/pack-sdk/test/*.test.mjs lwb/desktop/*.test.mjs lwb/dsh-bundle/test/pack-*.test.mjs lwb/dsh-bundle/test/ats-client.test.mjs lwb/dsh-bundle/test/task-model.test.mjs lwb/dsh-bundle/test/lwb-model.test.mjs lwb/dsh-bundle/test/client-*.test.mjs lwb/dsh-bundle/test/runtime-config.test.mjs lwb/packs/spoken-video/test/*.test.mjs",
+    "unit:test": "node --test lwb/pack-sdk/test/*.test.mjs lwb/desktop/*.test.mjs lwb/dsh-bundle/test/pack-*.test.mjs lwb/dsh-bundle/test/browser-shim.test.mjs lwb/dsh-bundle/test/ats-client.test.mjs lwb/dsh-bundle/test/task-model.test.mjs lwb/dsh-bundle/test/lwb-model.test.mjs lwb/dsh-bundle/test/web-router.test.mjs lwb/dsh-bundle/test/client-*.test.mjs lwb/dsh-bundle/test/runtime-config.test.mjs lwb/packs/spoken-video/test/*.test.mjs",
     "upstream:refs": "sh lwb/upgrade/check-upstream.sh",
     "test:integration": "node lwb/upgrade/smoke.mjs"
   },

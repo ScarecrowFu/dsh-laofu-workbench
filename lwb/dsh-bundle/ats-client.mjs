@@ -231,6 +231,7 @@ function assertServicePath(service, path, method) {
     tts: [['POST', /^\/api\/v1\/tts\/jobs$/u], ['GET', /^\/api\/v1\/tts\/jobs\/[A-Za-z0-9_-]+$/u], ['POST', /^\/api\/v1\/media\/audio-uploads$/u]],
     subtitle: [['POST', /^\/api\/v1\/subtitle\/jobs$/u], ['GET', /^\/api\/v1\/subtitle\/jobs\/[A-Za-z0-9_-]+$/u], ['POST', /^\/api\/v1\/media\/audio-uploads$/u]],
     'cover-image': [['POST', /^\/api\/lwb\/cover-images$/u], ['GET', /^\/api\/v1\/tasks\/[A-Za-z0-9_-]+$/u]],
+    web: [['POST', /^\/api\/v1\/web\/search$/u], ['POST', /^\/api\/v1\/web\/fetch$/u]],
   }
   if (!rules[service]?.some(([verb, pattern]) => verb === method.toUpperCase() && pattern.test(path))) throw errorWithCode('能力包请求了不允许的 LWB 服务路径。', 'LWB_ATS_SERVICE_SCOPE')
 }

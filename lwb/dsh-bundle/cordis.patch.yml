@@ -44,3 +44,14 @@
 - id: ui-theme
   config:
     preference: light
+
+# Web search / fetch routing. The seam takes ONE provider id per capability and
+# resolves it per call, so `lwb-web` decides inside the provider whether the
+# current session's model route is DeepSeek's own account (call DeepSeek
+# directly with the account sign-in) or anything else (call the LWB ATS with
+# points billing). Pinning the id here keeps the built-in providers registered
+# but unused, so switching back is a config change, not a code change.
+- id: web
+  config:
+    searchProvider: lwb-web
+    fetchProvider: lwb-web

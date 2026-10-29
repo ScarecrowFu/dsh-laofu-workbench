@@ -20,6 +20,7 @@ import LwbAccountGateway from './account-gateway.mjs'
 import { openTaskModel } from './task-model.mjs'
 import { registerLwbModels } from './dsh-adapter/lwb-model.mjs'
 import { registerLwbBranding } from './branding.mjs'
+import { registerLwbWebRouter } from './web-router.mjs'
 
 /**
  * Host-side product identity for the LWB DSH composition.
@@ -52,6 +53,12 @@ export async function apply(ctx, config = {}) {
   ctx.provide('lwbTaskModel', taskModel)
   ctx.provide('lwbPackServices', new LwbPackServices(ctx, workspaces, { account, taskModel, entitlements }))
   registerLwbModels(ctx, account)
+  // Web search / fetch routing. Registered in a scoped inject so a profile
+  // without the `web` seam still applies the rest of this bundle, and so the
+  // router reads the live `agents` / `lwbAtsClient` services at call time.
+  ctx.inject(['web'], (webScope) => {
+    registerLwbWebRouter(webScope)
+  })
   const packGroup = await createPackGroup(ctx)
   const packRuntime = new LwbPackRuntime(ctx, { group: packGroup })
   ctx.provide('lwbPackRuntime', packRuntime)
