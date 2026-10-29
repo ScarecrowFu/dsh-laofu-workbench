@@ -90,13 +90,14 @@ test('the commercial edition does not resolve without its pack source', async ()
 test('the commercial edition resolves a private pack from its pinned source', async (t) => {
   const root = await temporaryRoot(t)
   const commercial = await writePack(root, { id: 'model-review', packageName: '@acme/model-review', directory: 'commercial-checkout' })
+  await writePack(root, { id: 'yuchi', packageName: '@acme/yuchi', directory: 'commercial-checkout/packs/yuchi' })
   const manifest = await loadEditionManifest(PROJECT_ROOT)
   const edition = await resolveEdition(manifest, 'commercial', {
     projectRoot: PROJECT_ROOT,
     ownedPacks: new Set(['spoken-video', 'ai-arena']),
     env: { LWB_COMMERCIAL_PACK_DIR: commercial },
   })
-  assert.deepEqual(edition.packs.map(pack => pack.id), ['spoken-video', 'ai-arena', 'model-review'])
+  assert.deepEqual(edition.packs.map(pack => pack.id), ['spoken-video', 'ai-arena', 'model-review', 'yuchi'])
   assert.equal(edition.packs[2].source, await realpath(commercial))
   assert.equal(edition.productHome, 'LaofuWorkbench')
   assert.equal(edition.protocolScheme, 'lwb')

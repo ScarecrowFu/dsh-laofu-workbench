@@ -20,7 +20,8 @@
       "packs": [
         { "id": "spoken-video" },
         { "id": "ai-arena" },
-        { "id": "model-review", "source": "${LWB_COMMERCIAL_PACK_DIR}" }
+        { "id": "model-review", "source": "${LWB_COMMERCIAL_PACK_DIR}" },
+        { "id": "yuchi", "source": "${LWB_COMMERCIAL_PACK_DIR}/packs/yuchi" }
       ]
     }
   }

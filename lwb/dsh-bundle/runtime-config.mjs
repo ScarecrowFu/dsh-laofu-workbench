@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,6 +23,25 @@ function profileId() {
 const productHome = resolve(text(process.env.LWB_PRODUCT_HOME) || join(PROJECT_ROOT, 'lwb', 'local', 'current'))
 const dshHome = resolve(text(process.env.LWB_DSH_HOME) || text(process.env.DSH_HOME) || join(productHome, 'dsh-home'))
 
+/**
+ * The private pack checkout. Every capability pack that is finished has to be
+ * listed whenever the product starts, no matter which checkout it lives in, so
+ * the marketplace scans this directory as a source instead of relying on a
+ * per-machine registry entry. Membership decides whether a pack may be loaded;
+ * it must not decide whether the pack is visible.
+ *
+ * Explicit `LWB_COMMERCIAL_PACK_DIR` wins. Otherwise the checkout beside this
+ * repository is used, which is where the packaging script looks too. A packaged
+ * Desktop build has no such sibling, so discovery simply finds nothing and the
+ * edition's own pack list stays authoritative.
+ */
+function commercialPackDir() {
+  const explicit = text(process.env.LWB_COMMERCIAL_PACK_DIR)
+  if (explicit) return resolve(explicit)
+  const sibling = resolve(PROJECT_ROOT, '..', 'dsh-laofu-workbench-commercial')
+  return existsSync(join(sibling, 'lwb-pack.json')) ? sibling : undefined
+}
+
 export const LWB_RUNTIME = Object.freeze({
   projectRoot: PROJECT_ROOT,
   dshRuntimeDir: resolve(text(process.env.LWB_DSH_RUNTIME_DIR) || join(PROJECT_ROOT, 'vendor', 'deepseek-harness')),
@@ -32,6 +52,7 @@ export const LWB_RUNTIME = Object.freeze({
   productHome,
   registryPath: resolve(text(process.env.LWB_PACK_REGISTRY) || join(productHome, 'packs.json')),
   sourcePacksDir: resolve(text(process.env.LWB_PACKS_DIR) || join(PROJECT_ROOT, 'lwb', 'packs')),
+  commercialPacksDir: commercialPackDir(),
   atsBaseUrl: normalizeAtsUrl(process.env.LWB_ATS_URL),
   packRuntimeDir: text(process.env.LWB_PACK_RUNTIME_DIR) ? resolve(process.env.LWB_PACK_RUNTIME_DIR) : undefined,
 })

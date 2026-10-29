@@ -86,6 +86,7 @@ Host 声明 `lwbPackServices`，用 `getLwbPackScope(ctx, manifest)` 或 `ctx.lw
 | `signal` / `fetch` | 包级取消及合并取消的 HTTP |
 | `withAgent(operation, signal?)` | 创建、使用、释放包内原生 Agent |
 | `sessions.create/resume/get` | 管理包自有会话，登记归属 |
+| `sessions.inbound(sessionId, message)` | 把外部渠道消息投进包自有会话，来源保留在消息记录里 |
 | `sessions.adopt(agent)` | 接管自行创建的原生根会话，cwd 须等于包工作区 |
 | `assertAgent(agent)` | 工具调用验证包目录归属 |
 | `credentials` | 包命名空间内的业务凭据 |
@@ -117,6 +118,29 @@ h('article', { onPointerDownCapture: () => focusSession(run.sessionId) },
 `sessions.create({ provider, model, cwd })` 的 cwd 为包工作区内 `/` 分隔的相对路径，如 `runs/<taskId>/<runId>`；Host 逐段创建并拒绝符号链接和越界，缺省使用包根。`resume` 须用创建时同一 cwd。文件地址为 `dsh-resource://file/session/<sessionId>/<path>`，由官方处理。
 
 会话可以传入 `tools: 'none'` 与完整 `system` 提示词，此时使用无工具预设并启用 DSH 原生自动压缩。`maxTokens` 省略时不新增输出覆盖值，复用已有会话时保留原策略；传入正整数显式设置输出上限，传入 `null` 清除原策略及继承请求头中的上限，恢复模型/适配器默认。竞技台使用 `null` 兼容旧比赛，测评包使用标准会话默认。
+
+会话还可以指名 Host 注册的受控预设：目前只有 `preset: 'browser'`（注册为 `lwb-pack-browser`），用于替用户操作网页的工作会话。它与 `tools: 'none'` 互斥，因为两者都在定义工具集。预设是**完整的子插件清单**，不是叠加：`agentPresets.resolve()` 不返回 plugins，`agentPresets.mount()` 对已绑定 Agent 走 rebind 而非合并，所以它无法表达为"standard 加上浏览器"。浏览器预设只含浏览器工具与自动压缩，不含文件、命令与检索——一个被允许替你点网页的会话，不该同时拿到磁盘。
+
+写预设行有两条硬约束，都只在真宿主里才暴露：
+
+| 约束 | 不遵守的后果 | 怎么做 |
+|---|---|---|
+| 行名写**入口文件**（`lwb/dsh-bundle/dsh-adapter/package-paths.mjs` 的 `dshPackageEntry('@deepseek-ai/...')`，即 `file://…/lib/index.js`），不写裸包名 | 裸包名按"谁 import 它"的基址解析，而预设被挂进的是 Agent 树，基址是 `dsh-home/profiles/<id>`——那里的 `node_modules` 只有能力包链接。行 import 失败，动因被 `logger.error` 吞掉，`mountPreset` 只报 `never started`，看不出是哪个包 | 组装时用 `dshPackageEntry()` 解析一次；缺包就在注册处报错，而不是运行到一半 |
+| 提供服务的插件包进 `cordis:group` + `isolate` | `mountPreset` 以 `Preset services require isolate realms: <name>` 拒绝整个挂载：注册表是单例，泄漏到根 realm 等于越过会话边界 | `{ id, name: 'cordis:group', group: true, isolate: { browserUse: true }, config: [提供者, 消费者] }` |
+
+第二条同样适用于压缩：`compaction-basic` 一直挂着 `isolate: { compaction: true }` 的 group，否则会话拿不到隔离的压缩实例。
+
+预设驱动的浏览器由 `lwb/dsh-bundle/browser-shim.mjs` 决定，不是简单读一个环境变量：
+
+- `LWB_BROWSER_EXECUTABLE` 显式给了值，就原样用——谁点名了二进制，就不该被这层改写。
+- 没给，就没有"缺省交给上游下载"这回事：bundle 解析出 `playwright-core` 自己会用的那颗 Chromium，生成一个两行 shim（`exec <binary> --no-sandbox "$@"`）放进 `pack-state/browser/chromium-nosandbox.sh`，把 shim 当 `executablePath` 传下去。内容没变就不重写，权限固定 `0o755`。
+- Windows 跳过（`.cmd` 没法被 provider 那样 exec，且那边不撞这个沙箱问题）；任何一步失败返回 `undefined`，让 provider 用它自己的默认值——一个可能崩的浏览器，强过一条起不来的会话。
+
+为什么要包一层：`@playwright/mcp` 默认 `chromiumSandbox: true`，而 Playwright 自己的 API 默认 `false`。从 Node 子进程拉起浏览器时，那个沙箱在这里初始不起来（`sandbox initialization failed: Operation not permitted`），GPU 与 network 服务接连倒下，渲染进程收 `SIGSEGV`，调用方只看到 `browserBackend.callTool: Target crashed`。该开的开关 MCP 自己有（`--no-sandbox`），但 `BrowserMcpConfig` 没有转发 args 的字段，它还会把所有 `PLAYWRIGHT_MCP_*` 变量清成空串再 spawn——而 MCP 的 `envToBoolean('')` 返回 `undefined`，等于没设。`executablePath` 是唯一能碰到命令行的口子，所以开关搭在 shim 上进来。代价是浏览器进程沙箱被关掉，这是产品决策，记录在商业包 `docs/yuchi-p2-plan.md` §7。
+
+`sessions.inbound(sessionId, message)` 把一条外部渠道消息投进包自有会话。它不走 `sessionController.prompt`：那条路径把来源固定写成 `user-rpc`，会声称消息是用户在工作台里打的。入站消息在 Host 内构造 `user/message`，沿用 LWB 唯一的自有来源 `kind: 'lwb'`，渠道信息放在同一对象里（`channel` / `externalId` / `messageId`），渠道重投与"她当时不在线"因此可判定。只接受文本；附件必须由适配器先落进包工作区。来源不是 `user` 的消息不会被技能触发扫描命中，这是刻意的：渠道里来的字不能当成本地指令。
+
+`SessionController.prompt` 本身不因此改动。`createUserMessage` 是 `@deepseek-ai/dsh-llm` 的公开导出，已列入基座复核项。
 
 ## 对话模块的官方左栏
 

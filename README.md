@@ -25,6 +25,9 @@
 | 口播视频内容创作 | 本仓库 `lwb/packs/spoken-video` | 随带 | 随带 |
 | AI 竞技台 | 本仓库 `lwb/packs/ai-arena` | 随带 | 随带 |
 | 模型博主测评 | 私有会员包，源码不在本仓库 | 不随带 | 随带，源码目录由 `LWB_COMMERCIAL_PACK_DIR` 指定 |
+| 鱼池 | 私有仓库 `packs/yuchi` | 不随带 | 随带，源码目录由 `LWB_COMMERCIAL_PACK_DIR` 指定 |
+
+**可见性和加载权是两件事。** 开发态启动时，工作台会把 `LWB_COMMERCIAL_PACK_DIR` 指向的私有 checkout（未设置时取本仓库旁边的同名目录）一并列为可用能力包，所以「已完成的包在场景能力包里看不到」不会发生——它只可能因为会员状态而**加载不了**。构建产物仍按上表随带，打包后的桌面端没有旁边的 checkout，发行清单就是唯一来源。
 
 [`lwb/desktop/editions.json`](lwb/desktop/editions.json) 保存这两份构建输入：`commercial` 清单在本仓库自有的两个包之上追加会员包，所以官方发行版**不需要第二份工作台内核**，会员包源码也不需要进入本仓库。
 

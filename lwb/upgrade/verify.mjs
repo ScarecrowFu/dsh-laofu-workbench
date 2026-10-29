@@ -138,6 +138,10 @@ if (typeof v4Format.assertV4RowAdmission !== 'function') {
 }
 const sourceRow = kind => ({ type: 'user/message', data: { source: { kind } } })
 v4Format.assertV4RowAdmission(sourceRow('lwb'))
+// A channel message reuses LWB's one producer kind and carries the ingress in
+// the same object; the extra fields must stay admissible or inbound prompts
+// would fail admission only at runtime.
+v4Format.assertV4RowAdmission({ type: 'user/message', data: { source: { kind: 'lwb', channel: 'feishu', externalId: 'ou_1' } } })
 let retiredSourceRejected = false
 try {
   v4Format.assertV4RowAdmission(sourceRow('plugin'))

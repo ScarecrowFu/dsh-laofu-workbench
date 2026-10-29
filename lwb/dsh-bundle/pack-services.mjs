@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { packCredentialRef } from './pack-workspaces.mjs'
 import { PackTaskScope } from './pack-task-scope.mjs'
 import { openPackSettings } from './pack-settings.mjs'
+import { dshPackageEntry } from './dsh-adapter/package-paths.mjs'
+import { resolveBrowserExecutable } from './browser-shim.mjs'
 
 /** How far one model route's authentication can be established without calling the provider. */
 export const MODEL_ROUTE_STATES = Object.freeze({
@@ -14,6 +17,103 @@ export const MODEL_ROUTE_STATES = Object.freeze({
 const MIN_MODEL_OUTPUT_TOKENS = 128
 const MAX_MODEL_OUTPUT_TOKENS = 393216
 const DEFAULT_MODEL_OUTPUT_LIMIT = 32768
+
+/**
+ * Presets a pack may name on its own Sessions.
+ *
+ * One entry today, deliberately. A preset is a complete child-plugin list and
+ * `agentPresets.mount` rebinds rather than merges, so this can never become
+ * "standard plus browser": the rows in {@link browserPreset} are the whole
+ * composition of a work Session.
+ */
+export const PACK_PRESETS = Object.freeze({ browser: 'lwb-pack-browser' })
+
+/** Channels a pack-owned Session may be prompted from outside the workbench. */
+export const PACK_CHANNELS = Object.freeze(['feishu', 'qq'])
+
+/** Browser backends a pack Session may be composed on, in preference order. */
+export const PACK_BROWSER_PROVIDERS = Object.freeze(['playwright', 'chrome-devtools'])
+
+export const PACK_BROWSER_ROWS = Object.freeze({
+  playwright: '@deepseek-ai/dsh-experimental-browser-use-playwright-mcp',
+  'chrome-devtools': '@deepseek-ai/dsh-experimental-browser-use-chrome-devtools-mcp',
+})
+
+/**
+ * The compaction row every pack preset carries, resolved to a file URL.
+ *
+ * Compaction has to survive the whole job: a work Session that drives a browser
+ * for dozens of steps stops at the context window without it.
+ */
+const COMPACTION_ROW = Object.freeze({ id: 'compaction-basic', name: dshPackageEntry('@deepseek-ai/dsh-compaction-basic') })
+
+/**
+ * The composition a work Session runs on.
+ *
+ * Browser tools plus compaction: a job that drives someone's account can take
+ * dozens of steps, and an uncompacted transcript stops at the context window
+ * halfway through. Files, shell and search are deliberately absent — a Session
+ * allowed to click through an account is not also handed the disk.
+ *
+ * Rows name an installed entry by file URL, not by package name. A preset is
+ * mounted into an Agent tree whose resolution base is the profile directory
+ * (`dsh-home/profiles/<id>`), whose node_modules holds pack links and nothing
+ * else; a bare `@deepseek-ai/*` row therefore never imports there, and the
+ * loader reports that as `never started` — a line that names no package and no
+ * cause. Resolving once at composition time keeps the rows independent of where
+ * the preset is mounted, and turns a missing dependency into an error here.
+ *
+ * Two backends speak the same config contract. Playwright's MCP is the default
+ * because it is the one with a downloaded Chromium behind it, but its published
+ * driver crashed on navigate in this build's environment (`Target crashed …
+ * Assertion error`), so the choice is a parameter rather than a hard-coded row:
+ * whichever backend works, the pack changes nothing.
+ * @param options - provider configuration for this activation.
+ * @param options.provider - `playwright` or `chrome-devtools`.
+ * @param options.mode - `launch` owns its browser, `attach` borrows one over CDP.
+ * @param options.headless - launch only; a headed browser is what a user watching
+ *   their account being driven would actually want, so callers decide.
+ * @param options.endpoint - attach only; the CDP URL of the running browser.
+ * @param options.executablePath - launch only; a Chromium binary to use instead
+ *   of the one the backend would pick.
+ * @returns a preset definition, ready for `agentPresets.register`.
+ */
+export function browserPreset({ provider = 'playwright', mode = 'launch', headless = true, endpoint, executablePath } = {}) {
+  if (!Object.hasOwn(PACK_BROWSER_ROWS, provider)) throw new Error('浏览器后端无效。')
+  if (mode !== 'launch' && mode !== 'attach') throw new Error('浏览器会话模式无效。')
+  const attached = mode === 'attach'
+  if (attached && (typeof endpoint !== 'string' || !endpoint.trim())) throw new Error('附加模式需要浏览器调试端点。')
+  const binary = !attached && typeof executablePath === 'string' && executablePath.trim() ? executablePath.trim() : ''
+  return {
+    id: PACK_PRESETS.browser,
+    name: '场景浏览器会话',
+    description: '只带浏览器工具与自动压缩，供能力包执行网页任务。',
+    plugins: [
+      { id: 'compaction', name: 'cordis:group', group: true, isolate: { compaction: true },
+        config: [COMPACTION_ROW] },
+      /*
+       * Both browser rows share one `browserUse` realm: the registry is a
+       * singleton a provider registers into, and a preset is mounted into the
+       * root realm, so publishing it there is what `mountPreset` refuses as a
+       * service leak. The group keeps the registration inside the Session.
+       */
+      { id: 'browser', name: 'cordis:group', group: true, isolate: { browserUse: true },
+        config: [
+          { id: 'browser-use', name: dshPackageEntry('@deepseek-ai/dsh-browser-use') },
+          {
+            id: `browser-${provider}`,
+            name: dshPackageEntry(PACK_BROWSER_ROWS[provider]),
+            config: {
+              mode,
+              headless,
+              ...(attached ? { endpoint: endpoint.trim() } : {}),
+              ...(binary ? { executablePath: binary } : {}),
+            },
+          },
+        ] },
+    ],
+  }
+}
 
 function advertisedOutputLimit(model) {
   const value = [model?.maxOutputTokens, model?.maxTokens, model?.defaultMaxTokens].find(candidate => Number.isInteger(candidate) && candidate >= MIN_MODEL_OUTPUT_TOKENS)
@@ -79,7 +179,7 @@ function routeAvailability(route) {
 
 /** Scoped services issued by the host to one actually mounted package. */
 export class LwbPackServices {
-  constructor(ctx, workspaces, { account, taskModel, entitlements } = {}) { this.ctx = ctx; this.workspaces = workspaces; this.scopes = new Map(); this.account = account; this.taskModel = taskModel; this.entitlements = entitlements; this.sessionPolicies = new WeakMap() }
+  constructor(ctx, workspaces, { account, taskModel, entitlements } = {}) { this.ctx = ctx; this.workspaces = workspaces; this.scopes = new Map(); this.account = account; this.taskModel = taskModel; this.entitlements = entitlements; this.sessionPolicies = new WeakMap(); this.packPresets = new Map() }
 
   async mount(manifest) {
     await this.workspaces.activate(manifest)
@@ -140,6 +240,10 @@ export class LwbPackServices {
         // What the conversation actually did, for the pack to record beside its own
         // results. Pack-owned sessions only; see sessionProjections for the key filter.
         projections: (sessionId, keys) => this.sessionProjections(id, { kind: 'session', sessionId }, keys, tasks.signal),
+        // A channel message is not the owner typing here: it keeps its own sender
+        // identity in the durable source, so retries and "she was offline then"
+        // stay answerable. Delivery belongs to the pack; this only admits one message.
+        inbound: (sessionId, message) => tasks.track(this.inboundSession(id, sessionId, message, tasks.signal)),
       }),
       assertAgent: async (agent) => {
         const context = await this.workspaces.context(id)
@@ -324,7 +428,13 @@ export class LwbPackServices {
     if (options.maxTokens !== undefined && options.maxTokens !== null && (!Number.isSafeInteger(options.maxTokens) || options.maxTokens < 128 || options.maxTokens > MAX_MODEL_OUTPUT_TOKENS)) throw new Error('会话输出上限必须是 128—393216 的整数。')
     if (options.tools !== undefined && options.tools !== 'none') throw new Error('会话工具约束无效。')
     if (options.system !== undefined && (typeof options.system !== 'string' || !options.system.trim())) throw new Error('会话系统提示词不能为空。')
-    return { maxTokens: options.maxTokens, tools: options.tools, system: options.system }
+    // A named preset replaces the tool set wholesale, so pairing it with the
+    // empty-tool constraint would be two contradictory instructions.
+    if (options.preset !== undefined) {
+      if (options.tools === 'none') throw new Error('会话不能同时指定 preset 与 tools: none。')
+      if (!Object.hasOwn(PACK_PRESETS, options.preset)) throw new Error('能力包会话预设无效。')
+    }
+    return { maxTokens: options.maxTokens, tools: options.tools, system: options.system, preset: options.preset }
   }
 
   async restrictedPreset() {
@@ -332,11 +442,44 @@ export class LwbPackServices {
       id: 'lwb-pack-no-tools', name: '场景纯模型会话',
       plugins: [{ id: 'compaction', name: 'cordis:group', group: true,
         isolate: { compaction: true },
-        config: [{ id: 'compaction-basic', name: '@deepseek-ai/dsh-compaction-basic' }],
+        config: [COMPACTION_ROW],
       }],
     })
     await this.noToolsPreset
     return 'lwb-pack-no-tools'
+  }
+
+  /**
+   * Register the pack's own preset once per process and hand back its id.
+   *
+   * `agentPresets.register` rejects a duplicate id and the registry spans every
+   * pack, so the promise lives on the service rather than on one facade. A
+   * failed activation is dropped from the cache: the next caller retries
+   * instead of inheriting one bad answer forever.
+   * @param name - a key of {@link PACK_PRESETS}.
+   * @returns the preset id a Session may be created with.
+   */
+  async packPreset(name) {
+    const id = PACK_PRESETS[name]
+    if (!this.packPresets.has(name)) {
+      /*
+       * The browser a packaged build can drive is not one this code can guess,
+       * so both knobs stay environment-only and both say so in their name.
+       *
+       * `LWB_BROWSER_PROVIDER` picks the backend. `LWB_BROWSER_EXECUTABLE` is
+       * resolved rather than read: unset means "the packaged Chromium, behind a
+       * shim that turns its sandbox off", because the mounted MCP provider
+       * launches with the sandbox on and that sandbox does not come up from a
+       * child process here — see {@link resolveBrowserExecutable}. An explicit
+       * value still wins untouched.
+       */
+      const executablePath = resolveBrowserExecutable()
+      const provider = process.env['LWB_BROWSER_PROVIDER'] || 'playwright'
+      const pending = this.ctx.agentPresets.register(browserPreset({ provider, executablePath })).then(dispose => ({ id, dispose }))
+      pending.catch(() => this.packPresets.delete(name))
+      this.packPresets.set(name, pending)
+    }
+    return (await this.packPresets.get(name)).id
   }
 
   installSessionPolicy(agent, selection, policy) {
@@ -373,6 +516,24 @@ export class LwbPackServices {
     this.sessionPolicies.set(agent, state)
   }
 
+  /**
+   * The live Agent of a stored Session, resumed from disk when needed.
+   *
+   * `sessionController.create` reuses only blank Sessions: one that has started a
+   * turn is left alone and a new identity is minted, so resuming through it loses
+   * every conversation that ever had a reply. `resolveAgent` is the resume path.
+   * @returns the Agent, or null when no Session is stored under this identity.
+   */
+  async storedAgent(sessionId, cwd) {
+    const found = await this.ctx.sessionController.resolveAgent(sessionId)
+    if ('error' in found) {
+      if (found.error?.code === 'session/not-found') return null
+      throw found.error
+    }
+    if (found.agent.session.header.cwd !== cwd) throw new Error(`会话 "${sessionId}" 属于另一个工作目录，不能在这里恢复。`)
+    return found.agent
+  }
+
   async openSession(id, { sessionId, context, cwd, selection, policy, signal, sessions, resume }) {
     if (sessions.has(sessionId)) {
       const existing = sessions.get(sessionId)
@@ -381,15 +542,27 @@ export class LwbPackServices {
       return existing.public
     }
     await this.workspaces.recordSession(id, sessionId)
+    // Sessions written by an older build were opened on the no-tools preset,
+    // and that preset is registered lazily. A pack that stops asking for it —
+    // because it now wants real tools — would leave every old Session
+    // unresolvable ("Unknown agent preset"). Register it on every resume: one
+    // idempotent registration keeps existing conversations openable.
+    if (resume) await this.restrictedPreset()
     const presetId = policy.tools === 'none'
-      ? await this.restrictedPreset() : (await this.ctx.agentPresets.resolve('standard')).id
+      ? await this.restrictedPreset()
+      : policy.preset
+        ? await this.packPreset(policy.preset)
+        : (await this.ctx.agentPresets.resolve('standard')).id
     signal.throwIfAborted()
     // DSH resolves a Session's location once: a resume must name the same cwd the
     // Session was created with, so the caller passes it back for both paths.
     const sessionCwd = cwd ?? context.workspacePath
-    await this.ctx.sessionController.create({ sessionId, cwd: sessionCwd,
-      ...(resume && policy.tools === 'none' ? {} : { agentPreset: presetId }),
-    })
+    const stored = resume ? await this.storedAgent(sessionId, sessionCwd) : null
+    if (!stored) {
+      await this.ctx.sessionController.create({ sessionId, cwd: sessionCwd,
+        ...(resume && policy.tools === 'none' ? {} : { agentPreset: presetId }),
+      })
+    }
     // selectModel also saves the ordinary chat's global default. Restricted
     // pack Sessions route through scoped public waterfalls instead.
     if (policy.tools !== 'none') await this.ctx.sessionController.selectModel({ sessionId, ...selection })
@@ -465,6 +638,50 @@ export class LwbPackServices {
       if (!value.sessionIds.includes(address.sessionId)) throw new Error('该会话不属于此能力包。')
       return address
     })
+  }
+
+  /**
+   * Admit one externally delivered message into an existing pack-owned Session.
+   *
+   * `SessionController.prompt` stamps every accepted message as `user-rpc`, which
+   * would claim the owner typed it in the workbench. A channel needs the durable
+   * source instead: retry identity, plus the difference between "she ignored it"
+   * and "she was offline". So the message is built here and handed to the live
+   * Agent, with the same admission order as the official path.
+   *
+   * Text only. Attachments arrive through the browser composer's upload receipts,
+   * which a channel has no equivalent of; an adapter that wants them must land
+   * them in the pack workspace first.
+   * @param id - capability pack id.
+   * @param sessionId - a Session this pack owns.
+   * @param message - text plus the channel identity it arrived on.
+   * @param signal - pack lifetime cancellation.
+   * @returns `{ accepted: true }` once the Agent queued the message.
+   */
+  async inboundSession(id, sessionId, message, signal) {
+    signal.throwIfAborted()
+    const owned = await this.workspaces.visibility(id)
+    if (!owned.sessionIds.includes(sessionId)) throw new Error('该会话不属于此能力包。')
+    const text = typeof message?.text === 'string' ? message.text.trim() : ''
+    if (!text) throw new Error('消息不能为空。')
+    const channel = typeof message?.channel === 'string' ? message.channel.trim() : ''
+    if (!PACK_CHANNELS.includes(channel)) throw new Error('消息渠道无效。')
+    const agent = this.ctx.agents.get(sessionId)
+    if (!agent) throw new Error('这个会话还没就绪，先在能力包里打开它。')
+    signal.throwIfAborted()
+    agent.followup(createUserMessage({
+      content: [{ type: 'text', text }],
+      source: {
+        // `lwb` is LWB's one producer-owned kind (session format v4 rejects the
+        // retired catch-all `plugin`); the channel rides inside it rather than
+        // minting a second kind that no admission check has agreed to keep.
+        kind: 'lwb',
+        channel,
+        externalId: typeof message.externalId === 'string' ? message.externalId : '',
+        ...(typeof message.messageId === 'string' ? { messageId: message.messageId } : {}),
+      },
+    }))
+    return { accepted: true }
   }
 
   async sessionPage(id, address, request, signal) {

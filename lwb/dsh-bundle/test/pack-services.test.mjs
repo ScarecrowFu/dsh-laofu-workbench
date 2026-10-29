@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LwbPackServices } from '../pack-services.mjs'
 import { LwbPackWorkspaces } from '../pack-workspaces.mjs'
+import { dshPackageEntry } from '../dsh-adapter/package-paths.mjs'
 
 const manifest = (id) => ({ id, packageName: `@test/${id}`, name: id })
 const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r }); return { promise, resolve } }
@@ -14,7 +15,28 @@ async function setup(t) {
   const keys = new Map([['BAILIAN_API_KEY', 'ordinary-secret']])
   const settings = { providers: { ordinary: { apiKeyEnv: 'BAILIAN_API_KEY' } } }
   const calls = []
+  // Live Agents of this process; `stored` is what survives a restart on disk.
   const sessionAgents = new Map()
+  const stored = new Map()
+  const started = new Set()
+  const makeAgent = (sessionId, cwd) => {
+    const agent = {
+      ctx: {
+        hooks: new Map(),
+        on(name, callback) { this.hooks.set(name, callback) },
+        tools: { restrict: options => calls.push(['tools.restrict', options]) },
+        systemPrompt: { section: options => calls.push(['system.section', options]) },
+      },
+      id: sessionId,
+      session: { header: { cwd } },
+      whenIdle: async () => calls.push(['session.idle', sessionId]),
+      cancel: (reason) => calls.push(['session.cancel', sessionId, reason]),
+      followup: (message) => calls.push(['session.followup', message]),
+    }
+    sessionAgents.set(sessionId, agent)
+    stored.set(sessionId, { cwd })
+    return agent
+  }
   let selection = { provider: 'ordinary', model: 'dsh-default', reasoningEffort: 'high' }
   const ctx = {
     agentDefaultModel: { currentSelection: () => selection },
@@ -43,27 +65,27 @@ async function setup(t) {
       get: (sessionId) => sessionAgents.get(sessionId),
     },
     sessionController: {
+      // As in DSH: a named Session that has started a turn is never reused by
+      // `create`; a new identity is minted instead.
       async create(options) {
         const owned = await workspaces.visibility()
         assert.ok(owned.sessionIds.includes(options.sessionId), 'ownership must be durable before Session publication')
         calls.push(['session.create', options])
-        let agent = sessionAgents.get(options.sessionId)
-        if (!agent) {
-          agent = {
-            ctx: {
-              hooks: new Map(),
-              on(name, callback) { this.hooks.set(name, callback) },
-              tools: { restrict: options => calls.push(['tools.restrict', options]) },
-              systemPrompt: { section: options => calls.push(['system.section', options]) },
-            },
-            id: options.sessionId,
-            session: { header: { cwd: options.cwd } },
-            whenIdle: async () => calls.push(['session.idle', options.sessionId]),
-            cancel: (reason) => calls.push(['session.cancel', options.sessionId, reason]),
-          }
-          sessionAgents.set(options.sessionId, agent)
+        if (started.has(options.sessionId)) {
+          const minted = `${options.sessionId}-minted`
+          makeAgent(minted, options.cwd)
+          return { sessionId: minted, agentPreset: options.agentPreset }
         }
+        if (!sessionAgents.has(options.sessionId)) makeAgent(options.sessionId, options.cwd)
         return { sessionId: options.sessionId, agentPreset: options.agentPreset }
+      },
+      async resolveAgent(sessionId) {
+        calls.push(['session.resolveAgent', sessionId])
+        const live = sessionAgents.get(sessionId)
+        if (live) return { agent: live }
+        const record = stored.get(sessionId)
+        if (!record) return { error: Object.assign(new Error(`session "${sessionId}" not found`), { code: 'session/not-found' }) }
+        return { agent: makeAgent(sessionId, record.cwd) }
       },
       async selectModel(options) {
         calls.push(['session.selectModel', options])
@@ -71,6 +93,7 @@ async function setup(t) {
       },
       async prompt(options) {
         calls.push(['session.prompt', options])
+        started.add(options.sessionId)
         return { accepted: true }
       },
       async projections(request) {
@@ -92,7 +115,13 @@ async function setup(t) {
   const services = new LwbPackServices(ctx, workspaces)
   const first = await services.mount(manifest('spoken-video'))
   const second = await services.mount(manifest('another-pack'))
-  return { root, ctx, keys, settings, calls, sessionAgents, services, workspaces, first, second, setSelection: (value) => { selection = value } }
+  /** Drop every live Agent and pack facade while keeping stored Sessions: a host restart. */
+  const restart = async () => {
+    sessionAgents.clear()
+    await services.unmount('spoken-video')
+    return services.mount(manifest('spoken-video'))
+  }
+  return { root, ctx, keys, settings, calls, sessionAgents, services, workspaces, first, second, restart, setSelection: (value) => { selection = value } }
 }
 
 test('data access needs no Agent; directories, credentials and settings are isolated', async (t) => {
@@ -301,8 +330,26 @@ test('pack sessions use the official controller and remain resumable after facad
 
   const resumed = await first.sessions.resume(session.id, { provider: 'deepseek-account', model: 'deepseek-flash' })
   assert.equal(resumed.id, session.id)
-  assert.equal(calls.filter(([kind]) => kind === 'session.create').length, 2)
+  assert.equal(calls.filter(([kind]) => kind === 'session.create').length, 1, 'a stored Session is resumed, not re-created')
   await resumed.whenIdle()
+})
+
+test('a Session that already had a turn resumes after a host restart under the same identity', async (t) => {
+  const { first, calls, ctx, restart } = await setup(t)
+  const session = await first.sessions.create({ provider: 'deepseek-account', model: 'deepseek-flash', tools: 'none', maxTokens: null, system: '你是一条鱼。' })
+  await session.followup('你好')
+  const scope = await restart()
+  const resumed = await scope.sessions.resume(session.id, { provider: 'deepseek-account', model: 'deepseek-flash', tools: 'none', maxTokens: null, system: '你是一条鱼。' })
+  assert.equal(resumed.id, session.id)
+  assert.equal(ctx.agents.get(session.id).id, session.id)
+  assert.equal(calls.filter(([kind]) => kind === 'session.create').length, 1, 'no second identity was minted')
+})
+
+test('resuming an identity that was never stored creates it under that identity', async (t) => {
+  const { first, calls } = await setup(t)
+  const fresh = await first.sessions.resume('lwb-pack-spoken-video-never-stored', { provider: 'deepseek-account', model: 'deepseek-flash' })
+  assert.equal(fresh.id, 'lwb-pack-spoken-video-never-stored')
+  assert.deepEqual(calls.filter(([kind]) => kind === 'session.create').map(([, options]) => options.sessionId), [fresh.id])
 })
 
 test('a pack adopts the root Sessions it created through the native Agent service', async (t) => {
@@ -411,6 +458,113 @@ test('stopping a pack cancels its HTTP and explicit-signal AI operations only', 
 })
 
 
+test('a channel message keeps its own sender instead of claiming the owner typed it', async (t) => {
+  const { first, calls } = await setup(t)
+  const session = await first.sessions.create({ provider: 'deepseek-account', model: 'deepseek-flash' })
+  assert.deepEqual(await first.sessions.inbound(session.id, {
+    text: '  在吗  ', channel: 'feishu', externalId: 'ou_1', messageId: 'om_1',
+  }), { accepted: true })
+  const message = calls.find(([kind]) => kind === 'session.followup')[1]
+  assert.deepEqual(message.content, [{ type: 'text', text: '在吗' }])
+  // One producer-owned kind for everything LWB emits; the channel rides inside it.
+  assert.deepEqual(message.source, { kind: 'lwb', channel: 'feishu', externalId: 'ou_1', messageId: 'om_1' })
+  // The official path stamps `user-rpc`, which would read as the owner typing here.
+  assert.equal(calls.some(([kind]) => kind === 'session.prompt'), false)
+  // A message without an id is still admitted; the id is for the adapter's retries.
+  await first.sessions.inbound(session.id, { text: '再来一句', channel: 'qq', externalId: 'c2c_9' })
+  assert.deepEqual(calls.filter(([kind]) => kind === 'session.followup').at(-1)[1].source,
+    { kind: 'lwb', channel: 'qq', externalId: 'c2c_9' })
+})
+
+test('inbound refuses a foreign Session, an empty body, an unknown channel and a sleeping Agent', async (t) => {
+  const { first, second, calls, sessionAgents } = await setup(t)
+  const session = await first.sessions.create({ provider: 'deepseek-account', model: 'deepseek-flash' })
+  const good = { text: '你好', channel: 'feishu', externalId: 'ou_1' }
+  await assert.rejects(second.sessions.inbound(session.id, good), /该会话不属于此能力包/u)
+  await assert.rejects(first.sessions.inbound(session.id, { ...good, text: '   ' }), /消息不能为空/u)
+  await assert.rejects(first.sessions.inbound(session.id, { ...good, channel: 'wechat' }), /消息渠道无效/u)
+  await assert.rejects(first.sessions.inbound(session.id, { ...good, channel: undefined }), /消息渠道无效/u)
+  await assert.rejects(first.sessions.inbound(undefined, good), /该会话不属于此能力包/u)
+  // A Session whose Agent was disposed cannot be prompted; the pack must open it first.
+  sessionAgents.clear()
+  await assert.rejects(first.sessions.inbound(session.id, good), /还没就绪/u)
+  assert.equal(calls.some(([kind]) => kind === 'session.followup'), false)
+})
+
+test('a pack Session may name the browser preset, which is registered once per process', async (t) => {
+  const { first, second, calls } = await setup(t)
+  const options = { provider: 'deepseek-account', model: 'deepseek-flash', preset: 'browser' }
+  const session = await first.sessions.create(options)
+  assert.equal(calls.find(([kind]) => kind === 'session.create')[1].agentPreset, 'lwb-pack-browser')
+  const definition = calls.filter(([kind]) => kind === 'preset.register').map(([, value]) => value).find(value => value.id === 'lwb-pack-browser')
+  assert.equal(definition.name, '场景浏览器会话')
+  const [compactionRow, browserRow] = definition.plugins
+  // Compaction travels with the preset: a work Session runs for dozens of steps.
+  assert.equal(compactionRow.name, 'cordis:group')
+  assert.deepEqual(compactionRow.isolate, { compaction: true })
+  assert.equal(compactionRow.config[0].id, 'compaction-basic')
+  assert.match(compactionRow.config[0].name, /\/compaction-basic\/lib\/index\.js$/u)
+  // Both browser rows share one `browserUse` realm: the registry a provider
+  // registers into is a singleton, and publishing it into the root realm is a
+  // service leak `mountPreset` refuses.
+  assert.equal(browserRow.name, 'cordis:group')
+  assert.deepEqual(browserRow.isolate, { browserUse: true })
+  assert.deepEqual(browserRow.config.map(row => row.id), ['browser-use', 'browser-playwright'])
+  // Every row names an installed entry file. A bare package name resolves
+  // against the tree that imports the preset, and that tree is the profile
+  // directory, which holds pack links and no DSH package at all — the loader
+  // reports such a row as `never started`, without naming a package.
+  for (const name of browserRow.config.map(row => row.name)) assert.match(name, /^file:\/\//u)
+  assert.match(browserRow.config[0].name, /\/browser-use\/lib\/index\.js$/u)
+  assert.match(browserRow.config[1].name, /\/browser-use-playwright-mcp\/lib\/index\.js$/u)
+  // The mounted provider launches Chromium with its own sandbox on, and that
+  // sandbox does not come up from a child process here: the renderer dies and
+  // the caller only ever sees `Target crashed`. `executablePath` is the only
+  // seam that reaches the command line, so what arrives there is a shim rather
+  // than a browser — see browser-shim.mjs for the evidence.
+  const { executablePath, ...rest } = browserRow.config[1].config
+  assert.deepEqual(rest, { mode: 'launch', headless: true })
+  assert.match(executablePath, /\/pack-state\/browser\/chromium-nosandbox\.sh$/u)
+  const shim = await readFile(executablePath, 'utf8')
+  assert.match(shim, /--no-sandbox "\$@"\n$/u)
+
+  // Another pack and another Session reuse the one registration; the registry
+  // would reject a second one under the same id.
+  await first.sessions.create(options)
+  await second.sessions.create(options)
+  assert.equal(calls.filter(([, value]) => value?.id === 'lwb-pack-browser').length, 1)
+})
+
+test('an unknown preset, or one paired with the empty-tool constraint, is refused before any Session exists', async (t) => {
+  const { first, calls } = await setup(t)
+  const base = { provider: 'deepseek-account', model: 'deepseek-flash' }
+  await assert.rejects(first.sessions.create({ ...base, preset: 'standard' }), /预设无效/u)
+  await assert.rejects(first.sessions.create({ ...base, preset: '__proto__' }), /预设无效/u)
+  await assert.rejects(first.sessions.create({ ...base, preset: 'browser', tools: 'none' }), /不能同时指定/u)
+  assert.equal(calls.some(([kind]) => kind === 'session.create'), false)
+})
+
+test('the browser preset can attach to an existing browser but needs its endpoint', async (t) => {
+  const { browserPreset } = await import('../pack-services.mjs')
+  assert.throws(() => browserPreset({ mode: 'attach' }), /调试端点/u)
+  assert.throws(() => browserPreset({ mode: 'attach', endpoint: '  ' }), /调试端点/u)
+  assert.throws(() => browserPreset({ mode: 'headed' }), /模式无效/u)
+  const attached = browserPreset({ mode: 'attach', endpoint: ' http://127.0.0.1:9222 ', headless: false })
+  assert.deepEqual(attached.plugins[1].config[1].config, { mode: 'attach', headless: false, endpoint: 'http://127.0.0.1:9222' })
+})
+
+test('the browser preset can be composed on either backend, and only those', async (t) => {
+  const { browserPreset, PACK_BROWSER_ROWS } = await import('../pack-services.mjs')
+  const cdp = browserPreset({ provider: 'chrome-devtools', executablePath: ' /Applications/ego lite.app ' })
+  assert.equal(cdp.plugins[1].config[1].name, dshPackageEntry(PACK_BROWSER_ROWS['chrome-devtools']))
+  assert.match(cdp.plugins[1].config[1].name, /\/browser-use-chrome-devtools-mcp\/lib\/index\.js$/u)
+  assert.equal(cdp.plugins[1].config[1].id, 'browser-chrome-devtools')
+  assert.deepEqual(cdp.plugins[1].config[1].config, { mode: 'launch', headless: true, executablePath: '/Applications/ego lite.app' })
+  assert.equal(browserPreset().plugins[1].config[1].name, dshPackageEntry(PACK_BROWSER_ROWS.playwright))
+  assert.match(browserPreset().plugins[1].config[1].name, /\/browser-use-playwright-mcp\/lib\/index\.js$/u)
+  assert.throws(() => browserPreset({ provider: 'internet-explorer' }), /后端无效/u)
+})
+
 test('settings share one writer per scope and cannot write after unload', async t => {
   const { first, services } = await setup(t)
   const validate = input => ({ left: 0, right: 0, ...input })
@@ -440,7 +594,7 @@ test('restricted persistent Sessions enforce per-request parameters without savi
   await session.dispose()
   assert.equal((await request()).tools.length, 0, 'facade disposal keeps the live Agent restricted')
   await first.sessions.resume(session.id, { ...options, maxTokens: 8192, reasoningEffort: 'low' })
-  assert.equal(calls.filter(([kind]) => kind === 'session.create').at(-1)[1].agentPreset, undefined, 'legacy preset identity is preserved on resume')
+  assert.equal(calls.filter(([kind]) => kind === 'session.create').length, 1, 'resume never re-creates, so the recorded preset is preserved')
   assert.equal((await request()).maxTokens, 8192)
   assert.equal((await request()).reasoningEffort, 'low')
   assert.equal(calls.filter(([kind]) => kind === 'tools.restrict').length, 1)
@@ -453,9 +607,12 @@ test('restricted persistent Sessions enforce per-request parameters without savi
   await first.sessions.resume(session.id, { ...options, maxTokens: null })
   assert.equal(Object.hasOwn(await request(), 'maxTokens'), false, 'reset survives facade disposal and readoption')
   const preset = calls.find(([kind]) => kind === 'preset.register')[1]
-  assert.deepEqual(preset.plugins, [{ id: 'compaction', name: 'cordis:group', group: true,
-    isolate: { compaction: true }, config: [{ id: 'compaction-basic', name: '@deepseek-ai/dsh-compaction-basic' }],
-  }])
+  assert.equal(preset.plugins.length, 1)
+  assert.deepEqual({ ...preset.plugins[0], config: undefined }, { id: 'compaction', name: 'cordis:group', group: true,
+    isolate: { compaction: true }, config: undefined,
+  })
+  assert.equal(preset.plugins[0].config[0].id, 'compaction-basic')
+  assert.match(preset.plugins[0].config[0].name, /\/compaction-basic\/lib\/index\.js$/u)
   for (const maxTokens of [0, 127, 393217, 1.5, NaN]) await assert.rejects(first.sessions.create({ ...options, maxTokens }), /输出上限/)
 })
 

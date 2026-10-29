@@ -177,7 +177,7 @@ node scripts/collect-desktop-artifacts.mjs --edition commercial --target mac-x64
 | 构建输入 | 产品名 | 数据根 | 协议 | 随带能力包 |
 | --- | --- | --- | --- | --- |
 | `community` | Laofu Workbench | `LaofuWorkbench` | `lwb://` | 本仓库自有的 `spoken-video`、`ai-arena` |
-| `commercial`（官方发行） | Laofu Workbench | `LaofuWorkbench` | `lwb://` | 公开包加上 `model-review`，源码由 `LWB_COMMERCIAL_PACK_DIR` 指定 |
+| `commercial`（官方发行） | Laofu Workbench | `LaofuWorkbench` | `lwb://` | 公开包加上 `model-review` 和 `yuchi`，源码由 `LWB_COMMERCIAL_PACK_DIR` 及其 `packs/yuchi` 指定 |
 
 ```bash
 LWB_COMMERCIAL_PACK_DIR=/absolute/path/to/commercial-pack npm run package:plan -- --edition commercial

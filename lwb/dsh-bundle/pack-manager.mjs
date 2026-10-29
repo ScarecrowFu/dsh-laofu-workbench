@@ -230,6 +230,29 @@ async function workspacePackSources() {
 }
 
 /**
+ * Sources from the private pack checkout. That checkout keeps one pack at its
+ * root (`model-review`) and the rest under `packs/`, so both shapes are scanned.
+ * A missing directory is normal: packaged builds ship no checkout.
+ */
+async function commercialPackSources() {
+  const directory = LWB_RUNTIME.commercialPacksDir
+  if (!directory || !existsSync(directory)) return []
+  const sources = []
+  if (existsSync(join(directory, 'lwb-pack.json'))) sources.push(directory)
+  const nested = join(directory, 'packs')
+  if (!existsSync(nested)) return sources
+  for (const entry of await readdir(nested, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue
+    const source = join(nested, entry.name)
+    try {
+      const stats = await lstat(source)
+      if (stats.isDirectory() && !stats.isSymbolicLink()) sources.push(source)
+    } catch (_) {}
+  }
+  return sources
+}
+
+/**
  * Read the marketplace projection without importing package code. Workspace
  * packages are discoverable by convention; external packages become visible
  * after the generic CLI installer registers their source locally.
@@ -269,8 +292,14 @@ export async function marketplaceLwbPacks() {
   }
 
   for (const record of registry.packs) await add(record.source, 'local', record)
-  for (const source of await workspacePackSources()) {
-    const inspected = await inspectLwbPack(source)
+  const discovered = [...await workspacePackSources(), ...await commercialPackSources()]
+  for (const source of discovered) {
+    let inspected
+    try {
+      inspected = await inspectLwbPack(source)
+    } catch (_) {
+      continue
+    }
     if (!results.has(inspected.manifest.id)) {
       results.set(inspected.manifest.id, {
         ...inspected,
