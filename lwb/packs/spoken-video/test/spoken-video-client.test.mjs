@@ -104,6 +104,12 @@ test('audio workbench selects saved scripts by account, preserves standalone tas
   assert.match(page, /remote\(packId, 'startAudioTask', \{ text,/u)
   assert.match(page, /remote\(packId, 'uploadVoiceReference', \{ name: file\.name, mediaType: file\.type, data \}\)/u)
   assert.match(page, /上传自己的参考音频/u)
+  // 参考音频只吃 3–29 秒：选文件时先在浏览器侧量时长，挡住不合规的再上传。
+  assert.match(source, /async function audioDurationSeconds\(file\)/u)
+  assert.match(page, /const seconds = await audioDurationSeconds\(file\);/u)
+  assert.ok(page.includes('参考音频至少要 ${minSeconds} 秒'))
+  assert.ok(page.includes('超过 ${maxSeconds} 秒的部分会被直接截掉'))
+  assert.ok(page.includes('时长需 ${service?.voiceReferenceMinSeconds || 3}–${service?.voiceReferenceMaxSeconds || 29} 秒'))
   assert.match(page, /accept: 'audio\/mpeg,audio\/wav/u)
   assert.doesNotMatch(page, /预置音色 ID|指定预置音色/u)
   assert.match(page, /remote\(packId, 'startAudioTaskSubtitles', \{ taskId: task\.id, provider: providerId, language: 'zh', aiOptimize: true \}\)/u)

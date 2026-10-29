@@ -991,6 +991,33 @@ window.__ModuleLoader__.load({
         reader.readAsDataURL(file);
       });
     }
+    /**
+     * 选文件时先在浏览器里量时长，好在花钱上传之前就给出提示。
+     * 量不出来（浏览器解不了这种编码）返回 null，放行交给服务端的 ffprobe 判定。
+     */
+    async function audioDurationSeconds(file) {
+      if (!file || typeof Audio !== 'function' || typeof URL?.createObjectURL !== 'function') return null;
+      return await new Promise((resolve) => {
+        const url = URL.createObjectURL(file);
+        const audio = new Audio();
+        let settled = false;
+        let timer = null;
+        const finish = (value) => {
+          if (settled) return;
+          settled = true;
+          if (timer) clearTimeout(timer);
+          audio.onloadedmetadata = null;
+          audio.onerror = null;
+          URL.revokeObjectURL(url);
+          resolve(value);
+        };
+        timer = setTimeout(() => finish(null), 3000);
+        audio.preload = 'metadata';
+        audio.onloadedmetadata = () => finish(Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null);
+        audio.onerror = () => finish(null);
+        audio.src = url;
+      });
+    }
     const MODULE_CONTEXT = {
       '账号定位': ['内容策略', '#8b5cf6'],
       '信号': ['内容情报', '#3b82f6'],
@@ -3857,6 +3884,18 @@ window.__ModuleLoader__.load({
         if (file.size < 1 || file.size > limit) { setError(`参考音频必须小于 ${formatMediaBytes(limit)}。`); return; }
         setVoiceUploading(true);
         try {
+          // 先把时长挡在门外：上游声音复刻只吃 3–29 秒，等合成阶段才报错既费时又费额度。
+          const minSeconds = service?.voiceReferenceMinSeconds || 3;
+          const maxSeconds = service?.voiceReferenceMaxSeconds || 29;
+          const seconds = await audioDurationSeconds(file);
+          if (seconds !== null && seconds < minSeconds - 0.05) {
+            setError(`参考音频至少要 ${minSeconds} 秒，这段只有 ${seconds.toFixed(1)} 秒。声音复刻需要 ${minSeconds}–${maxSeconds} 秒的清晰人声。`);
+            return;
+          }
+          if (seconds !== null && seconds > maxSeconds + 0.05) {
+            setError(`参考音频有 ${seconds.toFixed(1)} 秒，超过 ${maxSeconds} 秒的部分会被直接截掉。请先剪到 ${minSeconds}–${maxSeconds} 秒。`);
+            return;
+          }
           const data = await base64FromAudioFile(file);
           const uploaded = await remote(packId, 'uploadVoiceReference', { name: file.name, mediaType: file.type, data });
           setVoiceReference(uploaded); setVoiceSource('upload'); setError(null);
@@ -3943,7 +3982,7 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', className: 'lwb-plain-button', disabled: voiceUploading || Boolean(submitting), onClick: () => voiceFileInputRef.current?.click?.() }, voiceUploading ? '正在上传…' : voiceReference ? '更换音频' : '选择音频'),
             voiceReference ? h('button', { type: 'button', className: 'lwb-plain-button', disabled: voiceUploading || Boolean(submitting), onClick: () => setVoiceReference(null) }, '移除') : null,
           ),
-          h('p', { className: 'sv-note' }, '支持 MP3、WAV、M4A 和 OGG，最大 20 MiB。请上传只包含目标人声的清晰音频。'),
+          h('p', { className: 'sv-note' }, `支持 MP3、WAV、M4A 和 OGG，最大 ${formatMediaBytes(service?.voiceReferenceMaxBytes || 20 * 1024 * 1024)}。时长需 ${service?.voiceReferenceMinSeconds || 3}–${service?.voiceReferenceMaxSeconds || 29} 秒（超过会被截断），请上传只包含目标人声、没有背景音乐的清晰录音。`),
         ) : null,
         h('div', { className: 'sv-audio-parameters' }, h('label', { className: 'sv-media-field' }, h('span', null, '语速'), h('input', { className: 'sv-input', type: 'number', min: '0.5', max: '2', step: '0.05', value: rate, onChange: (event) => setRate(event.target.value) })), h('label', { className: 'sv-media-field' }, h('span', null, '音量'), h('input', { className: 'sv-input', type: 'number', min: '0', max: '2', step: '0.05', value: volume, onChange: (event) => setVolume(event.target.value) }))),
         h('label', { className: 'sv-audio-subtitle-option' }, h('input', { type: 'checkbox', checked: subtitleEnabled, onChange: (event) => setSubtitleEnabled(event.target.checked) }), h('span', null, h('strong', null, '同时生成字幕'), h('small', null, '配音完成后自动对齐字幕；字幕失败不影响音频，可单独重试。'))),

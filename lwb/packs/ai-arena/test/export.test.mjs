@@ -116,8 +116,9 @@ test('voiced replay is refused without an LWB login and reuses a cached clip', a
   await exec('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1.2:sample_rate=44100', '-af', 'volume=-30dB', '-q:a', '4', sample])
   const clip = await readFile(sample)
   scope.account.points = async () => ({ availablePoints: 100 })
+  let uploads = 0
   scope.account.open = async () => ({ request: async (path, init) => {
-    if (path.endsWith('/audio-uploads')) return { success: true, data: { asset_id: 'asset-1' } }
+    if (path.endsWith('/audio-uploads')) { uploads += 1; return { success: true, data: { asset_id: `asset-${uploads}`, expiresAt: new Date(Date.now() + 6 * 3600_000).toISOString() } } }
     if (init.method === 'POST') { posts += 1; return { success: true, data: { job_id: 'job-1', status: 'succeeded', audio_url: 'https://audio.example.test/a.mp3' } } }
     return { success: true, data: { status: 'succeeded', audio_url: 'https://audio.example.test/a.mp3' } }
   } })
@@ -125,9 +126,18 @@ test('voiced replay is refused without an LWB login and reuses a cached clip', a
   const { synthesizeSpeech } = await import('../speech.mjs')
   const first = await synthesizeSpeech(saved, directory, { scope, fetch, signal: scope.signal })
   assert.equal(posts, 1)
-  assert.equal(settings.voiceAssets && Object.values(settings.voiceAssets)[0], 'asset-1')
+  // 上传资产有有效期（线上实测 24 小时），缓存里必须记着它，而不是只存一个裸 id。
+  const cachedVoice = Object.values(settings.voiceAssets)[0]
+  assert.equal(cachedVoice.assetId, 'asset-1')
+  assert.ok(cachedVoice.expiresAt > Date.now())
   const again = await synthesizeSpeech(saved, directory, { scope, fetch, signal: scope.signal })
   assert.equal(posts, 1)
+  assert.equal(uploads, 1, '未过期的资产要复用，不能每次导出都重传')
+  // 过期后必须重传，否则第二天所有配音都会拿着失效 assetId 去撞 400。
+  const cachedKey = Object.keys(settings.voiceAssets)[0]
+  settings.voiceAssets[cachedKey] = { ...settings.voiceAssets[cachedKey], expiresAt: Date.now() - 1_000 }
+  await synthesizeSpeech(saved, directory, { scope, fetch, signal: scope.signal })
+  assert.equal(uploads, 2)
   assert.equal(again.get(1).speech.file, first.get(1).speech.file)
   assert.match(first.get(1).speech.file, new RegExp(`/${LOUDNESS_VERSION}-[0-9a-f]{24}\\.mp3$`, 'u'))
   assert.equal(first.get(1).host, undefined, '非狼人杀没有主持人播报')

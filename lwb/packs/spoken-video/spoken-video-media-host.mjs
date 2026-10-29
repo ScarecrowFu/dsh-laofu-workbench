@@ -47,6 +47,11 @@ async function execFileAsync(...args) {
 const PROJECT_ID = /^[a-f0-9-]{36}$/iu
 const MAX_MEDIA_BYTES = 80 * 1024 * 1024
 const MAX_VOICE_REFERENCE_BYTES = 20 * 1024 * 1024
+/** 参考音频的时长窗口。上游声音复刻只吃 3–29 秒：`max_prompt_audio_length` 必须小于 30，
+    服务端统一传 29，DTO 合法区间就是 [3, 29]。太短学不到音色，超过 29 秒会被静默截断
+    （上游不报错），所以选文件时就挡住，别让用户以为整段声音都被采到了。 */
+const VOICE_REFERENCE_MIN_SECONDS = 3
+const VOICE_REFERENCE_MAX_SECONDS = 29
 const MAX_VIDEO_BGM_BYTES = 20 * 1024 * 1024
 const AUDIO_UPLOAD_FORMATS = Object.freeze({
   mp3: 'audio/mpeg',
@@ -56,6 +61,12 @@ const AUDIO_UPLOAD_FORMATS = Object.freeze({
 })
 const POLL_INTERVAL_MS = 1_500
 const MAX_POLL_MS = 15 * 60 * 1000
+/** LWB TTS 单次合成的字数上限（服务端 `AI_TRANSFER_TTS_MAX_TEXT_CHARS`，超了直接 400）。 */
+const LWB_TTS_MAX_TEXT_CHARS = 6_000
+/** 上传资产的有效期余量：距离过期不足这么久的资产 id 不再复用，直接重传。 */
+const LWB_VOICE_ASSET_MARGIN_MS = 10 * 60 * 1000
+/** 上传应答没声明过期时间时的保守有效期。 */
+const LWB_VOICE_ASSET_FALLBACK_MS = 60 * 60 * 1000
 const BAILIAN_WAV_DOWNLOAD_ATTEMPTS = 2
 const BAILIAN_TTS_SEGMENT_ATTEMPTS = 2
 const BAILIAN_ASR_SAMPLE_RATE = 16_000
@@ -149,6 +160,18 @@ function decodeAudioUpload(value, label, maximumBytes) {
 
 const voiceReferenceFormat = (name, mediaType) => audioUploadFormat(name, mediaType, '参考音频')
 const decodeVoiceReference = (value) => decodeAudioUpload(value, '参考音频', MAX_VOICE_REFERENCE_BYTES)
+/**
+ * 参考音频时长是否在上游能吃下的窗口里。
+ * 返回可读的拒绝理由，或 null 表示通过；时长未知（探针没给）时放行，交给上游判定。
+ */
+function voiceReferenceDurationError(seconds, label = '参考音频') {
+  if (!Number.isFinite(seconds)) return null
+  if (seconds >= VOICE_REFERENCE_MIN_SECONDS - 0.05 && seconds <= VOICE_REFERENCE_MAX_SECONDS + 0.05) return null
+  if (seconds < VOICE_REFERENCE_MIN_SECONDS) {
+    return `${label}至少要 ${VOICE_REFERENCE_MIN_SECONDS} 秒，这段只有 ${seconds.toFixed(1)} 秒。声音复刻需要 ${VOICE_REFERENCE_MIN_SECONDS}–${VOICE_REFERENCE_MAX_SECONDS} 秒的清晰人声。`
+  }
+  return `${label}有 ${seconds.toFixed(1)} 秒，超过 ${VOICE_REFERENCE_MAX_SECONDS} 秒的部分会被上游直接截掉。请先剪到 ${VOICE_REFERENCE_MIN_SECONDS}–${VOICE_REFERENCE_MAX_SECONDS} 秒。`
+}
 const videoBgmFormat = (name, mediaType) => audioUploadFormat(name, mediaType, '背景音乐')
 const decodeVideoBgm = (value) => decodeAudioUpload(value, '背景音乐', MAX_VIDEO_BGM_BYTES)
 
@@ -847,6 +870,7 @@ export class SpokenVideoMediaHost {
     this.activeRunIds = new Set()
     this.bailianReferenceVoices = new Map()
     this.bailianReferenceVoiceEnrollments = new Map()
+    this.lwbVoiceAssets = new Map()
     this.audioTaskWrites = new Map()
     this.runWrites = new Map()
     this.activeAudioTaskRuns = new Set()
@@ -871,6 +895,8 @@ export class SpokenVideoMediaHost {
       renderers: { remotion: remotionAvailable, 'local-ffmpeg': true },
       mediaReadLimitBytes: MAX_MEDIA_BYTES,
       voiceReferenceMaxBytes: MAX_VOICE_REFERENCE_BYTES,
+      voiceReferenceMinSeconds: VOICE_REFERENCE_MIN_SECONDS,
+      voiceReferenceMaxSeconds: VOICE_REFERENCE_MAX_SECONDS,
       videoBgmMaxBytes: MAX_VIDEO_BGM_BYTES,
     }
   }
@@ -932,6 +958,8 @@ export class SpokenVideoMediaHost {
       if (!probe.hasAudio || !probe.durationSeconds || probe.videoCodec) {
         fail('SPOKEN_VIDEO_MEDIA_FILE_INVALID', '上传的文件不是可播放的纯音频。')
       }
+      const durationProblem = voiceReferenceDurationError(probe.durationSeconds, '参考音频')
+      if (durationProblem) fail('SPOKEN_VIDEO_MEDIA_FILE_INVALID', durationProblem)
       return {
         id,
         file,
@@ -1397,6 +1425,9 @@ export class SpokenVideoMediaHost {
     try { probe = await this.#probe(target) }
     catch { fail('SPOKEN_VIDEO_MEDIA_FILE_INVALID', `${label}无法解码。`) }
     if (!probe.hasAudio || !probe.durationSeconds || probe.videoCodec) fail('SPOKEN_VIDEO_MEDIA_FILE_INVALID', `${label}不是可播放的纯音频。`)
+    // 时长窗口在这里再挡一次：挡住改造前就传上来的超长参考音频，否则要等到合成阶段才炸。
+    const durationProblem = voiceReferenceDurationError(probe.durationSeconds, label)
+    if (durationProblem) fail('SPOKEN_VIDEO_MEDIA_FILE_INVALID', durationProblem)
     return {
       id: text(input.id, `${label}标识`, 64),
       file,
@@ -1476,6 +1507,8 @@ export class SpokenVideoMediaHost {
         outputFormat = 'wav'
       } else if (task.input.provider === 'lwb') {
         generated = await this.#lwbVoiceover(root, task, task.source.text, task.input)
+        // 长稿会被分成多段并强制 wav，落盘扩展名要跟着实际拿到的容器走。
+        if (generated.format) outputFormat = generated.format
       } else {
         const config = this.#legacyConfig()
         outputFormat = task.input.outputFormat || config.outputFormat
@@ -1847,7 +1880,8 @@ export class SpokenVideoMediaHost {
     )
   }
 
-  async #concatBailianWavSegments(directory, chunks) {
+  /** 把多段 WAV 首尾相接成一个。只有 WAV 能这样拼，所以调用方必须先说明自己拿到的是 WAV。 */
+  async #concatWavSegments(directory, chunks) {
     if (chunks.length === 1) return readFile(chunks[0].file)
     const manifest = join(directory, 'concat.txt')
     const output = join(directory, 'merged.wav')
@@ -1856,15 +1890,15 @@ export class SpokenVideoMediaHost {
       await execFileAsync('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', manifest, '-map', '0:a:0', '-c:a', 'pcm_s16le', output], { signal: this.signal, maxBuffer: 1024 * 1024 * 4 })
       await chmod(output, 0o600)
       const audio = await readFile(output)
-      if (!audio.length || audio.length > MAX_MEDIA_BYTES) fail('SPOKEN_VIDEO_MEDIA_FILE_INVALID', '百炼 TTS 合并后的 WAV 为空或超出 80 MiB 限制。')
+      if (!audio.length || audio.length > MAX_MEDIA_BYTES) fail('SPOKEN_VIDEO_MEDIA_FILE_INVALID', '分段配音合并后的 WAV 为空或超出 80 MiB 限制。')
       const containerError = wavContainerError(audio)
-      if (containerError) fail('SPOKEN_VIDEO_MEDIA_FILE_INVALID', `百炼 TTS 合并后的 WAV 校验失败：${containerError}。`)
+      if (containerError) fail('SPOKEN_VIDEO_MEDIA_FILE_INVALID', `分段配音合并后的 WAV 校验失败：${containerError}。`)
       const probe = await this.#probe(output)
-      if (!probe.hasAudio || !probe.durationSeconds) fail('SPOKEN_VIDEO_MEDIA_FILE_INVALID', '百炼 TTS 合并后的 WAV 不含可播放的音频流。')
+      if (!probe.hasAudio || !probe.durationSeconds) fail('SPOKEN_VIDEO_MEDIA_FILE_INVALID', '分段配音合并后的 WAV 不含可播放的音频流。')
       return audio
     } catch (error) {
       if (error instanceof SpokenVideoMediaError) throw error
-      throw commandError(error, '百炼 TTS 分段音频合并')
+      throw commandError(error, '分段配音合并')
     }
   }
 
@@ -1892,7 +1926,7 @@ export class SpokenVideoMediaHost {
         chunks.push({ ...chunk, file })
         if (chunk.requestId) taskIds.push(chunk.requestId)
       }
-      return { provider: 'bailian', taskId: taskIds.at(-1) || null, voiceId: voice, audio: await this.#concatBailianWavSegments(directory, chunks) }
+      return { provider: 'bailian', taskId: taskIds.at(-1) || null, voiceId: voice, audio: await this.#concatWavSegments(directory, chunks) }
     } finally {
       await rm(directory, { recursive: true, force: true }).catch(() => {})
     }
@@ -1959,7 +1993,9 @@ export class SpokenVideoMediaHost {
 
   #lwbData(body, label) {
     if (body?.success === true && body.data && typeof body.data === 'object') return body.data
-    if (body?.code === 200 && body.data && typeof body.data === 'object') return body.data
+    // 提交接口答 202（后台合成）、轮询答 200，所以认整个 2xx 区间——只认 200 会把 202 判成失败。
+    const code = Number(body?.code)
+    if (Number.isInteger(code) && code >= 200 && code < 300 && body.data && typeof body.data === 'object') return body.data
     const detail = stringAt(body, ['message'], ['error', 'message']) || `${label}没有返回有效数据。`
     throw providerFailure(label, detail)
   }
@@ -1984,23 +2020,67 @@ export class SpokenVideoMediaHost {
     fail('SPOKEN_VIDEO_MEDIA_SERVICE_TIMEOUT', `${label}任务在 ${MAX_POLL_MS / 60_000} 分钟内未完成。`)
   }
 
+  /**
+   * LWB 配音。
+   *
+   * 服务端从 2026-10-28 起是「提交即返回 202、后台合成、轮询拿结果」，并接受参考音频
+   * （由服务端替我们登记音色）。两件事因此和百炼分支对齐：
+   *
+   * 1. **单次上限 6000 字**，长稿必须分段再拼——6 万字的口播稿整篇提交会被 400 掉。
+   *    多段时强制 wav：只有 WAV 能无损首尾相接。
+   * 2. **带参考音频时必须显式同意授权**（`consent_accepted`），这是声音权属留痕的要求。
+   *
+   * `input.outputFormat` 只对单段生效；多段一律 wav，由 `format` 回传给调用方决定落盘扩展名。
+   */
   async #lwbVoiceover(root, run, script, input) {
     const reference = ['system', 'reference', 'upload'].includes(input.voiceSource) ? await this.#voiceReference(root, input) : null
-    const submitted = this.#lwbData(await this.#lwbJson(run, '/api/v1/tts/jobs', {
-      method: 'POST',
-      body: JSON.stringify({
-        text: script,
-        ...(reference ? { reference_audio_asset_id: await this.#lwbUploadAudio(run, reference.audio, reference.path, reference.name) } : { voice_source: input.voiceSource, ...(input.voiceId ? { voice_id: input.voiceId } : {}) }),
-        output_format: input.outputFormat || 'wav',
-        voice_settings: { rate: input.rate, volume: input.volume, pitch: input.pitch },
-      }),
-    }, 'LWB TTS 提交'), 'LWB TTS 提交')
-    const taskId = stringAt(submitted, ['job_id'], ['task_id'], ['id'])
-    if (!taskId) fail('SPOKEN_VIDEO_MEDIA_SERVICE_FAILED', 'LWB TTS 没有返回任务标识。')
-    const completed = await this.#lwbPoll(run, `/api/v1/tts/jobs/${encodeURIComponent(taskId)}`, 'LWB TTS')
-    const audioUrl = stringAt(completed, ['result', 'audio_url'], ['audio_url'], ['result', 'url'], ['url'])
-    if (!audioUrl) fail('SPOKEN_VIDEO_MEDIA_SERVICE_FAILED', 'LWB TTS 没有返回完整音频地址。')
-    return { provider: 'lwb', taskId, voiceId: input.voiceId || null, voiceName: reference?.name || input.voiceName || null, audio: await this.#download(audioUrl, 'LWB 配音') }
+    const chunks = splitTtsText(script, LWB_TTS_MAX_TEXT_CHARS)
+    const format = chunks.length > 1 ? 'wav' : (input.outputFormat || 'wav')
+    const directory = chunks.length > 1 ? await mkdtemp(join(tmpdir(), 'lwb-spoken-video-tts-')) : null
+    try {
+      const referenceAssetId = reference ? await this.#lwbVoiceAssetId(run, reference) : null
+      const taskIds = []
+      const segments = []
+      for (const [offset, line] of chunks.entries()) {
+        const submitted = this.#lwbData(await this.#lwbJson(run, '/api/v1/tts/jobs', {
+          method: 'POST',
+          body: JSON.stringify({
+            text: line,
+            ...(referenceAssetId
+              ? { reference_audio_asset_id: referenceAssetId, consent_accepted: true }
+              : { voice_source: input.voiceSource, ...(input.voiceId ? { voice_id: input.voiceId } : {}) }),
+            output_format: format,
+            voice_settings: { rate: input.rate, volume: input.volume, pitch: input.pitch },
+          }),
+        }, 'LWB TTS 提交'), 'LWB TTS 提交')
+        const taskId = stringAt(submitted, ['job_id'], ['task_id'], ['id'])
+        if (!taskId) fail('SPOKEN_VIDEO_MEDIA_SERVICE_FAILED', 'LWB TTS 没有返回任务标识。')
+        taskIds.push(taskId)
+        const completed = await this.#lwbPoll(run, `/api/v1/tts/jobs/${encodeURIComponent(taskId)}`, 'LWB TTS')
+        const audioUrl = stringAt(completed, ['result', 'audio_url'], ['audio_url'], ['result', 'url'], ['url'])
+        if (!audioUrl) fail('SPOKEN_VIDEO_MEDIA_SERVICE_FAILED', 'LWB TTS 没有返回完整音频地址。')
+        const audio = await this.#download(audioUrl, 'LWB 配音')
+        if (!directory) {
+          return { provider: 'lwb', taskId, format, voiceId: input.voiceId || null, voiceName: reference?.name || input.voiceName || null, audio }
+        }
+        const file = join(directory, `segment-${String(offset + 1).padStart(3, '0')}.wav`)
+        const repaired = repairUnboundedWavHeader(audio)
+        const containerError = wavContainerError(repaired)
+        if (containerError) fail('SPOKEN_VIDEO_MEDIA_FILE_INVALID', `LWB TTS 第 ${offset + 1}/${chunks.length} 段 WAV 校验失败：${containerError}。`)
+        await writeFile(file, repaired, { mode: 0o600 })
+        segments.push({ file })
+      }
+      return {
+        provider: 'lwb',
+        taskId: taskIds.at(-1) || null,
+        format,
+        voiceId: input.voiceId || null,
+        voiceName: reference?.name || input.voiceName || null,
+        audio: await this.#concatWavSegments(directory, segments),
+      }
+    } finally {
+      if (directory) await rm(directory, { recursive: true, force: true }).catch(() => {})
+    }
   }
 
   async #bailianSubtitles(run, audioPath, language, referenceText) {
@@ -2117,6 +2197,53 @@ export class SpokenVideoMediaHost {
     }
   }
 
+  #storedLwbVoiceAssets() {
+    const values = this.connectionSettings?.get?.().lwbVoiceAssets
+    if (!values || typeof values !== 'object' || Array.isArray(values)) return {}
+    const usable = []
+    for (const [digest, value] of Object.entries(values)) {
+      if (!/^[A-Za-z0-9_-]{1,128}$/u.test(digest)) continue
+      const assetId = typeof value === 'string' ? value : value?.assetId
+      const expiresAt = typeof value === 'object' && value ? Number(value.expiresAt) : Number.NaN
+      if (typeof assetId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(assetId)) continue
+      if (!Number.isFinite(expiresAt) || expiresAt - Date.now() <= LWB_VOICE_ASSET_MARGIN_MS) continue
+      usable.push([digest, { assetId, expiresAt }])
+    }
+    return Object.fromEntries(usable)
+  }
+
+  /**
+   * 参考音频的资产 id，同一份音频只上传一次。
+   *
+   * 媒体上传有额度（默认 20 次/小时，`MEDIA_AUDIO_UPLOADS_PER_HOUR`），而「系统默认音色」
+   * 每个任务用的都是同一份随包录音：不缓存的话一次配音要占两次额度（参考音频 + 字幕音频），
+   * 一小时做十个任务就撞墙。资产按账号归属，所以缓存键要带 userId —— 换 LWB 账号后
+   * 旧账号的资产 id 对新账号是「找不到」。
+   *
+   * 但**资产是会过期的**（上传应答带 `expiresAt`，实测 24 小时）。不过期校验的缓存会在
+   * 第二天把所有配音打成 400，所以缓存只存到「过期前 10 分钟」为止，之后老实重传。
+   */
+  async #lwbVoiceAssetId(run, reference) {
+    const userId = String(this.runSecrets.get(run.id)?.service?.userId || '')
+    const digest = createHash('sha256').update(`${userId}\u0000`).update(reference.audio).digest('hex')
+    const remembered = this.lwbVoiceAssets.get(digest)
+    const cached = remembered && remembered.expiresAt - Date.now() > LWB_VOICE_ASSET_MARGIN_MS ? remembered : this.#storedLwbVoiceAssets()[digest]
+    if (cached) {
+      this.lwbVoiceAssets.set(digest, cached)
+      return cached.assetId
+    }
+    const uploaded = await this.#lwbUploadAudio(run, reference.audio, reference.path, reference.name)
+    const entry = { assetId: uploaded.assetId, expiresAt: uploaded.expiresAt }
+    this.lwbVoiceAssets.set(digest, entry)
+    if (this.connectionSettings?.update) {
+      const entries = Object.entries(this.#storedLwbVoiceAssets()).filter(([key]) => key !== digest)
+      await this.connectionSettings
+        .update({ lwbVoiceAssets: Object.fromEntries([...entries.slice(-15), [digest, entry]]) })
+        .catch(() => {})
+    }
+    return entry.assetId
+  }
+
   async #lwbUploadAudio(run, audio, audioPath, label = 'LWB 音频上传') {
     const extension = extname(audioPath).slice(1).toLowerCase() || 'wav'
     const form = new FormData()
@@ -2125,11 +2252,13 @@ export class SpokenVideoMediaHost {
     const data = this.#lwbData(body, label)
     const assetId = stringAt(data, ['asset_id'], ['assetId'])
     if (!assetId) fail('SPOKEN_VIDEO_MEDIA_SERVICE_FAILED', `${label}没有返回资产标识。`)
-    return assetId
+    // 上传应答带 expiresAt（实测 24 小时）。没给就保守按一小时算，宁可多传也别用到过期资产。
+    const declared = Date.parse(String(data.expiresAt ?? data.expires_at ?? ''))
+    return { assetId, expiresAt: Number.isFinite(declared) ? declared : Date.now() + LWB_VOICE_ASSET_FALLBACK_MS }
   }
 
   async #lwbSubtitles(run, audio, audioPath, script, input) {
-    const assetId = await this.#lwbUploadAudio(run, audio, audioPath)
+    const { assetId } = await this.#lwbUploadAudio(run, audio, audioPath)
     const submitted = this.#lwbData(await this.#lwbJson(run, '/api/v1/subtitle/jobs', {
       method: 'POST',
       body: JSON.stringify({
@@ -2282,6 +2411,7 @@ export class SpokenVideoMediaHost {
       outputFormat = 'wav'
     } else if (input.provider === 'lwb') {
       generated = await this.#lwbVoiceover(root, run, script, input)
+      if (generated.format) outputFormat = generated.format
     } else {
       const config = this.#legacyConfig()
       outputFormat = input.outputFormat || config.outputFormat

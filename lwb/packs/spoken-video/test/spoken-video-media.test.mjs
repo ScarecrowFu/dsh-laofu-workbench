@@ -445,11 +445,158 @@ test('submits the packaged Tiffy reference audio to LWB before generating voiceo
   assert.equal(finished.status, 'succeeded', finished.error)
   assert.equal(observed.upload, true)
   assert.equal(observed.submit.reference_audio_asset_id, 'asset_tiffy_reference')
+  // 带参考音频必须显式同意授权，否则服务端 400。
+  assert.equal(observed.submit.consent_accepted, true)
   assert.equal(Object.hasOwn(observed.submit, 'voice_source'), false)
   assert.deepEqual(observed.authorization, ['Bearer sk-tiffy-reference', 'Bearer sk-tiffy-reference', 'Bearer sk-tiffy-reference', null])
   const detail = await store.get(currentAgent, { projectId: project.id })
   assert.equal(detail.artifacts.voiceover.data.voiceName, DEFAULT_VOICE_PROFILE.name)
   assert.equal(detail.artifacts.voiceover.data.provider, 'lwb')
+})
+
+test('treats the 202 job envelope as a submission and polls until the stage completes', async (t) => {
+  if (!mediaBinariesAvailable()) { t.skip('ffmpeg or ffprobe is unavailable in this environment'); return }
+  const cwd = await workspace(t)
+  const store = new SpokenVideoProjectStore()
+  const currentAgent = agent(cwd)
+  const outputFile = join(cwd, 'async-output.wav')
+  execFileSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.5', '-ac', '1', '-ar', '16000', outputFile], { stdio: 'ignore' })
+  const outputAudio = await readFile(outputFile)
+  const polls = []
+  const host = lwbMediaHost({
+    projectsStore: store,
+    lwbTestKey: 'sk-async-202',
+    fetch: async (url) => {
+      const parsed = new URL(String(url))
+      if (parsed.pathname === '/api/v1/media/audio-uploads') return new Response(JSON.stringify({ success: true, data: { assetId: 'asset_async_202' } }))
+      if (parsed.pathname === '/api/v1/tts/jobs') {
+        // 新契约：提交只答 202（code 也是 202），音频此刻还不存在。
+        return new Response(JSON.stringify({ code: 202, data: { job_id: 'tts_async_202', status: 'processing', stage: 'enrolling', audio_url: null, result: {} } }), { status: 202 })
+      }
+      if (parsed.pathname === '/api/v1/tts/jobs/tts_async_202') {
+        polls.push(true)
+        const stage = ['enrolling', 'synthesizing', 'completed'][Math.min(polls.length - 1, 2)]
+        const completed = stage === 'completed'
+        return new Response(JSON.stringify({
+          code: 200,
+          data: {
+            job_id: 'tts_async_202',
+            status: completed ? 'completed' : 'processing',
+            stage,
+            audio_url: null,
+            result: completed ? { audio_url: 'https://media.test/async-202.wav' } : {},
+          },
+        }))
+      }
+      if (parsed.hostname === 'media.test') return new Response(outputAudio)
+      throw new Error(`unexpected request: ${url}`)
+    },
+  })
+  const started = await host.startAudioTask(currentAgent, {
+    title: '异步任务契约测试',
+    text: '这是一段用来验证二零二异步契约的配音文稿。',
+    provider: 'lwb',
+    subtitleEnabled: false,
+  })
+  const finished = await waitForAudioTask(host, currentAgent, started.id)
+  assert.equal(finished.status, 'succeeded', finished.error)
+  assert.equal(polls.length, 3, 'enrolling 与 synthesizing 都要继续轮询，不能提前取音频地址')
+})
+
+test('uploads one reference audio once and reuses its asset id across tasks', async (t) => {
+  if (!mediaBinariesAvailable()) { t.skip('ffmpeg or ffprobe is unavailable in this environment'); return }
+  const cwd = await workspace(t)
+  const store = new SpokenVideoProjectStore()
+  const currentAgent = agent(cwd)
+  const referenceFile = join(cwd, 'shared-reference.wav')
+  const outputFile = join(cwd, 'cache-output.wav')
+  execFileSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=520:duration=4', '-ac', '1', '-ar', '16000', referenceFile], { stdio: 'ignore' })
+  execFileSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=420:duration=0.4', '-ac', '1', '-ar', '16000', outputFile], { stdio: 'ignore' })
+  const referenceAudio = await readFile(referenceFile)
+  const outputAudio = await readFile(outputFile)
+  let uploads = 0
+  const settings = connectionSettings('lwb')
+  const host = lwbMediaHost({
+    projectsStore: store,
+    connectionSettings: settings,
+    lwbTestKey: 'sk-asset-cache',
+    fetch: async (url, init = {}) => {
+      const parsed = new URL(String(url))
+      if (parsed.pathname === '/api/v1/media/audio-uploads') {
+        assert.equal(init.body.get('file').type, 'audio/wav')
+        uploads += 1
+        // 上传应答带 expiresAt（线上实测 24 小时），缓存要按它算有效期。
+        return new Response(JSON.stringify({ success: true, data: { assetId: `asset_cache_${uploads}`, expiresAt: new Date(Date.now() + 6 * 3600_000).toISOString() } }))
+      }
+      if (parsed.pathname === '/api/v1/tts/jobs') {
+        const payload = JSON.parse(init.body)
+        return new Response(JSON.stringify({ success: true, data: { job_id: `tts_cache_${payload.text.length}` } }))
+      }
+      if (parsed.pathname.startsWith('/api/v1/tts/jobs/')) {
+        return new Response(JSON.stringify({ success: true, data: { status: 'completed', result: { audio_url: 'https://media.test/cache.wav' } } }))
+      }
+      if (parsed.hostname === 'media.test') return new Response(outputAudio)
+      throw new Error(`unexpected request: ${url}`)
+    },
+  })
+  const uploaded = await host.uploadVoiceReference(currentAgent, {
+    name: '共享参考音频.wav',
+    mediaType: 'audio/wav',
+    data: referenceAudio.toString('base64'),
+  })
+  for (const text of ['第一次使用同一份参考音频。', '第二次仍然用同一份参考音频。']) {
+    const started = await host.startAudioTask(currentAgent, { title: text, text, provider: 'lwb', voiceSource: 'upload', referenceAudio: uploaded, subtitleEnabled: false })
+    const finished = await waitForAudioTask(host, currentAgent, started.id)
+    assert.equal(finished.status, 'succeeded', finished.error)
+  }
+  // 上传有小时额度（默认 20 次），同一份音频只能占一次。
+  assert.equal(uploads, 1)
+  assert.equal(Object.keys(settings.get().lwbVoiceAssets).length, 1)
+})
+
+test('re-uploads a reference audio whose asset is about to expire instead of reusing it', async (t) => {
+  if (!mediaBinariesAvailable()) { t.skip('ffmpeg or ffprobe is unavailable in this environment'); return }
+  const cwd = await workspace(t)
+  const store = new SpokenVideoProjectStore()
+  const currentAgent = agent(cwd)
+  const referenceFile = join(cwd, 'expiring-reference.wav')
+  const outputFile = join(cwd, 'expiring-output.wav')
+  execFileSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=520:duration=4', '-ac', '1', '-ar', '16000', referenceFile], { stdio: 'ignore' })
+  execFileSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=420:duration=0.4', '-ac', '1', '-ar', '16000', outputFile], { stdio: 'ignore' })
+  const referenceAudio = await readFile(referenceFile)
+  const outputAudio = await readFile(outputFile)
+  let uploads = 0
+  const host = lwbMediaHost({
+    projectsStore: store,
+    lwbTestKey: 'sk-asset-expiry',
+    fetch: async (url, init = {}) => {
+      const parsed = new URL(String(url))
+      if (parsed.pathname === '/api/v1/media/audio-uploads') {
+        uploads += 1
+        // 只剩两分钟：落在余量里，必须当过期处理。
+        return new Response(JSON.stringify({ success: true, data: { assetId: `asset_expiring_${uploads}`, expiresAt: new Date(Date.now() + 2 * 60_000).toISOString() } }))
+      }
+      if (parsed.pathname === '/api/v1/tts/jobs') {
+        return new Response(JSON.stringify({ success: true, data: { job_id: `tts_expiring_${uploads}` } }))
+      }
+      if (parsed.pathname.startsWith('/api/v1/tts/jobs/')) {
+        return new Response(JSON.stringify({ success: true, data: { status: 'completed', result: { audio_url: 'https://media.test/expiring.wav' } } }))
+      }
+      if (parsed.hostname === 'media.test') return new Response(outputAudio)
+      throw new Error(`unexpected request: ${url}`)
+    },
+  })
+  const uploaded = await host.uploadVoiceReference(currentAgent, {
+    name: '将过期参考音频.wav',
+    mediaType: 'audio/wav',
+    data: referenceAudio.toString('base64'),
+  })
+  for (const text of ['第一次用快过期的资产。', '第二次必须重新上传。']) {
+    const started = await host.startAudioTask(currentAgent, { title: text, text, provider: 'lwb', voiceSource: 'upload', referenceAudio: uploaded, subtitleEnabled: false })
+    const finished = await waitForAudioTask(host, currentAgent, started.id)
+    assert.equal(finished.status, 'succeeded', finished.error)
+  }
+  assert.equal(uploads, 2)
 })
 
 test('maps LWB insufficient points to an actionable user-facing error', async (t) => {
@@ -489,7 +636,7 @@ test('validates an uploaded reference audio and freezes it into the audio task',
   const currentAgent = agent(cwd)
   const referenceFile = join(cwd, 'my-reference.wav')
   const outputFile = join(cwd, 'generated.wav')
-  execFileSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=520:duration=0.4', '-ac', '1', '-ar', '16000', referenceFile], { stdio: 'ignore' })
+  execFileSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=520:duration=4', '-ac', '1', '-ar', '16000', referenceFile], { stdio: 'ignore' })
   execFileSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=420:duration=0.4', '-ac', '1', '-ar', '16000', outputFile], { stdio: 'ignore' })
   const referenceAudio = await readFile(referenceFile)
   const outputAudio = await readFile(outputFile)
@@ -540,11 +687,37 @@ test('validates an uploaded reference audio and freezes it into the audio task',
   assert.equal(finished.status, 'succeeded', finished.error)
   assert.deepEqual(observed.uploadedAudio, referenceAudio)
   assert.equal(observed.submit.reference_audio_asset_id, 'asset_uploaded_reference')
+  assert.equal(observed.submit.consent_accepted, true)
   assert.equal(Object.hasOwn(observed.submit, 'voice_id'), false)
   assert.equal(finished.input.voiceName, '我的参考音频.wav')
   assert.equal(JSON.stringify(finished).includes('audio-media/references'), false)
   const frozen = join(cwd, 'data', 'audio-media', 'references', `${started.id}.wav`)
   assert.deepEqual(await readFile(frozen), referenceAudio)
+})
+
+test('rejects a reference audio outside the 3–29 second window before it ever reaches the service', async (t) => {
+  if (!mediaBinariesAvailable()) { t.skip('ffmpeg or ffprobe is unavailable in this environment'); return }
+  const cwd = await workspace(t)
+  const currentAgent = agent(cwd)
+  const shortFile = join(cwd, 'too-short.wav')
+  const longFile = join(cwd, 'too-long.wav')
+  execFileSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=520:duration=1.5', '-ac', '1', '-ar', '16000', shortFile], { stdio: 'ignore' })
+  execFileSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=520:duration=35', '-ac', '1', '-ar', '16000', longFile], { stdio: 'ignore' })
+  // 时长不合规就不该占用上传额度，也不该走到上游：这里让任何一次请求都失败。
+  const host = lwbMediaHost({
+    projectsStore: new SpokenVideoProjectStore(),
+    lwbTestKey: 'sk-duration-window',
+    fetch: async () => { throw new Error('时长不合规的参考音频不应发起任何请求'); },
+  })
+  await assert.rejects(
+    host.uploadVoiceReference(currentAgent, { name: '太短.wav', mediaType: 'audio/wav', data: (await readFile(shortFile)).toString('base64') }),
+    /参考音频至少要 3 秒，这段只有 1\.5 秒/u,
+  )
+  // 上游对超长音频是静默截断（不报错），所以我们提前把话说清楚。
+  await assert.rejects(
+    host.uploadVoiceReference(currentAgent, { name: '太长.wav', mediaType: 'audio/wav', data: (await readFile(longFile)).toString('base64') }),
+    /参考音频有 35\.0 秒，超过 29 秒的部分会被上游直接截掉/u,
+  )
 })
 
 test('converts completed LWB subtitle segments into SRT without downloading the subtitle URL', async (t) => {
@@ -674,7 +847,7 @@ test('enrols an uploaded reference audio before Bailian synthesis', async (t) =>
   const currentAgent = agent(cwd)
   const referenceFile = join(cwd, 'bailian-reference.wav')
   const outputFile = join(cwd, 'bailian-output.wav')
-  execFileSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=510:duration=0.4', '-ac', '1', '-ar', '16000', referenceFile], { stdio: 'ignore' })
+  execFileSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=510:duration=4', '-ac', '1', '-ar', '16000', referenceFile], { stdio: 'ignore' })
   execFileSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=610:duration=0.4', '-ac', '1', '-ar', '16000', outputFile], { stdio: 'ignore' })
   const referenceAudio = await readFile(referenceFile)
   const outputAudio = await readFile(outputFile)

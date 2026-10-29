@@ -15,6 +15,11 @@ import { hostNarrationLines } from './replay/data.mjs'
 
 const exec = promisify(execFile)
 const ASSET_ID = /^[A-Za-z0-9_-]{1,128}$/u
+/** 上传资产的有效期余量。上传应答带 `expiresAt`（线上实测 24 小时），缓存必须按它失效，
+    否则第二天所有配音都会拿着过期 assetId 去提交。 */
+const VOICE_ASSET_MARGIN_MS = 10 * 60 * 1000
+/** 上传应答没声明过期时间时的保守有效期。 */
+const VOICE_ASSET_FALLBACK_MS = 60 * 60 * 1000
 /** 成片与参考音色共用的响度。改对齐链路（目标、限幅、滤镜）就要同步改 `LOUDNESS_VERSION`，
     否则旧口径的片段会被当成已对齐、旧成片也会被复用。 */
 const LOUDNESS_TARGET = -16
@@ -174,7 +179,9 @@ async function probeSeconds(path, signal) {
 
 function lwbData(body, label) {
   if (body?.success === true && body.data && typeof body.data === 'object') return body.data
-  if (body?.code === 200 && body.data && typeof body.data === 'object') return body.data
+  // 提交接口答 202（后台合成）、轮询答 200，所以认整个 2xx 区间——只认 200 会把 202 判成失败。
+  const code = Number(body?.code)
+  if (Number.isInteger(code) && code >= 200 && code < 300 && body.data && typeof body.data === 'object') return body.data
   const detail = body?.message || body?.error?.message || `${label}没有返回有效数据。`
   throw new Error(String(detail))
 }
@@ -193,15 +200,21 @@ async function uploadVoice(request, profile, settings) {
   const bytes = await normalizeLoudness(profile.bytes, { label: '参考音色' })
   const digest = createHash('sha256').update(bytes).digest('hex')
   const saved = store?.get()?.voiceAssets?.[digest]
-  if (typeof saved === 'string' && ASSET_ID.test(saved)) return saved
+  // 只认「还没到期」的缓存。旧版本存的是裸 assetId（没有有效期），一律当过期重传一次。
+  const savedId = typeof saved === 'string' ? saved : saved?.assetId
+  const savedExpiry = typeof saved === 'object' && saved ? Number(saved.expiresAt) : Number.NaN
+  if (typeof savedId === 'string' && ASSET_ID.test(savedId) && Number.isFinite(savedExpiry) && savedExpiry - Date.now() > VOICE_ASSET_MARGIN_MS) return savedId
   const form = new FormData()
   form.append('file', new Blob([bytes], { type: 'audio/mpeg' }), `${profile.key}.mp3`)
   const data = lwbData(await request('/api/v1/media/audio-uploads', { method: 'POST', body: form }), '音色上传')
   const assetId = [data.asset_id, data.assetId].find(value => typeof value === 'string' && ASSET_ID.test(value))
   if (!assetId) throw new Error('音色上传没有返回资产标识。')
+  // 上传应答带 expiresAt（实测 24 小时）。没给就保守按一小时算，宁可多传也别用到过期资产。
+  const declared = Date.parse(String(data.expiresAt ?? data.expires_at ?? ''))
+  const expiresAt = Number.isFinite(declared) ? declared : Date.now() + VOICE_ASSET_FALLBACK_MS
   if (store?.update) {
     const current = store.get().voiceAssets || {}
-    await store.update({ voiceAssets: { ...current, [digest]: assetId } })
+    await store.update({ voiceAssets: { ...current, [digest]: { assetId, expiresAt } } })
   }
   return assetId
 }
@@ -209,7 +222,9 @@ async function uploadVoice(request, profile, settings) {
 async function synthesize(request, assetId, text, signal) {
   const submitted = lwbData(await request('/api/v1/tts/jobs', {
     method: 'POST',
-    body: JSON.stringify({ text, reference_audio_asset_id: assetId, output_format: 'mp3' }),
+    // The service answers 202 and synthesizes in the background; `consent_accepted`
+    // is required whenever a reference audio is sent (voice rights are recorded).
+    body: JSON.stringify({ text, reference_audio_asset_id: assetId, output_format: 'mp3', consent_accepted: true }),
   }), 'LWB TTS 提交')
   const id = jobId(submitted)
   if (!id) throw new Error('LWB TTS 没有返回任务标识。')
