@@ -5,6 +5,7 @@ import { PackTaskScope } from './pack-task-scope.mjs'
 import { openPackSettings } from './pack-settings.mjs'
 import { dshPackageEntry } from './dsh-adapter/package-paths.mjs'
 import { resolveBrowserExecutable } from './browser-shim.mjs'
+import { browserStatus, dedicatedCommand, openDedicated } from './pack-browser.mjs'
 
 /** How far one model route's authentication can be established without calling the provider. */
 export const MODEL_ROUTE_STATES = Object.freeze({
@@ -27,6 +28,19 @@ const DEFAULT_MODEL_OUTPUT_LIMIT = 32768
  * composition of a work Session.
  */
 export const PACK_PRESETS = Object.freeze({ browser: 'lwb-pack-browser' })
+
+/**
+ * What `permission` on a pack Session maps to: DSH's own permission presets,
+ * the same two the conversation's access menu offers as 工作区内修改 / 完全权限.
+ * Omitted keeps the historical default, `workspace-write`.
+ */
+export const PACK_PERMISSIONS = Object.freeze({ workspace: 'workspace-write', full: 'danger-full-access' })
+
+/** A pack tool's name: model-facing, so short, lowercase and unambiguous. */
+const PACK_TOOL_NAME = /^[a-z][a-z0-9_]{2,63}$/u
+
+/** Longest one-line account a notice row shows unexpanded (DSH's own bound). */
+const NOTICE_SUMMARY_MAX = 120
 
 /** Channels a pack-owned Session may be prompted from outside the workbench. */
 export const PACK_CHANNELS = Object.freeze(['feishu', 'qq'])
@@ -179,7 +193,25 @@ function routeAvailability(route) {
 
 /** Scoped services issued by the host to one actually mounted package. */
 export class LwbPackServices {
-  constructor(ctx, workspaces, { account, taskModel, entitlements } = {}) { this.ctx = ctx; this.workspaces = workspaces; this.scopes = new Map(); this.account = account; this.taskModel = taskModel; this.entitlements = entitlements; this.sessionPolicies = new WeakMap(); this.packPresets = new Map() }
+  constructor(ctx, workspaces, { account, taskModel, entitlements } = {}) {
+    this.ctx = ctx; this.workspaces = workspaces; this.scopes = new Map(); this.account = account; this.taskModel = taskModel; this.entitlements = entitlements
+    this.sessionPolicies = new WeakMap(); this.packPresets = new Map()
+    /**
+     * What each pack Session was opened with, by Session id.
+     *
+     * A Session's Agent is not permanent: the host disposes and restores it
+     * (a scheduled delivery wakes a cold Session, the conversation page
+     * retains one). Everything installed on an Agent — system prompt, tools —
+     * dies with it, so the options live here and are reapplied to whichever
+     * Agent next publishes that Session.
+     */
+    this.sessionSpecs = new Map()
+    /** Tools installed on one Agent, so a reapplication does not register twice. */
+    this.agentTools = new WeakMap()
+    /** Per pack: how to reopen a Session this process has not opened yet, and who hears its status. */
+    this.restorers = new Map()
+    this.statusListeners = new Map()
+  }
 
   async mount(manifest) {
     await this.workspaces.activate(manifest)
@@ -244,6 +276,45 @@ export class LwbPackServices {
         // identity in the durable source, so retries and "she was offline then"
         // stay answerable. Delivery belongs to the pack; this only admits one message.
         inbound: (sessionId, message) => tasks.track(this.inboundSession(id, sessionId, message, tasks.signal)),
+        // Something that happened, told to the Session: a finished task, a line
+        // said in her own time. Not the owner typing, and not a channel message.
+        notice: (sessionId, notice) => tasks.track(this.noticeSession(id, sessionId, notice, tasks.signal)),
+        // Options for a Session the host restores before this pack reopened it,
+        // e.g. a scheduled delivery to a cold Session after a restart.
+        restore: (handler) => {
+          if (typeof handler !== 'function') throw new Error('会话恢复回调无效。')
+          this.restorers.set(id, handler)
+          this.watchAgents()
+          return () => { if (this.restorers.get(id) === handler) this.restorers.delete(id) }
+        },
+        // `{ sessionId, status: 'running' | 'idle' }` for this pack's Sessions only.
+        onStatus: (listener) => {
+          if (typeof listener !== 'function') throw new Error('会话状态回调无效。')
+          if (!this.statusListeners.has(id)) this.statusListeners.set(id, new Set())
+          this.statusListeners.get(id).add(listener)
+          this.watchAgents()
+          return () => this.statusListeners.get(id)?.delete(listener)
+        },
+      }),
+      // The browser a pack character drives on the owner's behalf: the owner's
+      // ego lite when installed, else a dedicated Chrome/Edge profile kept in a
+      // directory this pack owns. See pack-browser.mjs for why it is a script.
+      browser: Object.freeze({
+        status: () => browserStatus(),
+        dedicated: async (dir) => {
+          const path = await this.workspaces.ownedDirectory(id, dir)
+          return { dir: path, command: dedicatedCommand(path) }
+        },
+        open: async (dir, url) => openDedicated(await this.workspaces.ownedDirectory(id, dir), typeof url === 'string' && /^https?:\/\//u.test(url) ? url : 'about:blank'),
+      }),
+      // DSH's durable timer, bound to this pack's own Sessions. Delivery is a
+      // message into the bound Session, which the host restores when cold.
+      schedule: Object.freeze({
+        create: (sessionId, request) => this.scheduleCall(id, sessionId, (service) => service.create(sessionId, request, tasks.signal)),
+        list: (sessionId) => this.scheduleCall(id, sessionId, (service) => service.list({ sessionId })),
+        update: (request) => this.scheduleCall(id, request?.sessionId, (service) => service.update(request, tasks.signal)),
+        delete: (sessionId, scheduleId) => this.scheduleCall(id, sessionId, (service) => service.delete({ sessionId, id: scheduleId }, tasks.signal)),
+        history: (sessionId, scheduleId, limit = 20) => this.scheduleCall(id, sessionId, (service) => service.history({ sessionId, id: scheduleId, limit })),
       }),
       assertAgent: async (agent) => {
         const context = await this.workspaces.context(id)
@@ -255,6 +326,17 @@ export class LwbPackServices {
       await tasks.stop()
       await Promise.allSettled([...sessions.values()].map((session) => session.dispose()))
       sessions.clear()
+      this.restorers.delete(id)
+      this.statusListeners.delete(id)
+      // Tools close over this pack's code; an Agent that outlives the unload
+      // (a conversation page still open) must not keep calling into it.
+      for (const [sessionId, spec] of [...this.sessionSpecs]) {
+        if (spec.packId !== id) continue
+        this.sessionSpecs.delete(sessionId)
+        const agent = this.ctx.agents?.get?.(sessionId)
+        const installed = agent && this.agentTools.get(agent)
+        if (installed) { for (const dispose of installed) { try { dispose() } catch { /* already gone */ } } this.agentTools.delete(agent) }
+      }
     })
     this.scopes.set(id, facade)
     return facade
@@ -434,7 +516,128 @@ export class LwbPackServices {
       if (options.tools === 'none') throw new Error('会话不能同时指定 preset 与 tools: none。')
       if (!Object.hasOwn(PACK_PRESETS, options.preset)) throw new Error('能力包会话预设无效。')
     }
-    return { maxTokens: options.maxTokens, tools: options.tools, system: options.system, preset: options.preset }
+    if (options.permission !== undefined && !Object.hasOwn(PACK_PERMISSIONS, options.permission)) throw new Error('会话权限无效。')
+    const addTools = options.addTools === undefined ? undefined : this.packToolSpecs(options.addTools)
+    if (addTools?.length && options.tools === 'none') throw new Error('会话不能同时指定 tools: none 与 addTools。')
+    if (options.denyTools !== undefined && (!Array.isArray(options.denyTools) || options.denyTools.some((name) => typeof name !== 'string' || !name))) throw new Error('会话屏蔽工具清单无效。')
+    return { maxTokens: options.maxTokens, tools: options.tools, system: options.system, preset: options.preset,
+      permission: options.permission, addTools, denyTools: options.denyTools }
+  }
+
+  /**
+   * Validate the tools a pack hands to one of its Sessions.
+   *
+   * A pack passes plain descriptions and the host wraps them, so a pack does
+   * not depend on `@deepseek-ai/dsh-tools` and every pack tool answers the same
+   * way: the returned value as JSON text.
+   * @param list - `{ name, description, parameters, execute(args, { sessionId }) }[]`.
+   * @returns the same list, checked.
+   */
+  packToolSpecs(list) {
+    if (!Array.isArray(list)) throw new Error('会话工具清单无效。')
+    const names = new Set()
+    for (const spec of list) {
+      if (!spec || typeof spec !== 'object') throw new Error('会话工具定义无效。')
+      if (typeof spec.name !== 'string' || !PACK_TOOL_NAME.test(spec.name)) throw new Error(`会话工具名无效：${spec?.name}`)
+      if (names.has(spec.name)) throw new Error(`会话工具重名：${spec.name}`)
+      names.add(spec.name)
+      if (typeof spec.description !== 'string' || !spec.description.trim()) throw new Error(`会话工具 ${spec.name} 缺少说明。`)
+      if (spec.parameters !== undefined && (typeof spec.parameters !== 'object' || spec.parameters === null)) throw new Error(`会话工具 ${spec.name} 的参数无效。`)
+      if (typeof spec.execute !== 'function') throw new Error(`会话工具 ${spec.name} 缺少执行函数。`)
+    }
+    return list
+  }
+
+  /** `@deepseek-ai/dsh-tools`, loaded once from the DSH installation. */
+  async toolKit() {
+    this.toolKitModule ??= import(dshPackageEntry('@deepseek-ai/dsh-tools'))
+    return this.toolKitModule
+  }
+
+  /**
+   * Install the pack's tools on one Agent, once.
+   *
+   * Scoped to the Agent, not global: a pack tool must exist only in the
+   * Sessions that asked for it, never in the user's ordinary conversations.
+   * The deny list is best effort — a name the composition does not carry is
+   * not an error worth refusing the Session over.
+   */
+  async installPackTools(agent, policy) {
+    if (this.agentTools.has(agent) || (!policy.addTools?.length && !policy.denyTools?.length)) return
+    const disposers = []
+    this.agentTools.set(agent, disposers)
+    const { defineTool } = await this.toolKit()
+    for (const spec of policy.addTools || []) {
+      disposers.push(agent.ctx.tools.register(defineTool({
+        name: spec.name,
+        description: spec.description,
+        parameters: spec.parameters || {},
+        output: {
+          schema: { type: 'object', additionalProperties: true },
+          render: (_args, value) => [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value ?? null) }],
+        },
+        execute: (args, exec) => spec.execute(args, { sessionId: exec?.agent?.id ?? agent.id, signal: exec?.signal }),
+        presentCall: () => ({ card: 'generic', title: spec.title || spec.description.split(/[。\n]/u)[0], kind: 'execute' }),
+      })))
+    }
+    if (policy.denyTools?.length) {
+      try { disposers.push(agent.ctx.tools.restrict({ deny: policy.denyTools })) } catch { /* see above */ }
+    }
+  }
+
+  /**
+   * Everything a pack Session is opened with, put on its current Agent.
+   *
+   * Idempotent per Agent: the first open, a later reopen and a restore after
+   * the host disposed the Agent all go through here.
+   */
+  async applySession(agent, selection, policy) {
+    if (policy.tools === 'none' || policy.maxTokens !== undefined || policy.system !== undefined) this.installSessionPolicy(agent, selection, policy)
+    this.ctx.permissionPresets.set(agent.session, PACK_PERMISSIONS[policy.permission] || PACK_PERMISSIONS.workspace)
+    await this.installPackTools(agent, policy)
+  }
+
+  /**
+   * Listen once for Agents publishing a pack Session.
+   *
+   * `agent/created` is awaited before the Agent takes its first queued input,
+   * so a scheduled message delivered to a cold Session runs with the pack's
+   * prompt and tools — not with the bare preset.
+   */
+  watchAgents() {
+    if (this.watching || typeof this.ctx.on !== 'function') return
+    this.watching = true
+    this.ctx.on('agent/created', async ({ agent }) => {
+      try {
+        let spec = this.sessionSpecs.get(agent.id)
+        if (!spec) spec = await this.restoredSpec(agent.id)
+        if (spec) await this.applySession(agent, spec.selection, spec.policy)
+      } catch (error) {
+        this.ctx.logger?.warn?.(`lwb pack session ${agent.id}: ${error?.message || error}`)
+      }
+      return undefined
+    })
+    this.ctx.on('agent/status', ({ agent, status }) => {
+      const spec = this.sessionSpecs.get(agent.id)
+      if (!spec) return
+      for (const listener of this.statusListeners.get(spec.packId) || []) {
+        try { listener({ sessionId: agent.id, status }) } catch { /* one listener does not silence the others */ }
+      }
+    })
+  }
+
+  /** Ask the owning pack how to reopen a Session nothing in this process opened. */
+  async restoredSpec(sessionId) {
+    for (const [packId, handler] of this.restorers) {
+      const owned = await this.workspaces.visibility(packId).catch(() => null)
+      if (!owned?.sessionIds.includes(sessionId)) continue
+      const options = await handler(sessionId)
+      if (!options) return null
+      const spec = { packId, selection: this.normalizeSelection(options, this.defaultSelection()), policy: this.sessionPolicy(options) }
+      this.sessionSpecs.set(sessionId, spec)
+      return spec
+    }
+    return null
   }
 
   async restrictedPreset() {
@@ -537,8 +740,11 @@ export class LwbPackServices {
   async openSession(id, { sessionId, context, cwd, selection, policy, signal, sessions, resume }) {
     if (sessions.has(sessionId)) {
       const existing = sessions.get(sessionId)
+      const spec = this.sessionSpecs.get(sessionId)
+      const merged = { ...spec?.policy, ...Object.fromEntries(Object.entries(policy).filter(([, value]) => value !== undefined)) }
+      this.sessionSpecs.set(sessionId, { packId: id, selection, policy: merged })
       const agent = this.ctx.agents.get(sessionId)
-      if (agent) this.installSessionPolicy(agent, selection, policy)
+      if (agent) await this.applySession(agent, selection, merged)
       return existing.public
     }
     await this.workspaces.recordSession(id, sessionId)
@@ -568,8 +774,9 @@ export class LwbPackServices {
     if (policy.tools !== 'none') await this.ctx.sessionController.selectModel({ sessionId, ...selection })
     const agent = this.ctx.agents.get(sessionId)
     if (!agent) throw new Error(`会话 "${sessionId}" 创建后不可用。`)
-    if (policy.tools === 'none' || policy.maxTokens !== undefined || policy.system !== undefined) this.installSessionPolicy(agent, selection, policy)
-    this.ctx.permissionPresets.set(agent.session, 'workspace-write')
+    this.sessionSpecs.set(sessionId, { packId: id, selection, policy })
+    if (policy.addTools?.length || policy.denyTools?.length) this.watchAgents()
+    await this.applySession(agent, selection, policy)
     const session = {
       public: null,
       async dispose() {
@@ -672,16 +879,62 @@ export class LwbPackServices {
     agent.followup(createUserMessage({
       content: [{ type: 'text', text }],
       source: {
-        // `lwb` is LWB's one producer-owned kind (session format v4 rejects the
-        // retired catch-all `plugin`); the channel rides inside it rather than
-        // minting a second kind that no admission check has agreed to keep.
-        kind: 'lwb',
+        // The owner, typing on another device: `user`, so the conversation
+        // surface shows it as their own message rather than as a collapsed
+        // "request" row. The channel rides inside the source, which keeps
+        // retries and "she was offline then" answerable.
+        kind: 'user',
         channel,
         externalId: typeof message.externalId === 'string' ? message.externalId : '',
         ...(typeof message.messageId === 'string' ? { messageId: message.messageId } : {}),
       },
     }))
     return { accepted: true }
+  }
+
+  /**
+   * Tell a pack Session about something that happened outside it.
+   *
+   * A `notice` is DSH's own form for this: a one-line account shown without
+   * expanding, never mistaken for the owner typing. `wake` (the default)
+   * starts a turn so the Session answers it in its own words; `wake: false`
+   * leaves it for the next turn. A cold Session is restored first, so a
+   * report can land while nobody has the conversation open.
+   * @param id - capability pack id.
+   * @param sessionId - a Session this pack owns.
+   * @param notice - `{ text, summary?, wake? }`.
+   * @param signal - pack lifetime cancellation.
+   * @returns `{ accepted: true, messageId }`.
+   */
+  async noticeSession(id, sessionId, notice, signal) {
+    signal.throwIfAborted()
+    const owned = await this.workspaces.visibility(id)
+    if (!owned.sessionIds.includes(sessionId)) throw new Error('该会话不属于此能力包。')
+    const text = typeof notice?.text === 'string' ? notice.text.trim() : ''
+    if (!text) throw new Error('通知不能为空。')
+    const line = (typeof notice.summary === 'string' && notice.summary.trim() ? notice.summary.trim() : text.split('\n')[0]).replace(/\s+/gu, ' ')
+    const summary = line.length <= NOTICE_SUMMARY_MAX ? line : `${line.slice(0, NOTICE_SUMMARY_MAX - 1)}…`
+    let agent = this.ctx.agents.get(sessionId)
+    if (!agent) {
+      const found = await this.ctx.sessionController.resolveAgent(sessionId)
+      if ('error' in found) throw found.error
+      agent = found.agent
+    }
+    signal.throwIfAborted()
+    const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'lwb', form: 'notice', summary } })
+    if (notice.wake === false) agent.inject(message)
+    else agent.followup(message)
+    return { accepted: true, messageId: message.id }
+  }
+
+  /** Run one schedule operation on a Session this pack owns. */
+  async scheduleCall(id, sessionId, operation) {
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('定时任务需要绑定会话。')
+    const owned = await this.workspaces.visibility(id)
+    if (!owned.sessionIds.includes(sessionId)) throw new Error('该会话不属于此能力包。')
+    const service = this.ctx.get?.('schedule') ?? this.ctx.schedule
+    if (!service) throw new Error('当前环境不提供定时服务。')
+    return operation(service)
   }
 
   async sessionPage(id, address, request, signal) {

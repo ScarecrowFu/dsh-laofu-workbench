@@ -142,6 +142,12 @@ v4Format.assertV4RowAdmission(sourceRow('lwb'))
 // the same object; the extra fields must stay admissible or inbound prompts
 // would fail admission only at runtime.
 v4Format.assertV4RowAdmission({ type: 'user/message', data: { source: { kind: 'lwb', channel: 'feishu', externalId: 'ou_1' } } })
+// A channel message is the owner typing elsewhere, so it is stamped `user`
+// with the ingress beside it — that is what makes the conversation surface show
+// it as their own bubble. A pack's account of something that happened is
+// DSH's `notice` form on LWB's own kind.
+v4Format.assertV4RowAdmission({ type: 'user/message', data: { source: { kind: 'user', channel: 'feishu', externalId: 'ou_1', messageId: 'om_1' } } })
+v4Format.assertV4RowAdmission({ type: 'user/message', data: { source: { kind: 'lwb', form: 'notice', summary: '任务汇报' } } })
 let retiredSourceRejected = false
 try {
   v4Format.assertV4RowAdmission(sourceRow('plugin'))
@@ -157,6 +163,18 @@ if (!retiredSourceRejected) {
 const agentRuntimeTypes = readFileSync(join(dshPackageDirectory('@deepseek-ai/dsh-agent'), 'lib', 'types', 'runtime-types.d.ts'), 'utf8')
 for (const signature of ['cancel(cause:', 'whenIdle():', 'followup(message:']) {
   if (!agentRuntimeTypes.includes(signature)) throw new Error(`Agent runtime no longer declares ${signature}; the LWB multi-turn executor must be re-derived`)
+}
+// Pack Sessions reinstall their prompt and tools on every Agent that
+// publishes them, and report run/idle to the pack: both ride these events.
+for (const signature of ["'agent/created'(", "'agent/status'(", 'inject(message:']) {
+  if (!agentRuntimeTypes.includes(signature)) throw new Error(`Agent runtime no longer declares ${signature}; pack Session restoration must be re-derived`)
+}
+// 完全权限 for a pack Session is DSH's own preset of that name.
+const permissionPresets = readFileSync(join(dshPackageDirectory('@deepseek-ai/dsh-permission-presets'), 'lib', 'index.js'), 'utf8')
+if (!permissionPresets.includes('danger-full-access')) throw new Error('permission presets no longer ship danger-full-access; pack full access must be re-derived')
+const scheduleTypes = readFileSync(join(dshPackageDirectory('@deepseek-ai/dsh-schedule'), 'lib', 'types', 'index.d.ts'), 'utf8')
+for (const signature of ['create(sessionId:', 'list(request:', 'delete(request:', 'history(request:']) {
+  if (!scheduleTypes.includes(signature)) throw new Error(`schedule service no longer declares ${signature}; pack schedules must be re-derived`)
 }
 
 const tools = await builtModule('@deepseek-ai/dsh-tools')

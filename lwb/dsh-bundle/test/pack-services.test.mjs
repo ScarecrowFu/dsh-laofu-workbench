@@ -8,6 +8,7 @@ import { LwbPackWorkspaces } from '../pack-workspaces.mjs'
 import { dshPackageEntry } from '../dsh-adapter/package-paths.mjs'
 
 const manifest = (id) => ({ id, packageName: `@test/${id}`, name: id })
+
 const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r }); return { promise, resolve } }
 async function setup(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'lwb-services-')))
@@ -24,7 +25,10 @@ async function setup(t) {
       ctx: {
         hooks: new Map(),
         on(name, callback) { this.hooks.set(name, callback) },
-        tools: { restrict: options => calls.push(['tools.restrict', options]) },
+        tools: {
+          restrict: options => { calls.push(['tools.restrict', options]); return () => calls.push(['tools.unrestrict', sessionId]) },
+          register: definition => { calls.push(['tools.register', sessionId, definition]); return () => calls.push(['tools.unregister', sessionId, definition.name]) },
+        },
         systemPrompt: { section: options => calls.push(['system.section', options]) },
       },
       id: sessionId,
@@ -32,13 +36,22 @@ async function setup(t) {
       whenIdle: async () => calls.push(['session.idle', sessionId]),
       cancel: (reason) => calls.push(['session.cancel', sessionId, reason]),
       followup: (message) => calls.push(['session.followup', message]),
+      inject: (message) => calls.push(['session.inject', message]),
     }
     sessionAgents.set(sessionId, agent)
     stored.set(sessionId, { cwd })
     return agent
   }
   let selection = { provider: 'ordinary', model: 'dsh-default', reasoningEffort: 'high' }
+  const hostHooks = new Map()
+  const schedules = []
   const ctx = {
+    on(name, callback) { hostHooks.set(name, callback) },
+    get: (name) => name === 'schedule' ? {
+      create: async (sessionId, request) => { const record = { id: `schedule-${schedules.length + 1}`, ...request }; schedules.push({ sessionId, record }); return record },
+      list: async ({ sessionId }) => schedules.filter(item => item.sessionId === sessionId).map(item => item.record),
+      delete: async ({ sessionId, id }) => ({ id, deleted: schedules.some(item => item.sessionId === sessionId && item.record.id === id) }),
+    } : undefined,
     agentDefaultModel: { currentSelection: () => selection },
     credentials: {
       resolve: async (ref) => ({ value: keys.get(ref) }),
@@ -50,7 +63,9 @@ async function setup(t) {
       register: (name) => name,
       mutate: async (ns, ops) => { assert.equal(ns, 'llm-pi-ai'); for (const op of ops) settings.providers[op.path[1]] = op.value },
     },
-    agentPresets: { register: async options => calls.push(['preset.register', options]), resolve: async id => ({ id }), mount: async (_, id) => calls.push(['preset', id]) },
+    agentPresets: {
+      register: async options => calls.push(['preset.register', options]), resolve: async id => ({ id }), mount: async (_, id) => calls.push(['preset', id]),
+    },
     permissionPresets: { set: (_, value) => calls.push(['permission', value]) },
     agents: {
       create: async (options) => {
@@ -121,7 +136,7 @@ async function setup(t) {
     await services.unmount('spoken-video')
     return services.mount(manifest('spoken-video'))
   }
-  return { root, ctx, keys, settings, calls, sessionAgents, services, workspaces, first, second, restart, setSelection: (value) => { selection = value } }
+  return { root, ctx, keys, settings, calls, sessionAgents, services, workspaces, first, second, restart, hostHooks, schedules, makeAgent, setSelection: (value) => { selection = value } }
 }
 
 test('data access needs no Agent; directories, credentials and settings are isolated', async (t) => {
@@ -466,14 +481,15 @@ test('a channel message keeps its own sender instead of claiming the owner typed
   }), { accepted: true })
   const message = calls.find(([kind]) => kind === 'session.followup')[1]
   assert.deepEqual(message.content, [{ type: 'text', text: '在吗' }])
-  // One producer-owned kind for everything LWB emits; the channel rides inside it.
-  assert.deepEqual(message.source, { kind: 'lwb', channel: 'feishu', externalId: 'ou_1', messageId: 'om_1' })
+  // The owner on another device: `user`, so the conversation shows their own
+  // bubble; the channel rides inside the source.
+  assert.deepEqual(message.source, { kind: 'user', channel: 'feishu', externalId: 'ou_1', messageId: 'om_1' })
   // The official path stamps `user-rpc`, which would read as the owner typing here.
   assert.equal(calls.some(([kind]) => kind === 'session.prompt'), false)
   // A message without an id is still admitted; the id is for the adapter's retries.
   await first.sessions.inbound(session.id, { text: '再来一句', channel: 'qq', externalId: 'c2c_9' })
   assert.deepEqual(calls.filter(([kind]) => kind === 'session.followup').at(-1)[1].source,
-    { kind: 'lwb', channel: 'qq', externalId: 'c2c_9' })
+    { kind: 'user', channel: 'qq', externalId: 'c2c_9' })
 })
 
 test('inbound refuses a foreign Session, an empty body, an unknown channel and a sleeping Agent', async (t) => {
@@ -647,4 +663,122 @@ test('a pack reads only the projection keys it asked for, and only from its own 
   assert.equal(calls.filter(([kind]) => kind === 'create').length, 0)
   // Three reads reached the host; the refused ones never got that far.
   assert.equal(calls.filter(([kind]) => kind === 'session.projections').length, 3)
+})
+
+test('a pack Session may ask for full access, the conversation menu\'s 完全权限', async (t) => {
+  const { first, calls } = await setup(t)
+  const base = { provider: 'deepseek-account', model: 'deepseek-flash' }
+  await first.sessions.create(base)
+  assert.equal(calls.filter(([kind]) => kind === 'permission').at(-1)[1], 'workspace-write', 'the default is unchanged')
+  const full = await first.sessions.create({ ...base, permission: 'full' })
+  assert.equal(calls.filter(([kind]) => kind === 'permission').at(-1)[1], 'danger-full-access')
+  // A reopen keeps what the Session was opened with.
+  await first.sessions.resume(full.id, { ...base, system: '她' })
+  assert.equal(calls.filter(([kind]) => kind === 'permission').at(-1)[1], 'danger-full-access')
+  await assert.rejects(first.sessions.create({ ...base, permission: 'root' }), /权限无效/u)
+})
+
+test('pack tools live on the Session that asked for them, and come back when its Agent is recreated', async (t) => {
+  const { first, calls, sessionAgents, hostHooks, makeAgent } = await setup(t)
+  const seen = []
+  const tool = { name: 'task_create', description: '建一个任务。', parameters: { title: { type: 'string', required: true } }, execute: async (args, context) => { seen.push([args, context.sessionId]); return { ok: true } } }
+  const session = await first.sessions.create({ provider: 'deepseek-account', model: 'deepseek-flash', system: '她', addTools: [tool], denyTools: ['schedule_create'] })
+  const registered = calls.filter(([kind]) => kind === 'tools.register')
+  assert.equal(registered.length, 1)
+  assert.equal(registered[0][1], session.id)
+  const definition = registered[0][2]
+  assert.equal(definition.name, 'task_create')
+  assert.deepEqual(calls.find(([kind]) => kind === 'tools.restrict')[1], { deny: ['schedule_create'] })
+  // The host wraps the pack's function: the pack gets the calling Session, the model gets JSON text.
+  const value = await definition.execute({ title: '回评论' }, { agent: { id: session.id }, signal: AbortSignal.timeout(1000) })
+  assert.deepEqual(seen, [[{ title: '回评论' }, session.id]])
+  assert.deepEqual(definition.output.render({}, { ok: true }), [{ type: 'text', text: '{"ok":true}' }])
+  assert.equal(value.ok ?? value?.value?.ok ?? true, true)
+
+  // The host drops the Agent and publishes a new one for the same Session (a
+  // scheduled delivery, the page retaining it): prompt and tools come back.
+  sessionAgents.delete(session.id)
+  const reborn = makeAgent(session.id, session.cwd)
+  await hostHooks.get('agent/created')({ agent: reborn })
+  assert.equal(calls.filter(([kind, id]) => kind === 'tools.register' && id === session.id).length, 2)
+  // Idempotent per Agent.
+  await hostHooks.get('agent/created')({ agent: reborn })
+  assert.equal(calls.filter(([kind, id]) => kind === 'tools.register' && id === session.id).length, 2)
+
+  await assert.rejects(first.sessions.create({ provider: 'deepseek-account', model: 'deepseek-flash', addTools: [{ ...tool, name: 'Bad Name' }] }), /工具名无效/u)
+  await assert.rejects(first.sessions.create({ provider: 'deepseek-account', model: 'deepseek-flash', addTools: [tool, tool] }), /重名/u)
+  await assert.rejects(first.sessions.create({ provider: 'deepseek-account', model: 'deepseek-flash', tools: 'none', system: 'x', addTools: [tool] }), /tools: none/u)
+})
+
+test('a Session restored before its pack reopened it asks the pack for its options', async (t) => {
+  const { first, second, calls, sessionAgents, hostHooks, makeAgent, restart } = await setup(t)
+  const session = await first.sessions.create({ provider: 'deepseek-account', model: 'deepseek-flash', sessionId: 'lwb-yuchi-task-1', system: '任务' })
+  const pack = await restart()
+  const asked = []
+  pack.sessions.restore(async (sessionId) => { asked.push(sessionId); return { system: '她在做任务', addTools: [{ name: 'task_note', description: '记一笔。', execute: async () => ({}) }] } })
+  second.sessions.restore(async () => { throw new Error('another pack is never asked') })
+  sessionAgents.delete(session.id)
+  await hostHooks.get('agent/created')({ agent: makeAgent(session.id, session.cwd) })
+  assert.deepEqual(asked, [session.id])
+  assert.equal(calls.filter(([kind, id]) => kind === 'tools.register' && id === session.id).at(-1)[2].name, 'task_note')
+  assert.equal(calls.filter(([kind]) => kind === 'system.section').at(-1)[1].text(), '她在做任务')
+  // A Session nobody owns is left alone.
+  await hostHooks.get('agent/created')({ agent: makeAgent('somebody-else', '/tmp') })
+  assert.deepEqual(asked, [session.id])
+})
+
+test('status reaches only the pack that owns the Session', async (t) => {
+  const { first, second, hostHooks, sessionAgents } = await setup(t)
+  const session = await first.sessions.create({ provider: 'deepseek-account', model: 'deepseek-flash' })
+  const heard = []
+  const other = []
+  const stop = first.sessions.onStatus((event) => heard.push(event))
+  second.sessions.onStatus((event) => other.push(event))
+  hostHooks.get('agent/status')({ agent: sessionAgents.get(session.id), status: 'running' })
+  hostHooks.get('agent/status')({ agent: sessionAgents.get(session.id), status: 'idle' })
+  hostHooks.get('agent/status')({ agent: { id: 'not-a-pack-session' }, status: 'idle' })
+  assert.deepEqual(heard, [{ sessionId: session.id, status: 'running' }, { sessionId: session.id, status: 'idle' }])
+  assert.deepEqual(other, [])
+  stop()
+  hostHooks.get('agent/status')({ agent: sessionAgents.get(session.id), status: 'running' })
+  assert.equal(heard.length, 2)
+})
+
+test('a notice is told to the Session as a notice, wakes it by default and restores it when cold', async (t) => {
+  const { first, second, calls, sessionAgents } = await setup(t)
+  const session = await first.sessions.create({ provider: 'deepseek-account', model: 'deepseek-flash' })
+  const result = await first.sessions.notice(session.id, { text: '任务「回评论」跑完了：回了 3 条。', summary: '任务汇报 · 回评论' })
+  assert.equal(result.accepted, true)
+  const message = calls.find(([kind]) => kind === 'session.followup')[1]
+  assert.deepEqual(message.source, { kind: 'lwb', form: 'notice', summary: '任务汇报 · 回评论' })
+  assert.equal(result.messageId, message.id)
+  await first.sessions.notice(session.id, { text: '只是记一下', wake: false })
+  assert.deepEqual(calls.find(([kind]) => kind === 'session.inject')[1].source, { kind: 'lwb', form: 'notice', summary: '只是记一下' })
+  await first.sessions.notice(session.id, { text: 'x'.repeat(300) })
+  assert.equal(calls.filter(([kind]) => kind === 'session.followup').at(-1)[1].source.summary.length, 120)
+  sessionAgents.clear()
+  await first.sessions.notice(session.id, { text: '冷的也能收到' })
+  assert.ok(calls.some(([kind, id]) => kind === 'session.resolveAgent' && id === session.id))
+  await assert.rejects(second.sessions.notice(session.id, { text: '别人的' }), /不属于此能力包/u)
+  await assert.rejects(first.sessions.notice(session.id, { text: '  ' }), /不能为空/u)
+})
+
+test('schedule calls are bound to the pack\'s own Sessions', async (t) => {
+  const { first, second, schedules } = await setup(t)
+  const session = await first.sessions.create({ provider: 'deepseek-account', model: 'deepseek-flash' })
+  const record = await first.schedule.create(session.id, { title: '回评论', prompt: '去回评论', daily: { time: '21:00:00', time_zone: 'Asia/Shanghai' } })
+  assert.equal(schedules.length, 1)
+  assert.deepEqual(await first.schedule.list(session.id), [record])
+  assert.deepEqual(await first.schedule.delete(session.id, record.id), { id: record.id, deleted: true })
+  await assert.rejects(second.schedule.create(session.id, { title: 'x', prompt: 'x', after_seconds: 60 }), /不属于此能力包/u)
+  await assert.rejects(first.schedule.list(undefined), /绑定会话/u)
+})
+
+test('a pack names its dedicated browser by a directory it owns, never an absolute path', async (t) => {
+  const { first } = await setup(t)
+  const { dir, command } = await first.browser.dedicated('fish/abc/browser')
+  assert.equal(dir, join((await first.context()).workspacePath, 'fish', 'abc', 'browser'))
+  assert.ok(command.includes(dir))
+  await assert.rejects(first.browser.dedicated('/etc'), /workspace-relative/u)
+  await assert.rejects(first.browser.dedicated('../other'), /Invalid workspace-relative/u)
 })
