@@ -351,7 +351,10 @@ async function releaseTarget({ target, edition, channel, notesFile, dryRun, skip
     console.log(`[dry-run] OSS object oss://${bucket}/${objectKey}`)
     console.log(`[dry-run] public URL ${publicObjectUrl(bucket, endpoint, objectKey)}`)
     if (!skipGithub) console.log(`[dry-run] GitHub: node scripts/upload-desktop-release.mjs --edition ${edition} --target ${target} --tag v${version}`)
-    console.log(`[dry-run] ATS: create or update ${mapping.platform}-${mapping.arch} ${channel} ${version} as unpublished`)
+    // The artifact type is part of the plan because it is what the app compares
+    // against before it accepts an update; a leg that publishes one value while
+    // the build expects another fails only on the user's machine.
+    console.log(`[dry-run] ATS: create or update ${mapping.platform}-${mapping.arch} ${channel} ${version} as ${mapping.artifactType}, ${artifact.file} (${size} bytes) unpublished`)
     if (publish === true) console.log('[dry-run] ATS: publish this leg, then verify through the public endpoint')
     return
   }
