@@ -87,6 +87,23 @@ test('checkout Desktop inherits every durable Web path while activating packs in
   }
 })
 
+test('the product version has one source per installation and no configured copy', async () => {
+  const declared = JSON.parse(await readFile(resolve('package.json'), 'utf8')).version
+  const reported = runtimeScript({}, `
+    import { readProductVersion } from ${JSON.stringify(modulePath)}
+    process.stdout.write(JSON.stringify({ version: readProductVersion() }))
+  `)
+  // A checkout answers with `package.json` — the field the release bumps and the
+  // packager reads, so Settings and the update feed cannot disagree.
+  assert.equal(reported.version, declared)
+  // And the composition must not declare its own copy: that is the value nobody
+  // bumps at release time, and it would silently win over the real one.
+  const patch = await readFile(resolve('lwb/dsh-bundle/cordis.patch.yml'), 'utf8')
+  const entry = patch.split('- id: lwb-profile')[1]
+  assert.ok(entry, 'the composition must still register the lwb-profile entry')
+  assert.doesNotMatch(entry.split(/\n\s*- id:/u)[0], /^\s*version:/mu)
+})
+
 test('switching Web → Desktop → Web retains enabled packs, accounts, projects and configuration', async (t) => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'lwb-carrier-data-')))
   t.after(() => rm(root, { recursive: true, force: true }))

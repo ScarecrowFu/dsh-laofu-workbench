@@ -69,6 +69,15 @@ window.__ModuleLoader__.load({
     let dshAccountState = { phase: 'unavailable', status: 'signed-out', attempt: null, error: null };
     const dshAccountListeners = new Set();
     let dshAccountStreamDispose;
+    // Desktop updates. The Host owns the channel, the artifact and the decision
+    // to update at all; the browser keeps only what the sidebar renders. The
+    // poll is fast only while something is actually in flight, because an idle
+    // workbench has nothing new to say about a release it already reported.
+    const lwbUpdateIdle = { phase: 'unknown', enabled: false, currentVersion: '', release: null, error: null, reason: null, progress: null, canInstall: false, installHint: null, updatedTo: null };
+    let lwbUpdateState = lwbUpdateIdle;
+    const lwbUpdateListeners = new Set();
+    let lwbUpdatePollTimer;
+    let lwbUpdateRequest;
 
     function cloneDefaults() {
       return JSON.parse(JSON.stringify(defaultState));
@@ -226,6 +235,76 @@ window.__ModuleLoader__.load({
         setLwbAccountState({ phase: 'error', error: error?.message || 'LWB 账号操作未完成。' });
         throw error;
       }
+    }
+    function normalizeUpdateState(value) {
+      const release = value?.release && typeof value.release === 'object' && typeof value.release.version === 'string' ? value.release : null;
+      const progress = value?.progress && Number.isFinite(value.progress.received) ? { received: value.progress.received, total: Number(value.progress.total) || 0 } : null;
+      return {
+        phase: typeof value?.phase === 'string' ? value.phase : 'idle',
+        enabled: value?.enabled === true,
+        currentVersion: typeof value?.currentVersion === 'string' ? value.currentVersion : '',
+        release,
+        progress,
+        canInstall: value?.canInstall === true,
+        installHint: typeof value?.installHint === 'string' ? value.installHint : null,
+        updatedTo: typeof value?.updatedTo === 'string' ? value.updatedTo : null,
+        error: typeof value?.error === 'string' ? value.error : null,
+        reason: typeof value?.reason === 'string' ? value.reason : null,
+      };
+    }
+    function setLwbUpdateState(next) {
+      lwbUpdateState = next;
+      lwbUpdateListeners.forEach((listener) => listener());
+    }
+    async function lwbUpdateRpc(method) {
+      if (!services?.connection?.rpc?.call) throw new Error('DSH 连接尚未就绪。');
+      const response = await services.connection.rpc.call('/api', `lwbUpdate/${method}`, { args: {} });
+      if (!response?.ok) throw new Error(response?.error?.message || '更新操作未完成。');
+      return normalizeUpdateState(response.value);
+    }
+    async function refreshLwbUpdate() {
+      if (lwbUpdateRequest) return lwbUpdateRequest;
+      const request = lwbUpdateRpc('state').then((next) => { setLwbUpdateState(next); return next; })
+        .catch(() => null)
+        .finally(() => { if (lwbUpdateRequest === request) lwbUpdateRequest = undefined; });
+      lwbUpdateRequest = request;
+      return request;
+    }
+    /** Run one update operation, then take the state the Host reports back. */
+    async function lwbUpdateAction(method) {
+      const next = await lwbUpdateRpc(method);
+      setLwbUpdateState(next);
+      return next;
+    }
+    function startLwbUpdatePolling() {
+      if (lwbUpdatePollTimer !== undefined) return;
+      // Nothing to ask: no transport, or a shell that has no timer (a static
+      // render of the sidebar). Polling is an optimisation, not a requirement.
+      if (typeof setTimeout !== 'function' || !services?.connection?.rpc?.call) return;
+      const tick = async () => {
+        lwbUpdatePollTimer = undefined;
+        await refreshLwbUpdate();
+        if (lwbUpdateListeners.size === 0) return;
+        const busy = ['checking', 'downloading', 'installing'].includes(lwbUpdateState.phase);
+        lwbUpdatePollTimer = setTimeout(tick, busy ? 1200 : 30000);
+      };
+      lwbUpdatePollTimer = setTimeout(tick, 0);
+    }
+    function stopLwbUpdatePolling() {
+      if (lwbUpdatePollTimer === undefined) return;
+      clearTimeout(lwbUpdatePollTimer);
+      lwbUpdatePollTimer = undefined;
+    }
+    function subscribeLwbUpdate(listener) {
+      lwbUpdateListeners.add(listener);
+      if (lwbUpdateListeners.size === 1) startLwbUpdatePolling();
+      return () => {
+        lwbUpdateListeners.delete(listener);
+        if (lwbUpdateListeners.size === 0) stopLwbUpdatePolling();
+      };
+    }
+    function useLwbUpdate() {
+      return React.useSyncExternalStore(subscribeLwbUpdate, () => lwbUpdateState, () => lwbUpdateState);
     }
     function setDshAccountState(next) {
       dshAccountState = Object.assign({}, dshAccountState, next);
@@ -385,11 +464,15 @@ window.__ModuleLoader__.load({
         marketSearch: '搜索能力包、标签或功能…', filterAll: '全部', filterLoaded: '已加载', filterAvailable: '可加载', filterCategory: '分类', noMatchingPacks: '没有匹配的能力包。', packWorkflow: '功能流程', packTags: '标签', packOrigin: '来源', loadingPack: '正在加载…', unloadingPack: '正在卸载…', packLoaded: '能力包已加载。', packUnloaded: '能力包已卸载。', workspacePack: '工作区包', localPack: '本地包', unavailablePack: '能力包源不可用，无法加载。',
         noCapability: '能力包尚未加载', noCapabilityCopy: '请在“场景能力包”中安装并加载领域能力包。', goToPacks: '前往能力包',
         capabilityPageCopy: (name) => `“${name}”没有提供此菜单对应的浏览器页面。`, clientUnavailable: '能力包客户端页面不可用',
+        loadingCapability: '正在加载能力包…', loadingCapabilityCopy: '工作台正在恢复上次加载的场景能力包，稍等几秒；恢复完成会自动出现。',
+        packStartupFailed: '能力包没有加载成功', packStartupFailedCopy: '下面这些能力包在启动时没有挂上，括号里是原因。处理之后可以重试。',
+        retry: '重试',
         capabilityPageFailed: '能力包页面暂时不可用', capabilityPageFailedCopy: '该页面未能正常渲染。工作台导航仍可用，可返回对话或打开场景能力包。',
         returnToConversation: '返回对话', viewPacks: '查看能力包',
         about: '关于', runtime: '运行方式', runtimeHint: '基于 DeepSeek Harness（DSH）构建的本机单用户工作台。', connected: '已连接', connecting: '连接中', disconnected: '连接已断开', basicConfiguration: '基础配置', basicConfigurationHint: '进入 DSH 原生设置，并管理 DSH 账号。', systemSettings: 'DSH 系统设置', systemSettingsHint: '配置 DSH 的语言、外观、模型服务、权限、插件及 Agent 预设。', openRuntimeSettings: '打开设置', dshSignIn: '登录 DSH', dshSigningIn: '正在登录 DSH…', dshSignOut: '退出 DSH', dshSigningOut: '正在退出 DSH…', dshSignOutConfirm: '退出 DSH 登录吗？如果当前有使用 DSH 账号的任务，退出可能会中断这些任务。', dshSignInFailed: '登录 DSH 失败，请重试。', dshSignOutFailed: '退出 DSH 失败，请稍后重试。', dshAccountUnavailable: 'DSH 账号服务暂不可用。', accountReturnHint: '你正在为场景页面配置 LWB 账号，配置完成后可以返回继续。', accountReturn: '← 返回场景页面（保留草稿）',
         lwbAccount: 'LWB 账号', lwbAccountHint: '管理 LWB 服务账号、会员权益和可用积分。', lwbAccountNote: '不登录 LWB 账号也可以正常使用工作台：对话、DSH 系统设置以及自带凭据（BYOK）都不需要登录。LWB 账号主要用于加载部分场景能力包，以及使用这些能力包对应的语音服务和图片服务。', lwbLogin: '登录', lwbRegister: '注册', lwbLogout: '退出登录', lwbEmail: '账号或邮箱', lwbPassword: '密码', lwbConfirmPassword: '确认密码', lwbActivationCode: '激活码（可选）', lwbNotLoggedIn: '尚未登录 LWB 账号。', lwbAccountLoading: '正在读取账号状态…', lwbAccountFailed: '账号状态暂时不可用。', lwbLoginSuccess: '登录成功。', lwbRegisterSuccess: '注册成功。', lwbMembership: '会员套餐', lwbPoints: '可用积分', lwbFrozenPoints: '冻结积分', lwbNoMembership: '免费版', lwbPacksHint: '可在「场景能力包」中查看和管理当前可用的场景能力包。', lwbSwitchToRegister: '注册新账号', lwbSwitchToLogin: '已有账号，去登录', lwbSubmit: '提交', lwbPurchase: '购买积分与会员', lwbPurchaseHint: '选择套餐后打开支付宝收银台，支付成功后自动同步账户状态。', lwbRefreshPackages: '刷新套餐', lwbRechargePackages: '积分包', lwbMembershipPlans: '会员套餐', lwbNoPackages: '暂无可购买套餐。', lwbLoginToPurchase: '登录 LWB 账号后可查看和购买套餐。', lwbPointsAmount: '到账积分', lwbBonusPoints: '赠送积分', lwbMonthlyPoints: '每月赠送', lwbMonthlyPrice: '月费', lwbPriceDiscount: '模型折扣', lwbRpmLimit: '请求限制', lwbMaxApiKeys: 'API Key 数量', lwbCurrentPlan: '当前套餐', lwbPayAlipay: '支付宝支付', lwbOpenPayment: '打开收银台', lwbCheckPayment: '检查支付状态', lwbClearOrder: '清除订单', lwbFinishOrder: '完成', lwbCreatingOrder: '创建订单中…', lwbOrderCreated: (orderNo) => `订单 ${orderNo} 已创建，支付成功后将自动同步积分和会员状态。`, lwbOrderCreatedBlocked: (orderNo) => `订单 ${orderNo} 已创建，但收银台未打开，请重新打开。`, lwbOrderPending: '订单待支付，到账后将自动同步。', lwbPaymentSuccess: '支付成功，积分和会员状态已同步。', lwbPaymentCancelled: '订单已取消，未扣款。', lwbPaymentFailed: '订单支付失败，请重新创建订单。', lwbPaymentExpired: '订单已结束，请刷新账户确认到账状态。', lwbPaymentTimeout: '支付状态查询已超时，请稍后刷新账户状态。', lwbPackageLoadFailed: '套餐信息暂时不可用。',
         packsIntro: '基础版暂未预装场景能力包；加载后的能力包会实时注入左侧菜单。', settingsIntro: '管理工作台的系统配置与偏好。', capabilityIntro: '已加载能力包的页面入口。',
+        productVersion: '产品版本', updateTitle: '版本更新', updatePill: (version) => `新版本 ${version}`, updatePillHint: '点击查看', updateCurrent: '当前版本', updateLatest: '最新版本', updateCheck: '检查更新', updateChecking: '正在检查更新…', updateDownloading: '正在下载更新包…', updateInstall: '立即更新', updateLater: '稍后', updateIgnore: '忽略此版本', updateInstallHint: '更新时工作台会自动关闭，完成后重新打开。', updateInstalling: '正在更新，工作台即将关闭并重新启动…', updateFailed: '更新失败', updateDone: (version) => `已更新到 ${version}`, updateDisabled: '当前构建不检查更新。', updateNotes: '更新说明', updateSize: (megabytes) => `${megabytes} MB`,
       },
       en: {
         conversation: 'Conversation', packs: 'Capability Packs', settings: 'Settings', capability: 'Capability Page',
@@ -424,11 +507,15 @@ window.__ModuleLoader__.load({
         marketSearch: 'Search packs, tags, or functions...', filterAll: 'All', filterLoaded: 'Loaded', filterAvailable: 'Available', filterCategory: 'Category', noMatchingPacks: 'No matching capability packs.', packWorkflow: 'Workflow', packTags: 'Tags', packOrigin: 'Source', loadingPack: 'Loading...', unloadingPack: 'Unloading...', packLoaded: 'Capability pack loaded.', packUnloaded: 'Capability pack unloaded.', workspacePack: 'Workspace pack', localPack: 'Local pack', unavailablePack: 'The package source is unavailable and cannot be loaded.',
         noCapability: 'No capability pack loaded', noCapabilityCopy: 'Install and load a domain capability pack from Capability Packs.', goToPacks: 'Go to capability packs',
         capabilityPageCopy: (name) => `${name} does not provide a browser page for this menu.`, clientUnavailable: 'Capability pack client page is unavailable',
+        loadingCapability: 'Loading capability packs...', loadingCapabilityCopy: 'The workbench is restoring the capability packs it had loaded. This page appears as soon as that finishes.',
+        packStartupFailed: 'Capability packs did not load', packStartupFailedCopy: 'These packs did not come up during start-up; the reason is in parentheses. Retry once the cause is fixed.',
+        retry: 'Retry',
         capabilityPageFailed: 'Capability page is temporarily unavailable', capabilityPageFailedCopy: 'This page could not render. Workbench navigation remains available, so you can return to the conversation or open capability packs.',
         returnToConversation: 'Back to conversation', viewPacks: 'View capability packs',
         about: 'ABOUT', runtime: 'Runtime', runtimeHint: 'A local single-user workbench built on DeepSeek Harness (DSH).', connected: 'Connected', connecting: 'Connecting', disconnected: 'Disconnected', basicConfiguration: 'BASIC CONFIGURATION', basicConfigurationHint: 'Open native DSH settings and manage the DSH account.', systemSettings: 'DSH system settings', systemSettingsHint: 'Configure DSH language, appearance, model providers, permissions, plugins, and agent presets.', openRuntimeSettings: 'Open settings', dshSignIn: 'Sign in to DSH', dshSigningIn: 'Signing in to DSH...', dshSignOut: 'Sign out of DSH', dshSigningOut: 'Signing out of DSH...', dshSignOutConfirm: 'Sign out of DSH? Running tasks that use the DSH account may be interrupted.', dshSignInFailed: 'DSH sign-in failed. Please try again.', dshSignOutFailed: 'DSH sign-out failed. Please try again later.', dshAccountUnavailable: 'The DSH account service is unavailable.', accountReturnHint: 'You are setting up the LWB account for a scene page. Return to it when you are done.', accountReturn: '← Back to the scene page (draft kept)',
         lwbAccount: 'LWB account', lwbAccountHint: 'Manage the LWB service account, membership, and available points.', lwbAccountNote: 'The Workbench works without an LWB account: conversations, DSH system settings, and bring-your-own-credential (BYOK) paths never require signing in. The LWB account mainly loads some capability packs and enables the voice and image services those packs use.', lwbLogin: 'Sign in', lwbRegister: 'Register', lwbLogout: 'Sign out', lwbEmail: 'Account or email', lwbPassword: 'Password', lwbConfirmPassword: 'Confirm password', lwbActivationCode: 'Activation code (optional)', lwbNotLoggedIn: 'No LWB account is signed in.', lwbAccountLoading: 'Loading account status...', lwbAccountFailed: 'Account status is temporarily unavailable.', lwbLoginSuccess: 'Signed in successfully.', lwbRegisterSuccess: 'Account created successfully.', lwbMembership: 'Membership', lwbPoints: 'Available points', lwbFrozenPoints: 'Frozen points', lwbNoMembership: 'Free', lwbPacksHint: 'View and manage available packs in Capability Packs.', lwbSwitchToRegister: 'Create an account', lwbSwitchToLogin: 'Already have an account? Sign in', lwbSubmit: 'Submit', lwbPurchase: 'Buy points and membership', lwbPurchaseHint: 'Choose a plan to open the Alipay checkout. Account status syncs after payment.', lwbRefreshPackages: 'Refresh plans', lwbRechargePackages: 'Point packages', lwbMembershipPlans: 'Membership plans', lwbNoPackages: 'No plans are available.', lwbLoginToPurchase: 'Sign in to view and buy plans.', lwbPointsAmount: 'Points', lwbBonusPoints: 'Bonus points', lwbMonthlyPoints: 'Monthly points', lwbMonthlyPrice: 'Monthly price', lwbPriceDiscount: 'Model discount', lwbRpmLimit: 'Request limit', lwbMaxApiKeys: 'API keys', lwbCurrentPlan: 'Current plan', lwbPayAlipay: 'Pay with Alipay', lwbOpenPayment: 'Open checkout', lwbCheckPayment: 'Check payment', lwbClearOrder: 'Clear order', lwbFinishOrder: 'Done', lwbCreatingOrder: 'Creating order...', lwbOrderCreated: (orderNo) => `Order ${orderNo} created. Points and membership will sync after payment.`, lwbOrderCreatedBlocked: (orderNo) => `Order ${orderNo} created, but checkout did not open. Reopen it below.`, lwbOrderPending: 'Order is pending. Account will sync after payment.', lwbPaymentSuccess: 'Payment succeeded. Points and membership are synced.', lwbPaymentCancelled: 'Order cancelled. No charge was made.', lwbPaymentFailed: 'Payment failed. Create a new order and try again.', lwbPaymentExpired: 'Order ended. Refresh the account to confirm the result.', lwbPaymentTimeout: 'Payment status polling timed out. Refresh the account later.', lwbPackageLoadFailed: 'Plans are temporarily unavailable.',
         packsIntro: 'The base release has no scenario capability packs preinstalled; loaded packs will appear in the left menu.', settingsIntro: 'Manage the workbench’s system configuration and preferences.', capabilityIntro: 'Entry point for the loaded capability pack.',
+        productVersion: 'Product version', updateTitle: 'Product update', updatePill: (version) => `Version ${version} is available`, updatePillHint: 'Click to review', updateCurrent: 'Current version', updateLatest: 'Latest version', updateCheck: 'Check for updates', updateChecking: 'Checking for updates...', updateDownloading: 'Downloading the update...', updateInstall: 'Install now', updateLater: 'Later', updateIgnore: 'Skip this version', updateInstallHint: 'The workbench closes while it updates and reopens when it is done.', updateInstalling: 'Updating. The workbench will close and restart shortly...', updateFailed: 'Update failed', updateDone: (version) => `Updated to ${version}`, updateDisabled: 'This build does not check for updates.', updateNotes: 'Release notes', updateSize: (megabytes) => `${megabytes} MB`,
       },
     };
     function useLwbCopy() {
@@ -466,6 +553,22 @@ window.__ModuleLoader__.load({
       const normalized = value.trim();
       return normalized && normalized.length <= maxLength ? normalized : fallback;
     }
+    // Start-up bookkeeping the Host attaches to a catalog read. It is what lets
+    // an empty catalog say "still restoring" or "this pack failed, here is why"
+    // instead of the single, unhelpful "尚未加载".
+    function normalizePackStartup(value) {
+      const input = value && typeof value === 'object' ? value : {};
+      const failed = Array.isArray(input.failed) ? input.failed.slice(0, 8).map((row) => ({
+        id: normalizePackText(row?.id, '', 63),
+        message: normalizePackText(row?.message, '', 300),
+      })).filter((row) => row.id) : [];
+      return {
+        armed: input.armed === true,
+        started: input.started === true,
+        restoring: input.restoring === true,
+        failed,
+      };
+    }
     function normalizePackCatalog(value) {
       if (!value || typeof value !== 'object' || !Array.isArray(value.packs)) throw new Error('能力包目录返回了无效的数据。');
       const ids = new Set();
@@ -497,7 +600,7 @@ window.__ModuleLoader__.load({
           status: 'loaded',
         };
       });
-      return { phase: 'ready', packs, error: null, visibility: packVisibility };
+      return { phase: 'ready', packs, error: null, visibility: packVisibility, startup: normalizePackStartup(value.startup) };
     }
     function setPackCatalog(next) {
       packCatalog = Object.assign({}, next, { visibility: packVisibility });
@@ -553,35 +656,62 @@ window.__ModuleLoader__.load({
     }
     async function refreshPackCatalog(options = {}) {
       if (!services?.connection?.rpc?.call) return;
+      // The Host answers a catalog read in milliseconds; anything near this long
+      // means the request has no handler or the Host is wedged. Failing the read
+      // is what turns "page stays blank forever" into an error with a retry.
+      // Local to this function: the client tests execute it as a slice.
+      const deadlineMs = 12_000;
+      const withinDeadline = (promise, message) => {
+        // Test harnesses run this slice in a context without timers; there the
+        // read simply keeps its original, unbounded behaviour.
+        if (typeof setTimeout !== 'function') return promise;
+        let timer;
+        return Promise.race([
+          promise,
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), deadlineMs); }),
+        ]).finally(() => { if (typeof clearTimeout === 'function') clearTimeout(timer); });
+      };
       const generation = ++packCatalogGeneration;
       const accountGeneration = lwbAccountGeneration;
       const retain = options.retain === true;
       if (!retain) {
-        setPackCatalog({ phase: 'pending', packs: packCatalog.packs, error: null });
+        setPackCatalog({ phase: 'pending', packs: packCatalog.packs, error: null, startup: packCatalog.startup });
         setPackMarket({ phase: 'pending', packs: packMarket.packs, error: null });
       }
       try {
-        const [activeResponse, marketResponse, visibilityResponse] = await Promise.all([
-          services.connection.rpc.call('/api', 'lwbPacks/list', { args: {} }),
-          services.connection.rpc.call('/api', 'lwbPacks/market', { args: {} }),
-          services.connection.rpc.call('/api', 'lwbPacks/visibility', { args: {} }),
+        const [activeResult, marketResult, visibilityResult] = await Promise.allSettled([
+          withinDeadline(services.connection.rpc.call('/api', 'lwbPacks/list', { args: {} }), '能力包目录读取超时。'),
+          withinDeadline(services.connection.rpc.call('/api', 'lwbPacks/market', { args: {} }), '能力包市场读取超时。'),
+          withinDeadline(services.connection.rpc.call('/api', 'lwbPacks/visibility', { args: {} }), '能力包工作区归属读取超时。'),
         ]);
         if (generation !== packCatalogGeneration || accountGeneration !== lwbAccountGeneration) return;
-        if (!visibilityResponse?.ok) throw new Error(visibilityResponse?.error?.message || '无法读取能力包工作区归属。');
-        packVisibility = visibilityResponse.value;
-        if (!activeResponse?.ok) throw new Error(activeResponse?.error?.message || '无法读取已加载能力包。');
+        const activeResponse = activeResult.status === 'fulfilled' ? activeResult.value : null;
+        if (!activeResponse?.ok) {
+          throw (activeResult.status === 'rejected' ? activeResult.reason : null)
+            || new Error(activeResponse?.error?.message || '无法读取已加载能力包。');
+        }
+        const visibilityResponse = visibilityResult.status === 'fulfilled' ? visibilityResult.value : null;
+        if (visibilityResponse?.ok) packVisibility = visibilityResponse.value;
         setPackCatalog(normalizePackCatalog(activeResponse.value));
-        if (!marketResponse?.ok) throw new Error(marketResponse?.error?.message || '无法读取能力包市场。');
-        setPackMarket(normalizePackMarket(marketResponse.value));
+        // The market is an independent second read: a failure there must not
+        // blank out the packs that did load, so it is reported on its own.
+        const marketResponse = marketResult.status === 'fulfilled' ? marketResult.value : null;
+        if (marketResponse?.ok) setPackMarket(normalizePackMarket(marketResponse.value));
+        else {
+          const reason = marketResult.status === 'rejected' ? marketResult.reason?.message : marketResponse?.error?.message;
+          setPackMarket({ phase: 'error', packs: packMarket.packs, error: reason || '无法读取能力包市场。' });
+        }
       } catch (error) {
         if (generation !== packCatalogGeneration || accountGeneration !== lwbAccountGeneration) return;
         const message = error?.message || '无法读取能力包目录。';
+        // A retained refresh is a background re-read while cards are already on
+        // screen: keep them, and surface the failure beside them instead.
         if (retain) {
-          setPackCatalog({ phase: 'ready', packs: packCatalog.packs, error: message });
+          setPackCatalog({ phase: 'ready', packs: packCatalog.packs, error: message, startup: packCatalog.startup });
           setPackMarket({ phase: 'ready', packs: packMarket.packs, error: message });
         } else {
-          setPackCatalog({ phase: 'error', packs: [], error: message });
-          setPackMarket({ phase: 'error', packs: [], error: message });
+          setPackCatalog({ phase: 'error', packs: packCatalog.packs, error: message, startup: packCatalog.startup });
+          setPackMarket({ phase: 'error', packs: packMarket.packs, error: message });
         }
         throw error;
       }
@@ -706,11 +836,40 @@ window.__ModuleLoader__.load({
       .lwb-nav-icon { display:grid; width:26px; height:26px; flex:none; place-items:center; border-radius:6px; color:var(--nav-color,#667788); background:var(--nav-soft,#edf1f5); } .lwb-nav-item[data-icon="conversation"] { --nav-color:#2579b9; --nav-soft:#e7f4fb; } .lwb-nav-item[data-icon="packs"] { --nav-color:#d57827; --nav-soft:#fff0e2; } .lwb-nav-item[data-icon="settings"] { --nav-color:#667789; --nav-soft:#edf1f5; } .lwb-nav-item[data-tone="violet"] { --nav-color:#8b5cc4; --nav-soft:#f2ebfb; } .lwb-nav-item[data-tone="orange"] { --nav-color:#cf762b; --nav-soft:#fff0e4; } .lwb-nav-item[data-tone="pink"] { --nav-color:#bc5f8c; --nav-soft:#faeaf1; } .lwb-nav-item[data-tone="red"] { --nav-color:#c25f4a; --nav-soft:#fdeae5; } .lwb-nav-item[data-tone="green"] { --nav-color:#238c67; --nav-soft:#e6f6ee; } .lwb-nav-item[data-active="true"] .lwb-nav-icon { color:#fff; background:var(--lwb-blue); }
       .lwb-nav-count { display:grid; min-width:17px; height:17px; margin-left:auto; place-items:center; border-radius:9px; color:#8090a0; background:#eef2f6; font-size:var(--lwb-text-xs,12px); }
       .lwb-capability-nav { gap:5px; } .lwb-cap-group { display:grid; min-width:0; gap:1px; } .lwb-cap-toggle { display:flex; width:100%; min-width:0; min-height:34px; align-items:center; gap:7px; padding:0 8px; border:0; border-radius:6px; color:#324458; background:transparent; font:inherit; font-size:var(--lwb-text-sm,13px); font-weight:700; text-align:left; cursor:pointer; } .lwb-cap-toggle:hover { color:#273645; background:#f3f6fa; } .lwb-cap-group[data-active="true"] .lwb-cap-toggle { color:var(--lwb-blue); } .lwb-cap-mark { display:grid; width:22px; height:22px; flex:none; place-items:center; border-radius:5px; color:var(--lwb-blue); background:#e9f1ff; font-size:var(--lwb-text-xs,12px); } .lwb-cap-chevron { display:grid; width:16px; height:16px; flex:none; place-items:center; color:#8b99a7; transform:rotate(180deg); transition:transform .14s ease; } .lwb-cap-toggle[aria-expanded="true"] .lwb-cap-chevron { transform:rotate(-90deg); } .lwb-cap-menu { display:grid; min-width:0; gap:1px; margin:0 0 3px 11px; padding-left:9px; border-left:1px solid var(--lwb-line); } .lwb-cap-menu .lwb-nav-item { min-height:34px; padding:0 8px; font-size:var(--lwb-text-sm,13px); } .lwb-cap-menu .lwb-nav-icon { width:22px; height:22px; border-radius:5px; font-size:var(--lwb-text-xs,12px); }
-      .lwb-sidebar-foot { display:flex; min-height:35px; align-items:center; gap:8px; margin-top:auto; padding:10px 8px 0; border-top:1px solid #eef1f4; color:#768493; font-size:var(--lwb-text-sm,13px); } .lwb-user-avatar { display:grid; width:23px; height:23px; place-items:center; border-radius:50%; color:#2869d8; background:#e9f1ff; font-size:var(--lwb-text-xs,12px); font-weight:800; } .lwb-sidebar[data-collapsed="true"] { align-items:center; padding:14px 10px; } .lwb-sidebar[data-collapsed="true"] .lwb-brand { width:36px; justify-content:center; padding:2px 0 15px; } .lwb-sidebar[data-collapsed="true"] .lwb-nav-item,.lwb-sidebar[data-collapsed="true"] .lwb-cap-toggle { width:36px; justify-content:center; padding:0; } .lwb-sidebar[data-collapsed="true"] .lwb-nav-caption,.lwb-sidebar[data-collapsed="true"] .lwb-brand-copy,.lwb-sidebar[data-collapsed="true"] .lwb-collapse,.lwb-sidebar[data-collapsed="true"] .lwb-nav-label,.lwb-sidebar[data-collapsed="true"] .lwb-nav-count,.lwb-sidebar[data-collapsed="true"] .lwb-cap-chevron,.lwb-sidebar[data-collapsed="true"] .lwb-sidebar-foot span { display:none; } .lwb-sidebar[data-collapsed="true"] .lwb-nav-group,.lwb-sidebar[data-collapsed="true"] .lwb-sidebar-foot { width:36px; } .lwb-sidebar[data-collapsed="true"] .lwb-cap-menu { display:none; } .lwb-sidebar[data-collapsed="true"] .lwb-sidebar-foot { justify-content:center; padding:10px 0 0; }
+      .lwb-sidebar-foot { display:flex; width:100%; min-height:35px; align-items:center; gap:8px; margin-top:auto; padding:10px 8px 0; border:0; border-top:1px solid #eef1f4; color:#768493; background:transparent; font-family:inherit; font-size:var(--lwb-text-sm,13px); text-align:left; cursor:pointer; } .lwb-user-avatar { display:grid; width:23px; height:23px; place-items:center; border-radius:50%; color:#2869d8; background:#e9f1ff; font-size:var(--lwb-text-xs,12px); font-weight:800; } .lwb-sidebar[data-collapsed="true"] { align-items:center; padding:14px 10px; } .lwb-sidebar[data-collapsed="true"] .lwb-brand { width:36px; justify-content:center; padding:2px 0 15px; } .lwb-sidebar[data-collapsed="true"] .lwb-nav-item,.lwb-sidebar[data-collapsed="true"] .lwb-cap-toggle { width:36px; justify-content:center; padding:0; } .lwb-sidebar[data-collapsed="true"] .lwb-nav-caption,.lwb-sidebar[data-collapsed="true"] .lwb-brand-copy,.lwb-sidebar[data-collapsed="true"] .lwb-collapse,.lwb-sidebar[data-collapsed="true"] .lwb-nav-label,.lwb-sidebar[data-collapsed="true"] .lwb-nav-count,.lwb-sidebar[data-collapsed="true"] .lwb-cap-chevron,.lwb-sidebar[data-collapsed="true"] .lwb-sidebar-foot span { display:none; } .lwb-sidebar[data-collapsed="true"] .lwb-nav-group,.lwb-sidebar[data-collapsed="true"] .lwb-sidebar-foot { width:36px; } .lwb-sidebar[data-collapsed="true"] .lwb-cap-menu { display:none; } .lwb-sidebar[data-collapsed="true"] .lwb-sidebar-foot { justify-content:center; padding:10px 0 0; }
+      .lwb-update-pill { display:flex; width:100%; min-height:34px; align-items:center; gap:8px; margin-top:auto; padding:6px 9px; border:1px solid #cfe0fa; border-radius:8px; background:#f2f7ff; color:#1f5eb8; font:inherit; font-size:var(--lwb-text-xs,12px); line-height:1.35; text-align:left; cursor:pointer; }
+      .lwb-update-pill + .lwb-sidebar-foot { margin-top:6px; }
+      .lwb-update-pill:hover { border-color:#2869d8; background:#e9f1ff; }
+      .lwb-update-dot { display:block; width:7px; height:7px; flex:none; border-radius:50%; background:#2869d8; box-shadow:0 0 0 3px rgba(40,105,216,.16); }
+      .lwb-update-pill-copy { display:flex; min-width:0; flex-direction:column; overflow:hidden; }
+      .lwb-update-pill-copy strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--lwb-text-xs,12px); font-weight:700; }
+      .lwb-update-pill-copy small { color:#5f6f80; font-size:11px; }
+      .lwb-sidebar[data-collapsed="true"] .lwb-update-pill { width:36px; min-height:36px; justify-content:center; padding:0; }
+      .lwb-sidebar[data-collapsed="true"] .lwb-update-pill-copy { display:none; }
+      body[data-ds-dark-theme] .lwb-update-pill { border-color:#2f4a6b; background:#1d2b3c; color:#9dc2ff; }
+      body[data-ds-dark-theme] .lwb-update-pill-copy small { color:#93a4b6; }
+      .lwb-update-backdrop { position:fixed; z-index:120; inset:0; border:0; background:rgba(24,39,56,.28); }
+      .lwb-update-panel { position:fixed; z-index:121; left:16px; bottom:16px; display:flex; width:min(360px,calc(100vw - 32px)); max-height:min(520px,calc(100vh - 32px)); flex-direction:column; overflow:hidden; border:1px solid var(--lwb-line); border-radius:12px; background:var(--lwb-surface); box-shadow:0 18px 48px rgba(20,36,56,.22); color:var(--lwb-ink); font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif; font-size:var(--lwb-text-sm,13px); line-height:1.55; }
+      .lwb-update-panel-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:14px 14px 8px; }
+      .lwb-update-panel-title { font-size:var(--lwb-text-md,15px); font-weight:700; }
+      .lwb-update-versions { display:flex; gap:16px; padding:0 14px 10px; color:var(--lwb-muted); font-size:var(--lwb-text-xs,12px); }
+      .lwb-update-version { display:flex; flex-direction:column; }
+      .lwb-update-version strong { color:var(--lwb-ink); font-size:var(--lwb-text-base,14px); font-weight:700; }
+      .lwb-update-notes { max-height:180px; overflow:auto; margin:0 14px 10px; padding:10px 12px; border:1px solid var(--lwb-line); border-radius:8px; background:var(--lwb-page); white-space:pre-wrap; word-break:break-word; color:var(--lwb-ink); font-size:var(--lwb-text-xs,12px); line-height:1.6; }
+      .lwb-update-progress { margin:0 14px 10px; }
+      .lwb-update-progress-bar { height:6px; overflow:hidden; border-radius:3px; background:#e8eef6; }
+      .lwb-update-progress-bar > span { display:block; height:100%; border-radius:3px; background:#2869d8; transition:width .3s ease; }
+      .lwb-update-note { margin:0 14px 10px; color:var(--lwb-muted); font-size:var(--lwb-text-xs,12px); line-height:1.6; }
+      .lwb-update-note[data-tone="error"] { color:#c0392b; }
+      .lwb-update-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; padding:0 14px 14px; }
+      body[data-ds-dark-theme] .lwb-update-panel { border-color:#31404f; background:#1b2634; color:#e6edf5; }
+      body[data-ds-dark-theme] .lwb-update-notes { border-color:#31404f; background:#151e29; color:#e6edf5; }
+      body[data-ds-dark-theme] .lwb-update-version strong { color:#e6edf5; }
+      body[data-ds-dark-theme] .lwb-update-progress-bar { background:#2a3948; }
       .lwb-overlay { position:absolute; z-index:1; inset:0 var(--lwb-rightbar-inset,0px) 0 var(--lwb-sidebar-width); display:flex; flex-direction:column; overflow:hidden; background:var(--lwb-page); } .lwb-conversation-overlay { position:absolute; z-index:1; inset:0 0 0 var(--lwb-sidebar-width); pointer-events:none; --lwb-conversation-panel-width:264px; } .lwb-conversation-pane { display:flex; width:var(--lwb-conversation-panel-width); height:100%; flex-direction:column; overflow:hidden; border-right:1px solid var(--lwb-line); background:var(--dsw-specific-sidebar-fill,#fbfcfd); box-shadow:8px 0 20px rgba(30,48,70,.025); pointer-events:auto; --dsh-sidebar-inline-padding:12px; --dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2); --dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2); color:var(--dsw-alias-label-primary,var(--lwb-ink)); font-size:var(--lwb-text-base,14px); } .lwb-conversation-pane-head { display:flex; min-height:38px; align-items:center; justify-content:space-between; padding:0 var(--dsh-sidebar-inline-padding) 6px; padding-left:max(var(--dsh-sidebar-inline-padding),var(--dsh-frame-leading-clearance,0px)); } .lwb-conversation-pane-head button { width:28px; height:28px; border:0; border-radius:var(--dsw-radius-sm,5px); color:var(--dsw-alias-label-secondary,var(--lwb-blue)); background:transparent; font-size:var(--lwb-text-heading,20px); cursor:pointer; } .lwb-conversation-pane-head button:hover { background:var(--dsw-alias-interactive-bg-hover,var(--lwb-blue-soft)); } .lwb-conversation-close,.lwb-conversation-backdrop { display:none; } .lwb-conversation-region { display:flex; min-height:0; flex:1; flex-direction:column; overflow:hidden; padding-left:var(--dsh-sidebar-inline-padding); } .lwb-conversation-loading { display:grid; min-height:120px; place-items:center; color:var(--lwb-muted); font-size:var(--lwb-text-sm,13px); } .lwb-embedded-conversation-shell { position:relative; display:flex; flex-direction:column; width:100%; height:100%; min-height:0; overflow:hidden; background:var(--lwb-surface); } .lwb-embedded-conversation-head { display:flex; min-width:0; flex:none; align-items:center; justify-content:space-between; gap:10px; padding:6px 10px 6px 12px; border-bottom:1px solid var(--lwb-line); background:var(--lwb-surface); } .lwb-embedded-conversation-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--lwb-text-sm,13px); font-weight:600; } .lwb-embedded-rightbar-toggle { display:inline-flex; flex:none; align-items:center; min-height:26px; padding:0 9px; border:1px solid var(--lwb-line); border-radius:6px; color:var(--lwb-muted); background:var(--lwb-page); font:inherit; font-size:var(--lwb-text-xs,12px); font-weight:600; cursor:pointer; } .lwb-embedded-rightbar-toggle:hover { border-color:var(--lwb-blue); color:var(--lwb-blue); } .lwb-embedded-rightbar-toggle[data-on="true"] { border-color:var(--lwb-blue); color:var(--lwb-blue); background:var(--lwb-blue-soft); } .lwb-embedded-conversation-main { width:100%; height:100%; min-height:0; flex:1; } .lwb-embedded-conversation-main > * { height:100%; min-height:0; } .lwb-readonly-conversation { display:flex; flex:1; min-height:0; flex-direction:column; } .lwb-readonly-conversation [data-conversation-region="composer"] { display:none; } .lwb-embedded-conversation-state { display:grid; min-height:220px; place-items:center; padding:24px; border:1px dashed var(--lwb-line); border-radius:7px; color:var(--lwb-muted); background:var(--lwb-surface); font-size:var(--lwb-text-sm,13px); text-align:center; } [data-lwb-conversation-active="true"] > div:nth-child(2) { box-sizing:border-box; padding-left:calc(var(--lwb-conversation-panel-width,264px) + var(--lwb-conversation-gutter,16px)); }
       .lwb-conversation-actions { flex:none; padding:0 var(--dsh-sidebar-inline-padding) 6px; } .lwb-conversation-new { display:flex; width:100%; min-height:32px; align-items:center; gap:8px; padding:0 10px; border:1px solid var(--lwb-line); border-radius:var(--dsw-radius-sm,6px); color:var(--dsw-alias-label-primary,var(--lwb-ink)); background:var(--lwb-surface); font:inherit; font-size:var(--lwb-text-sm,13px); font-weight:600; text-align:left; cursor:pointer; } .lwb-conversation-new:hover { border-color:var(--lwb-blue); color:var(--lwb-blue); } .lwb-conversation-new-key { display:inline-flex; margin-left:auto; color:var(--lwb-muted); } .lwb-conversation-panels { display:grid; flex:none; gap:2px; padding:0 var(--dsh-sidebar-inline-padding) 6px; } .lwb-conversation-panel { display:flex; min-height:34px; align-items:center; gap:8px; padding:0 9px; border:0; border-radius:var(--dsw-radius-sm,6px); color:var(--dsw-alias-label-secondary,var(--lwb-muted)); background:transparent; font:inherit; font-size:var(--lwb-text-sm,13px); font-weight:600; text-align:left; cursor:pointer; } .lwb-conversation-panel:hover { color:var(--dsw-alias-label-primary,var(--lwb-ink)); background:var(--dsw-alias-interactive-bg-hover,var(--lwb-blue-soft)); } .lwb-conversation-panel[data-active="true"] { color:var(--lwb-blue); background:var(--lwb-blue-soft); } .lwb-conversation-panel-glyph { display:grid; width:18px; flex:none; place-items:center; } .lwb-conversation-panel-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .lwb-overlay-head { display:flex; min-height:58px; align-items:center; justify-content:space-between; padding:0 28px; padding-left:max(28px,var(--dsh-frame-leading-clearance,0px)); border-bottom:1px solid var(--lwb-line); background:rgba(255,255,255,.96); } .lwb-overlay-title { display:flex; min-width:0; gap:10px; align-items:center; } .lwb-overlay-title b { font-size:var(--lwb-text-lg,16px); } .lwb-overlay-title span { overflow:hidden; color:var(--lwb-muted); font-size:var(--lwb-text-base,14px); text-overflow:ellipsis; white-space:nowrap; } .lwb-overlay-body { min-height:0; flex:1; overflow:auto; } .lwb-page { width:min(1180px,100%); min-height:100%; margin:0 auto; padding:31px 36px 52px; } .lwb-page-capability { width:100%; max-width:none; margin:0; padding:20px clamp(20px,2.4vw,44px) 52px; } .lwb-page-intro { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; margin-bottom:22px; } .lwb-page-capability .lwb-page-intro { min-height:64px; margin-bottom:16px; padding-bottom:14px; border-bottom:1px solid var(--lwb-line); } .lwb-page-capability .lwb-eyebrow { margin-bottom:5px; } .lwb-eyebrow { margin-bottom:8px; color:var(--lwb-blue); font-size:var(--lwb-text-xs,12px); font-weight:800; letter-spacing:.12em; } .lwb-page-intro h1 { margin:0; font-size:var(--lwb-text-title,24px); line-height:1.2; } .lwb-page-capability .lwb-page-intro h1 { font-size:var(--lwb-text-heading,20px); } .lwb-page-intro p { max-width:650px; margin:8px 0 0; color:var(--lwb-muted); font-size:var(--lwb-text-md,15px); line-height:1.55; } .lwb-page-capability .lwb-page-intro p { max-width:900px; margin-top:4px; font-size:var(--lwb-text-base,14px); }
-      .lwb-card { border:1px solid var(--lwb-line); border-radius:7px; background:var(--lwb-surface); box-shadow:0 2px 8px rgba(24,39,56,.025); } .lwb-card-heading { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:15px 17px; border-bottom:1px solid var(--lwb-line); } .lwb-card-heading span { color:var(--lwb-muted); font-size:var(--lwb-text-sm,13px); } .lwb-status { display:inline-flex; min-height:21px; align-items:center; padding:0 8px; border-radius:11px; color:var(--lwb-green); background:var(--lwb-green-soft); font-size:var(--lwb-text-sm,13px); font-weight:700; white-space:nowrap; } .lwb-status[data-tone="muted"] { color:#7c8996; background:#f0f3f5; } .lwb-status[data-tone="warm"] { color:var(--lwb-warm); background:var(--lwb-warm-soft); } .lwb-empty-state,.lwb-pack-empty { display:grid; min-height:280px; place-items:center; padding:36px; text-align:center; } .lwb-empty-state p { color:var(--lwb-muted); font-size:var(--lwb-text-base,14px); line-height:1.65; } .lwb-empty-glyph,.lwb-pack-icon { display:grid; place-items:center; border-radius:8px; color:var(--lwb-blue); background:var(--lwb-blue-soft); } .lwb-empty-glyph { width:50px; height:50px; margin:auto; font-size:var(--lwb-text-title,24px); } .lwb-row-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+      .lwb-card { border:1px solid var(--lwb-line); border-radius:7px; background:var(--lwb-surface); box-shadow:0 2px 8px rgba(24,39,56,.025); } .lwb-card-heading { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:15px 17px; border-bottom:1px solid var(--lwb-line); } .lwb-card-heading span { color:var(--lwb-muted); font-size:var(--lwb-text-sm,13px); } .lwb-status { display:inline-flex; min-height:21px; align-items:center; padding:0 8px; border-radius:11px; color:var(--lwb-green); background:var(--lwb-green-soft); font-size:var(--lwb-text-sm,13px); font-weight:700; white-space:nowrap; } .lwb-status[data-tone="muted"] { color:#7c8996; background:#f0f3f5; } .lwb-status[data-tone="warm"] { color:var(--lwb-warm); background:var(--lwb-warm-soft); } .lwb-empty-state,.lwb-pack-empty { display:grid; min-height:280px; place-items:center; padding:36px; text-align:center; } .lwb-empty-state p { color:var(--lwb-muted); font-size:var(--lwb-text-base,14px); line-height:1.65; } .lwb-empty-glyph,.lwb-pack-icon { display:grid; place-items:center; border-radius:8px; color:var(--lwb-blue); background:var(--lwb-blue-soft); } .lwb-empty-glyph { width:50px; height:50px; margin:auto; font-size:var(--lwb-text-title,24px); } .lwb-row-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; } .lwb-startup-failures { max-width:560px; margin:14px auto 4px; padding-left:18px; text-align:left; color:var(--lwb-muted); font-size:var(--lwb-text-sm,13px); line-height:1.7; } .lwb-startup-failures b { color:var(--lwb-ink); font-weight:700; }
       .lwb-plain-button,.lwb-primary-button,.lwb-danger-button { min-height:32px; padding:0 11px; border:1px solid #d7e0e9; border-radius:6px; background:#fff; color:#4f6071; font-size:var(--lwb-text-base,14px); font-weight:600; cursor:pointer; } .lwb-primary-button { border-color:var(--lwb-blue); color:#fff; background:var(--lwb-blue); } .lwb-danger-button { border-color:#dba8a8; color:#a44949; background:#fff7f7; }
       .lwb-pack-tabs { display:flex; gap:4px; margin-bottom:14px; } .lwb-pack-tab { min-height:32px; padding:0 12px; border:1px solid transparent; border-radius:6px; color:#6e7c8a; background:transparent; cursor:pointer; } .lwb-pack-tab[data-active="true"] { border-color:#d6e5f9; color:var(--lwb-blue); background:var(--lwb-blue-soft); } .lwb-market-controls { display:grid; grid-template-columns:minmax(220px,1fr) 142px 142px; gap:9px; margin-bottom:16px; } .lwb-market-search { width:100%; height:34px; padding:0 10px; border:1px solid #d8e2ec; border-radius:6px; outline:0; color:var(--lwb-ink); background:var(--lwb-surface); font-size:var(--lwb-text-base,14px); } .lwb-market-search:focus { border-color:var(--lwb-blue); box-shadow:0 0 0 2px var(--lwb-blue-soft); } .lwb-pack-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(248px,1fr)); gap:13px; } .lwb-pack-card { display:flex; min-height:258px; flex-direction:column; padding:17px; cursor:pointer; } .lwb-pack-card:hover { border-color:#b9d4f4; box-shadow:0 5px 17px rgba(39,78,123,.09); } .lwb-pack-card-top { display:flex; align-items:flex-start; justify-content:space-between; gap:15px; } .lwb-pack-title { display:flex; min-width:0; align-items:center; gap:11px; } .lwb-pack-title > div { min-width:0; } .lwb-pack-icon { width:37px; height:37px; flex:none; font-size:var(--lwb-text-heading,20px); } .lwb-pack-title h3 { overflow:hidden; margin:0; font-size:var(--lwb-text-lg,16px); text-overflow:ellipsis; white-space:nowrap; } .lwb-pack-title p { margin:4px 0 0; color:var(--lwb-muted); font-size:var(--lwb-text-sm,13px); } .lwb-pack-card > p { margin:14px 0; color:#657586; font-size:var(--lwb-text-base,14px); line-height:1.6; } .lwb-pack-menu { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px; } .lwb-menu-pill { padding:4px 7px; border-radius:4px; color:#617183; background:#f2f5f8; font-size:var(--lwb-text-xs,12px); } .lwb-pack-actions { margin-top:auto; } .lwb-pack-card-note { min-height:16px; margin:0 0 10px; color:var(--lwb-muted); font-size:var(--lwb-text-xs,12px); }
       .lwb-pack-empty { border:1px dashed #d6dee7; border-radius:7px; color:#82909e; background:#fbfcfd; font-size:var(--lwb-text-base,14px); }
@@ -1331,10 +1490,86 @@ window.__ModuleLoader__.load({
       }))), document.body);
     }
 
+    /**
+     * The one place an update can be started.
+     *
+     * It has to be honest about every state the Host can report, including the
+     * ones where nothing can be done — a package launched from a read-only disk
+     * image, a build that is not a release, a download that failed a checksum.
+     * Those are shown as reasons, not hidden, because the alternative is a
+     * button that appears to work and does nothing.
+     */
+    function LwbUpdatePanel({ state, onClose }) {
+      const copy = useLwbCopy();
+      const [busy, setBusy] = React.useState(false);
+      const [failure, setFailure] = React.useState('');
+      const release = state.release;
+      const run = async (method) => {
+        if (busy) return;
+        setBusy(true); setFailure('');
+        try { await lwbUpdateAction(method); }
+        catch (error) { setFailure(error?.message || copy.updateFailed); }
+        finally { setBusy(false); }
+      };
+      React.useEffect(() => {
+        const onKey = (event) => { if (event.key === 'Escape') onClose(); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      }, [onClose]);
+      const percent = state.progress && state.progress.total > 0
+        ? Math.min(100, Math.round((state.progress.received / state.progress.total) * 100))
+        : undefined;
+      const megabytes = Number(release?.sizeBytes) > 0 ? Math.max(1, Math.round(Number(release.sizeBytes) / 1048576)) : undefined;
+      const note = failure ? { text: failure, error: true }
+        : state.error ? { text: `${copy.updateFailed}：${state.error}`, error: true }
+          : !state.enabled ? { text: state.reason || copy.updateDisabled, error: false }
+            : state.phase === 'checking' ? { text: copy.updateChecking, error: false }
+              : state.phase === 'downloading' ? { text: copy.updateDownloading, error: false }
+                : state.phase === 'installing' ? { text: copy.updateInstalling, error: false }
+                  : state.phase === 'ready' ? { text: state.canInstall ? copy.updateInstallHint : (state.installHint || ''), error: !state.canInstall }
+                    : state.updatedTo ? { text: copy.updateDone(state.updatedTo), error: false }
+                      : null;
+      const settled = !['checking', 'downloading', 'installing'].includes(state.phase);
+      const actions = [];
+      if (state.phase === 'ready' && state.canInstall) {
+        actions.push(h('button', { key: 'install', type: 'button', className: 'lwb-primary-button', disabled: busy, onClick: () => void run('install') }, copy.updateInstall));
+        actions.push(h('button', { key: 'later', type: 'button', className: 'lwb-plain-button', onClick: onClose }, copy.updateLater));
+        actions.push(h('button', { key: 'ignore', type: 'button', className: 'lwb-plain-button', disabled: busy, onClick: () => void run('ignore') }, copy.updateIgnore));
+      } else if (settled && state.enabled) {
+        actions.push(h('button', { key: 'check', type: 'button', className: release ? 'lwb-plain-button' : 'lwb-primary-button', disabled: busy, onClick: () => void run('check') }, copy.updateCheck));
+        actions.push(h('button', { key: 'close', type: 'button', className: 'lwb-plain-button', onClick: onClose }, copy.updateLater));
+      } else {
+        actions.push(h('button', { key: 'close', type: 'button', className: 'lwb-plain-button', onClick: onClose }, copy.updateLater));
+      }
+      return createPortal(h(React.Fragment, null,
+        h('button', { type: 'button', className: 'lwb-update-backdrop', 'aria-label': copy.close, onClick: onClose }),
+        h('section', { className: 'lwb-update-panel', role: 'dialog', 'aria-modal': 'true', 'aria-label': copy.updateTitle },
+          h('header', { className: 'lwb-update-panel-head' },
+            h('span', { className: 'lwb-update-panel-title' }, copy.updateTitle),
+            h('button', { type: 'button', className: 'lwb-detail-close', onClick: onClose, 'aria-label': copy.close }, '×'),
+          ),
+          h('div', { className: 'lwb-update-versions' },
+            h('span', { className: 'lwb-update-version' }, h('span', null, copy.updateCurrent), h('strong', null, state.currentVersion || '—')),
+            release && h('span', { className: 'lwb-update-version' },
+              h('span', null, megabytes === undefined ? copy.updateLatest : `${copy.updateLatest} · ${copy.updateSize(megabytes)}`),
+              h('strong', null, release.version)),
+          ),
+          release?.releaseNotes && h('div', { className: 'lwb-update-notes' }, release.releaseNotes),
+          state.phase === 'downloading' && h('div', { className: 'lwb-update-progress' },
+            h('div', { className: 'lwb-update-progress-bar', role: 'progressbar', 'aria-valuenow': percent ?? 0, 'aria-valuemin': 0, 'aria-valuemax': 100 },
+              h('span', { style: { width: `${percent ?? 0}%` } })),
+          ),
+          note?.text && h('p', { className: 'lwb-update-note', 'data-tone': note.error ? 'error' : undefined, role: 'status' }, note.text),
+          h('div', { className: 'lwb-update-actions' }, actions),
+        ),
+      ), document.body);
+    }
     function LwbSidebar({ collapsed, width }) {
       const state = useProduct();
       const copy = useLwbCopy();
       const catalog = usePackCatalog();
+      const update = useLwbUpdate();
+      const [updatePanel, setUpdatePanel] = React.useState(false);
       const [mobile, setMobile] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 680px)').matches);
       // Read once per mount: null means no recorded preference yet, so the
       // first-run reveal rules below still apply. An empty set is a real answer.
@@ -1480,7 +1715,21 @@ window.__ModuleLoader__.load({
           wide && h('div', { className: 'lwb-nav-caption' }, copy.loadedPacks),
           capabilityGroups,
         ),
-        h('div', { className: 'lwb-sidebar-foot', title: copy.localWorkbench }, h('span', { className: 'lwb-user-avatar' }, '老'), wide && h('span', null, copy.localWorkbench)),
+        update.enabled && update.release?.version && h('button', {
+          type: 'button', className: 'lwb-update-pill', title: copy.updatePill(update.release.version),
+          'aria-haspopup': 'dialog', 'aria-expanded': updatePanel ? 'true' : 'false',
+          onClick: () => setUpdatePanel(true),
+        },
+          h('span', { className: 'lwb-update-dot', 'aria-hidden': 'true' }),
+          wide && h('span', { className: 'lwb-update-pill-copy' },
+            h('strong', null, copy.updatePill(update.release.version)),
+            h('small', null, copy.updatePillHint)),
+        ),
+        h('button', {
+          type: 'button', className: 'lwb-sidebar-foot', title: `${copy.productVersion} ${update.currentVersion || '—'}`,
+          onClick: () => setUpdatePanel((open) => !open),
+        }, h('span', { className: 'lwb-user-avatar' }, '老'), wide && h('span', null, copy.localWorkbench)),
+        updatePanel && h(LwbUpdatePanel, { state: update, onClose: () => setUpdatePanel(false) }),
         flyoutPack && h(LwbPackFlyout, { key: flyoutPack.id, pack: flyoutPack, anchor: flyout.anchor, state, onClose: closeFlyout }),
         desktopCollapsed && createPortal(h(LwbSidebarExpand, { className: 'lwb-desktop-expand' }), document.body),
       );
@@ -1790,6 +2039,8 @@ window.__ModuleLoader__.load({
       const connectionState = useObservable(services?.connection?.state, 'connecting');
       const account = useLwbAccount();
       const dshAccount = useDshAccount();
+      const update = useLwbUpdate();
+      const [updateBusy, setUpdateBusy] = React.useState(false);
       const [mode, setMode] = React.useState('login');
       const [accountValue, setAccountValue] = React.useState('');
       const [password, setPassword] = React.useState('');
@@ -2005,6 +2256,19 @@ window.__ModuleLoader__.load({
             ),
           ),
           h('div', { className: 'lwb-setting-row' }, h('div', { className: 'lwb-setting-copy' }, h('strong', null, copy.runtime), h('span', null, copy.runtimeHint)), h('span', { className: 'lwb-status', role: 'status', 'data-tone': connectionState === 'connected' ? undefined : 'warm' }, connectionLabel)),
+          h('div', { className: 'lwb-setting-row' },
+            h('div', { className: 'lwb-setting-copy' },
+              h('strong', null, copy.productVersion),
+              !update.enabled && h('span', null, update.reason || copy.updateDisabled)),
+            h('div', { className: 'lwb-row-actions' },
+              h('span', { className: 'lwb-status', role: 'status' }, update.currentVersion || '—'),
+              update.enabled && h('button', {
+                type: 'button', className: 'lwb-plain-button', disabled: updateBusy,
+                onClick: async () => {
+                  setUpdateBusy(true);
+                  try { await lwbUpdateAction('check'); } catch (_) {} finally { setUpdateBusy(false); }
+                },
+              }, update.phase === 'checking' ? copy.updateChecking : copy.updateCheck))),
         ),
       );
     }
@@ -2035,18 +2299,30 @@ window.__ModuleLoader__.load({
     }
 
 
-    function ReadOnlyConversationSurface({ sessionId, children }) {
+    /**
+     * The sentence a read-only Surface shows when the pack named none.
+     *
+     * The surface is shared: 竞技台 embeds a match Session, 鱼池 embeds the
+     * process of one run, and either may add more. The reason therefore comes
+     * from the caller (`renderConversation({ readOnly, notice })`) — it used to
+     * be the arena's sentence written in here, which every other pack then
+     * showed verbatim.
+     */
+    const DEFAULT_READ_ONLY_NOTICE = '这段对话只读：内容来自另一个地方，要操作请回到那里。';
+
+    function ReadOnlyConversationSurface({ sessionId, notice, children }) {
       const root = React.useRef(null);
+      const reason = typeof notice === 'string' && notice.trim() ? notice.trim() : DEFAULT_READ_ONLY_NOTICE;
       React.useLayoutEffect(() => {
         const blocks = services.composerBlocks?.();
         if (!blocks) return;
         const previous = blocks.storeFor(sessionId).getSnapshot();
-        const block = { reason: '比赛会话只读，请通过竞技台控制比赛。' };
+        const block = { reason };
         blocks.set(sessionId, block);
         return () => {
           if (blocks.storeFor(sessionId).getSnapshot() === block) blocks.set(sessionId, previous);
         };
-      }, [sessionId]);
+      }, [sessionId, reason]);
       React.useLayoutEffect(() => {
         const element = root.current;
         if (!element) return;
@@ -2066,7 +2342,7 @@ window.__ModuleLoader__.load({
           for (const control of element.querySelectorAll('[data-turn-tail] button')) {
             if (branchLabel && control.getAttribute('aria-label') === branchLabel) {
               control.disabled = true;
-              control.title = '比赛会话只读';
+              control.title = reason;
             }
           }
         };
@@ -2074,7 +2350,7 @@ window.__ModuleLoader__.load({
         const observer = new MutationObserver(lock);
         observer.observe(element, { childList: true, subtree: true });
         return () => observer.disconnect();
-      }, []);
+      }, [reason]);
       const guard = event => {
         if (event.target.closest?.('[data-composer-card],[data-composer-input]')) {
           event.preventDefault(); event.stopPropagation();
@@ -2486,7 +2762,7 @@ window.__ModuleLoader__.load({
       return release;
     }
 
-    function EmbeddedConversationHost({ sessionId, SessionProvider, renderFactorySlot }) {
+    function EmbeddedConversationHost({ sessionId, SessionProvider, renderFactorySlot, readOnlyNotice }) {
       const renderSlot = arguments[0].renderSlot;
       const readOnly = arguments[0].readOnly === true;
       const [state, setState] = React.useState({ reference: null, error: null });
@@ -2511,7 +2787,7 @@ window.__ModuleLoader__.load({
         h(EmbeddedConversationHead, { sessionId }),
         h(SessionProvider, { session: state.reference },
           h('div', { className: 'lwb-embedded-conversation-main' },
-            h(readOnly ? ReadOnlyConversationSurface : React.Fragment, readOnly ? { sessionId } : null,
+            h(readOnly ? ReadOnlyConversationSurface : React.Fragment, readOnly ? { sessionId, notice: readOnlyNotice } : null,
               renderFactorySlot('conversation.content', {
             variant: 'embedded', phase: 'active', hero: false,
           }, { slots: { views: FixedEmbeddedConversationView } })))));
@@ -2519,13 +2795,59 @@ window.__ModuleLoader__.load({
     }
 
 
+    /**
+     * The capability page with no route to render.
+     *
+     * Four situations used to share one "尚未加载" card: the catalog read is still
+     * in flight, the Host is still restoring packs, a pack failed to mount, and
+     * nothing is installed. Only the last one is a normal empty state; the other
+     * three have to say so, or an empty page can never be diagnosed from the UI.
+     */
+    // How many times an empty catalog re-reads itself before the page accepts
+    // it. The Host answers before it finishes restoring, so the first read of a
+    // just-opened workbench legitimately carries nothing; fourteen tries at
+    // 1.5 s covers a slow start and still gives up on a genuinely empty install.
+    const EMPTY_CATALOG_RETRIES = 14;
+
+    function CapabilityStartupCard({ catalog, copy }) {
+      const startup = catalog.startup || {};
+      const failed = startup.failed || [];
+      const [attempts, setAttempts] = React.useState(0);
+      const retry = () => { void refreshPackCatalog().catch(() => {}); };
+      const loading = catalog.phase === 'pending' || startup.restoring === true
+        || (startup.armed === true && startup.started !== true);
+      // An empty catalog is ambiguous at start-up, and the page used to freeze on
+      // whatever the first read said. This keeps asking until packs arrive, a
+      // reason is reported, or the budget runs out.
+      const waiting = failed.length === 0 && catalog.phase !== 'error'
+        && (loading || catalog.packs.length === 0);
+      React.useEffect(() => {
+        if (!waiting || attempts >= EMPTY_CATALOG_RETRIES) return undefined;
+        const timer = setTimeout(() => {
+          setAttempts((value) => value + 1);
+          void refreshPackCatalog({ retain: true }).catch(() => {});
+        }, 1500);
+        return () => clearTimeout(timer);
+      }, [attempts, waiting, catalog.packs.length, catalog.phase]);
+      const card = (glyph, title, body, extra) => h('div', { className: 'lwb-card lwb-empty-state' }, h('div', null,
+        h('div', { className: 'lwb-empty-glyph' }, glyph), h('h2', null, title), h('p', null, body), extra,
+        h('div', { className: 'lwb-row-actions', style: { justifyContent: 'center' } },
+          button('lwb-plain-button', copy.retry, retry),
+          button('lwb-primary-button', copy.goToPacks, () => navTo('packs')))));
+      if (catalog.phase === 'error') return card('⚠', copy.packCatalogFailed, catalog.error || copy.capabilityPageFailedCopy);
+      if (failed.length > 0) return card('⚠', copy.packStartupFailed, copy.packStartupFailedCopy,
+        h('ul', { className: 'lwb-startup-failures' }, failed.map((row) => h('li', { key: row.id }, h('b', null, row.id), `（${row.message}）`))));
+      if (loading) return card('◌', copy.loadingCapability, copy.loadingCapabilityCopy);
+      return card('▦', copy.noCapability, copy.noCapabilityCopy);
+    }
+
     function CapabilityPage({ renderConversation, focusSession }) {
       const state = useProduct();
       const copy = useLwbCopy();
       const catalog = usePackCatalog();
       const registry = useLwbPackClient();
       const selected = capabilityAtRoute(catalog.packs, state.capabilityPage);
-      if (!selected) return h('div', { className: 'lwb-card lwb-empty-state' }, h('div', null, h('div', { className: 'lwb-empty-glyph' }, '▦'), h('h2', null, copy.noCapability), h('p', null, copy.noCapabilityCopy), button('lwb-primary-button', copy.goToPacks, () => navTo('packs'))));
+      if (!selected) return h(CapabilityStartupCard, { catalog, copy });
       const { pack, menu } = selected;
       const Component = registry?.page(pack.id, menu.id);
       if (Component) return h(CapabilityPageBoundary, {
@@ -2585,7 +2907,10 @@ window.__ModuleLoader__.load({
       // frame's own right Sidebar (and the rest of the official current-Session
       // surface) follow that card; the overlay yields the Sidebar's column for as
       // long as a pack Session is on screen.
-      const renderConversation = ({ sessionId, readOnly = false }) => h(EmbeddedConversationHost, { sessionId, readOnly, SessionProvider, renderFactorySlot, renderSlot });
+      // `notice` is the sentence a read-only embed shows in place of the composer.
+      // The pack owns it: 竞技台 says a match is controlled from the arena, 鱼池
+      // says a run's process is read-only and where to change it.
+      const renderConversation = ({ sessionId, readOnly = false, notice }) => h(EmbeddedConversationHost, { sessionId, readOnly, readOnlyNotice: notice, SessionProvider, renderFactorySlot, renderSlot });
       const body = h(React.Fragment, null,
         (state.page === 'capability' || (state.page === 'settings' && state.accountReturnRoute)) && h('div', { key: 'capability', hidden: state.page !== 'capability', style: state.page !== 'capability' ? { display: 'none' } : undefined }, h(CapabilityPage, { renderConversation, focusSession })),
         state.page === 'packs' ? h(PacksPage, { key: 'packs' }) : state.page === 'settings' ? h(SettingsPage, { key: 'settings', renderSlot }) : null);

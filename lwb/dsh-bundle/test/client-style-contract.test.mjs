@@ -302,7 +302,9 @@ test('capability packs render their own Sessions without touching the conversati
   // A pack page embeds the official conversation content for one of its own
   // Sessions, and the frame's current Session only moves when the pack focuses
   // a card. The shell's conversation page keeps rendering the official surfaces.
-  assert.ok(source.includes('function EmbeddedConversationHost({ sessionId, SessionProvider, renderFactorySlot })'), 'the host must offer an embedded conversation')
+  // The host takes the official collaborators first; later parameters (such as
+  // a read-only notice) are additive and must not be pinned by this contract.
+  assert.ok(source.includes('function EmbeddedConversationHost({ sessionId, SessionProvider, renderFactorySlot'), 'the host must offer an embedded conversation')
   assert.ok(source.includes("services.sessions.retain(sessionId, { source: 'gateway', signal: controller.signal })"), 'an embedded conversation retains its own Session with cancellation')
   assert.ok(source.includes("renderFactorySlot('conversation.content', {"), 'it renders the official conversation factory')
   assert.ok(source.includes("variant: 'embedded', phase: 'active', hero: false"))
@@ -436,4 +438,85 @@ test('every macOS desktop chrome row LWB owns marks itself for the window drag',
   assert.ok(css, 'client must define its product CSS')
   const declarations = [...css.replace(/\/\*[\s\S]*?\*\//gu, '').matchAll(/-webkit-app-region:\s*([A-Za-z-]+)/gu)].map((match) => match[1])
   assert.deepEqual(declarations, ['no-drag'], 'LWB may only opt controls out of a drag row, never declare one')
+})
+
+test('an available update is offered from the sidebar foot, not from a modal', async () => {
+  const source = await readFile(clientPath, 'utf8')
+  // The product owns exactly one place to notice a release: the band above the
+  // sidebar footer. It has to survive the collapsed column, where the footer's
+  // own label is hidden and only a mark can remain.
+  assert.match(source, /className: 'lwb-update-pill'/u)
+  assert.match(source, /className: 'lwb-update-dot'/u)
+  assert.match(source, /className: 'lwb-update-pill-copy'/u)
+  assert.match(source, /\.lwb-sidebar\[data-collapsed="true"\] \.lwb-update-pill \{[^}]*width:36px;/u)
+  assert.match(source, /\.lwb-sidebar\[data-collapsed="true"\] \.lwb-update-pill-copy \{ display:none; \}/u)
+  // The pill sits above the footer, so the footer keeps its own `margin-top:auto`
+  // only while no release is offered.
+  assert.match(source, /\.lwb-update-pill \+ \.lwb-sidebar-foot \{ margin-top:6px; \}/u)
+  assert.ok(source.indexOf("className: 'lwb-update-pill'") < source.indexOf("className: 'lwb-sidebar-foot'"), 'the offer precedes the footer it belongs to')
+  // The panel is portalled: the sidebar column scrolls, so a panel inside it
+  // would be clipped or carried away by a scroll.
+  assert.match(source, /function LwbUpdatePanel\(\{ state, onClose \}\)/u)
+  assert.match(source, /createPortal\(h\(React\.Fragment, null,\s*\n\s*h\('button', \{ type: 'button', className: 'lwb-update-backdrop'/u)
+})
+
+test('the update panel never offers an install the host would refuse', async () => {
+  const source = await readFile(clientPath, 'utf8')
+  // `canInstall` is the Host's answer to "can this installation replace
+  // itself?" — a bundle launched from a disk image, or a portable executable in
+  // a read-only directory, reports false with a reason. The panel shows the
+  // reason and withholds the button instead of failing after the click.
+  assert.match(source, /state\.phase === 'ready' && state\.canInstall/u)
+  assert.match(source, /state\.canInstall \? copy\.updateInstallHint : \(state\.installHint \|\| ''\)/u)
+  assert.match(source, /await lwbUpdateAction\(method\)/u)
+  assert.match(source, /lwbUpdate\/\$\{method\}/u)
+  assert.match(source, /lwbUpdateRpc\('state'\)/u)
+  for (const method of ['install', 'ignore']) {
+    assert.ok(source.includes(`run('${method}')`), `${method} must be reachable from the panel`)
+  }
+  assert.ok(source.includes("run('check')"), 'check must be reachable from the panel')
+})
+
+test('the update poll is fast only while the host is working', async () => {
+  const source = await readFile(clientPath, 'utf8')
+  // A release check happens twice a day; a download happens once. Polling every
+  // second while nothing is happening would keep the Host busy for no reason,
+  // and polling every thirty seconds during a download would look frozen.
+  assert.match(source, /const busy = \['checking', 'downloading', 'installing'\]\.includes\(lwbUpdateState\.phase\)/u)
+  assert.match(source, /setTimeout\(tick, busy \? 1200 : 30000\)/u)
+  // One poller for the whole page, however many components read the state.
+  assert.match(source, /if \(lwbUpdateListeners\.size === 1\) startLwbUpdatePolling\(\);/u)
+})
+
+test('an empty capability page distinguishes "loading" from "failed" and "nothing installed"', async () => {
+  const source = await readFile(clientPath, 'utf8')
+  // These four situations all rendered as one "尚未加载" card before, which is
+  // why an empty page carried no diagnosis: the read in flight, the Host still
+  // restoring, a pack that failed to mount, and a genuinely empty install.
+  const start = source.indexOf('function CapabilityStartupCard(')
+  const end = source.indexOf('function CapabilityPage(', start)
+  assert.ok(start >= 0 && end > start, 'the capability page must render a start-up card')
+  const card = source.slice(start, end)
+  assert.match(card, /copy\.packStartupFailed/u)
+  assert.match(card, /copy\.loadingCapability/u)
+  assert.match(card, /copy\.noCapability/u)
+  assert.match(card, /copy\.retry/u)
+  assert.match(card, /startup\.armed === true && startup\.started !== true/u)
+  assert.match(card, /setTimeout\(\(\) => \{[\s\S]*?refreshPackCatalog\(\{ retain: true \}\)/u)
+  // The Host answers before restoration finishes, so an empty first read is
+  // normal. The card has to keep asking instead of freezing on that answer.
+  assert.match(card, /attempts >= EMPTY_CATALOG_RETRIES/u)
+  assert.match(source, /const EMPTY_CATALOG_RETRIES = 14;/u)
+})
+
+test('the catalog read has a deadline so a wedged host becomes an error, not a blank page', async () => {
+  const source = await readFile(clientPath, 'utf8')
+  const start = source.indexOf('async function refreshPackCatalog(')
+  const end = source.indexOf('function ', start + 10)
+  assert.ok(start >= 0, 'the shell must read the pack catalog')
+  // The deadline lives inside the function on purpose: the client tests execute
+  // this slice in a bare context, and a module-level helper would be missing.
+  assert.match(source.slice(start, end), /const deadlineMs = 12_000;/u)
+  assert.match(source, /await Promise\.allSettled\(\[/u)
+  assert.match(source, /'能力包目录读取超时。'/u)
 })

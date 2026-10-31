@@ -6,7 +6,10 @@
       name: '@scitiger-ai/lwb-dsh-bundle'
       config:
         name: 老傅工作台
-        version: 0.1.0
+        # No version here on purpose. The product version has exactly two
+        # sources: `build.json` inside a packaged build, and `package.json` in a
+        # checkout. A copy in this file would be a third one, and the one nobody
+        # bumps when a release is cut.
 
     # Browser half of the product shell. It is deliberately a normal DSH
     # client package, so the module graph and the official runtime own loading.

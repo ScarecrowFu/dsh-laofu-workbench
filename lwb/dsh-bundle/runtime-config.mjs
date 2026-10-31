@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -39,7 +39,7 @@ function commercialPackDir() {
   const explicit = text(process.env.LWB_COMMERCIAL_PACK_DIR)
   if (explicit) return resolve(explicit)
   const sibling = resolve(PROJECT_ROOT, '..', 'dsh-laofu-workbench-commercial')
-  return existsSync(join(sibling, 'lwb-pack.json')) ? sibling : undefined
+  return existsSync(join(sibling, 'packs')) ? sibling : undefined
 }
 
 export const LWB_RUNTIME = Object.freeze({
@@ -55,7 +55,50 @@ export const LWB_RUNTIME = Object.freeze({
   commercialPacksDir: commercialPackDir(),
   atsBaseUrl: normalizeAtsUrl(process.env.LWB_ATS_URL),
   packRuntimeDir: text(process.env.LWB_PACK_RUNTIME_DIR) ? resolve(process.env.LWB_PACK_RUNTIME_DIR) : undefined,
+  // Update bookkeeping belongs to the installation, not to a build: replacing
+  // the build must not throw away the staged artifact, the installation id that
+  // ATS buckets rollouts by, or the outcome the next start has to report.
+  updateStateDir: resolve(text(process.env.LWB_UPDATE_STATE_DIR) || join(productHome, 'updates')),
 })
+
+/**
+ * The product build this process is serving, as the packager wrote it.
+ *
+ * A checkout has no `build.json` at its root, so this is `undefined` outside a
+ * packaged Desktop build — which is exactly how the updater tells "a release
+ * installed on a user's machine" apart from "somebody running the sources".
+ * @returns the build record, or `undefined`.
+ */
+export function readLwbBuild() {
+  try {
+    return JSON.parse(readFileSync(join(PROJECT_ROOT, 'build.json'), 'utf8'))
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The product version this process is serving.
+ *
+ * A packaged build answers with what the packager recorded, because that is the
+ * value the release was signed and published under — a `-test.N` build must
+ * report that suffix, not the version it was cut from. A checkout has no build
+ * record and answers with `package.json`, which is the same field the release
+ * process bumps and the packager reads, so the number a user sees in Settings
+ * cannot drift away from the number the update feed compares against.
+ * @returns the version string, or `undefined` when neither source is readable.
+ */
+export function readProductVersion() {
+  const recorded = readLwbBuild()?.version
+  if (typeof recorded === 'string' && recorded.trim() !== '') return recorded.trim()
+  try {
+    const manifest = JSON.parse(readFileSync(join(PROJECT_ROOT, 'package.json'), 'utf8'))
+    const version = manifest?.version
+    return typeof version === 'string' && version.trim() !== '' ? version.trim() : undefined
+  } catch {
+    return undefined
+  }
+}
 
 function normalizeAtsUrl(value) {
   const candidate = text(value)

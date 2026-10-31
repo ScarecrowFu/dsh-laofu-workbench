@@ -6,6 +6,12 @@ import test from 'node:test'
 const source = await readFile(new URL('../client.js', import.meta.url), 'utf8')
 
 test('readonly official conversations block input and branching while preserving viewing controls', () => {
+  // The surface falls back to a product-level notice constant, so the snippet
+  // has to take that declaration with it — the assertion is about behaviour,
+  // and a stubbed notice would hide a broken default.
+  const noticeStart = source.indexOf('const DEFAULT_READ_ONLY_NOTICE')
+  const noticeEnd = source.indexOf('\n', noticeStart) + 1
+  assert.ok(noticeStart >= 0 && noticeEnd > noticeStart, 'the read-only notice has a default')
   const start = source.indexOf('function ReadOnlyConversationSurface(')
   const end = source.indexOf('\n    }', start) + 6
   const effects = [], cleanups = [], writes = []
@@ -15,7 +21,7 @@ test('readonly official conversations block input and branching while preserving
   const card = { hidden: false, inert: false, querySelectorAll: () => [send] }
   const seat = { style: {}, querySelector: selector => selector === '[data-composer-card]' ? card : null, querySelectorAll: () => [send] }
   const element = { querySelectorAll: selector => selector.includes('composer') ? [seat] : [copy, branch] }
-  const surface = vm.runInNewContext(`(${source.slice(start, end)})`, {
+  const surface = vm.runInNewContext(`(() => { ${source.slice(noticeStart, noticeEnd)} return (${source.slice(start, end)}); })()`, {
     React: { useRef: () => ({ current: element }), useLayoutEffect: effect => effects.push(effect) },
     h: (_component, props) => props,
     services: { composerBlocks: () => ({ storeFor: () => ({ getSnapshot: () => block }), set: (_id, value) => { block = value; writes.push(value) } }), locale: { bind: () => () => '分支' } },

@@ -1,7 +1,7 @@
 /** Product entry point; official files stay intact, with an in-memory entry policy. */
 import { app, BrowserWindow } from 'electron'
 import { cp, mkdir, readFile, rename, rm, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { installLwbEntryPolicy } from './lwb-entry-policy.mjs'
 import { migrateRuntimePackRegistry } from './registry-migration.mjs'
@@ -60,6 +60,14 @@ async function boot() {
     LWB_PACKS_DIR: join(runtime, 'lwb', 'packs'),
     LWB_PACK_RUNTIME_DIR: join(runtime, 'lwb', 'packs'),
     DSH_DESKTOP_USER_DATA_DIR: join(productHome, 'electron-user-data'),
+    // The Host runs as a Node-mode child, so it sees the Electron binary as its
+    // own executable — and on Windows that is the copy inside the portable
+    // shell's temporary directory, not the file the user launched. Publish what
+    // an in-place update actually has to replace, while `app` is still around to
+    // name it.
+    LWB_DESKTOP_EXECUTABLE: process.execPath,
+    ...(process.platform === 'darwin' ? { LWB_DESKTOP_APP_BUNDLE: resolve(process.resourcesPath, '..', '..') } : {}),
+    ...(process.env.PORTABLE_EXECUTABLE_FILE ? { LWB_DESKTOP_PORTABLE_FILE: process.env.PORTABLE_EXECUTABLE_FILE } : {}),
   })
   app.setPath('userData', join(productHome, 'electron-user-data'))
   const { prepareLwbProfile } = await import(pathToFileURL(join(runtime, 'lwb', 'profile-setup.mjs')))

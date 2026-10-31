@@ -117,8 +117,18 @@ await mkdir(join(LWB_RUNTIME.projectRoot, '.tooling'), { recursive: true })
 const stage = await mkdtemp(join(LWB_RUNTIME.projectRoot, '.tooling/lwb-package-'))
 const payload = join(stage, 'product')
 await mkdir(payload)
+// The product version, and whether this build *is* that version. A `-test.N`
+// package is built to verify a change, not to be the product: it must never be
+// offered as an update, and it must never look like the release with the same
+// numbers, so both facts are recorded in the build and folded into its id.
+const productVersion = JSON.parse(await readFile(join(LWB_RUNTIME.projectRoot, 'package.json'), 'utf8')).version
+const buildNumber = env.LWB_DESKTOP_BUILD_NUMBER ?? env.GITHUB_RUN_NUMBER ?? '1'
+if (!/^\d+$/u.test(buildNumber)) throw new Error('Desktop test build number must be numeric')
+const isRelease = !unsigned || release
+const buildVersion = isRelease ? productVersion : `${productVersion}-test.${buildNumber}`
 const digest = createHash('sha256')
   .update(UPSTREAM.commit)
+  .update(`version:${buildVersion}`)
   // The target fixes the bundled interpreter and native-dependency
   // architecture; without it one architecture could reuse the other's
   // writable runtime copy under the same build id.
@@ -159,10 +169,15 @@ await writeFile(join(payload, 'build.json'), JSON.stringify({
   productHome: edition.productHome,
   unsigned,
   upstream: UPSTREAM,
+  // What the update client needs to describe this installation to ATS, and to
+  // decide whether this build is allowed to replace itself at all.
+  version: buildVersion,
+  release: isRelease,
+  product: 'laofu-workbench',
+  channel: 'stable',
+  platform: process.platform,
+  arch,
 }))
-const productVersion = JSON.parse(await readFile(join(LWB_RUNTIME.projectRoot, 'package.json'), 'utf8')).version
-const buildNumber = env.LWB_DESKTOP_BUILD_NUMBER ?? env.GITHUB_RUN_NUMBER ?? '1'
-if (!/^\d+$/u.test(buildNumber)) throw new Error('Desktop test build number must be numeric')
 const identity = {
   productName: edition.productName,
   artifactName: edition.artifactName.replace('.${ext}', `${portable ? '-portable' : ''}${unsigned ? '-unsigned' : ''}.${'${ext}'}`),
@@ -170,7 +185,7 @@ const identity = {
   portable,
   targetPlatform: process.platform,
   targetArch: arch,
-  ...(unsigned ? { unsigned: true, version: release ? productVersion : `${productVersion}-test.${buildNumber}`, output: join(LWB_RUNTIME.projectRoot, '.tooling', 'artifacts', edition.name, `${process.platform === 'darwin' ? 'mac' : 'win'}-${arch}`) } : {}),
+  ...(unsigned ? { unsigned: true, version: buildVersion, output: join(LWB_RUNTIME.projectRoot, '.tooling', 'artifacts', edition.name, `${process.platform === 'darwin' ? 'mac' : 'win'}-${arch}`) } : {}),
 }
 const config = join(stage, 'electron-builder.config.mjs')
 await writeFile(config, `export default await (await import(${JSON.stringify(new URL('./package-config.mjs', import.meta.url).href)})).createLwbPackageConfig(${JSON.stringify(payload)}, ${JSON.stringify(identity)})\n`)

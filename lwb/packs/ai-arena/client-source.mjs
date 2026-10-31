@@ -153,7 +153,7 @@ function Conversation({ match, turnId, renderConversation, focusSession }) {
     h('p', { className: 'ar-muted' }, current?.request.contextMode === 'current-position' || match.config.contextMode === 'current-position' && !current
       ? '每次发送当前棋盘与规则，选手在各自的连续会话中决策。' : '历史比赛沿用选手会话，可查看其中的多轮记录。'),
     h(StatBar, { items: [{ label: '本次输入 Token', value: count(usage?.input), detail: '含缓存输入' }, { label: '缓存命中 Token', value: count(usage?.cacheRead), detail: '已计入输入' }, { label: '本次输出 Token', value: count(usage?.output), detail: '含模型上报的推理用量' }, { label: '本次总 Token', value: count(usage?.total), detail: current?.response ? usage ? '服务商上报用量' : '服务商未返回用量' : current?.error ? '用量未返回' : '等待本次用量' }] }),
-    current?.sessionId && renderConversation ? renderConversation({ sessionId: current.sessionId, readOnly: true }) : h('div', { className: 'ar-empty' }, current ? '正在准备会话，或该历史记录没有会话编号。' : '首个决策开始后显示官方对话。'),
+    current?.sessionId && renderConversation ? renderConversation({ sessionId: current.sessionId, readOnly: true, notice: '比赛会话只读，请通过竞技台控制比赛。' }) : h('div', { className: 'ar-empty' }, current ? '正在准备会话，或该历史记录没有会话编号。' : '首个决策开始后显示官方对话。'),
     h('details', { className: 'ar-raw' }, h('summary', null, '实际请求参数与原始结果'), h('pre', null, JSON.stringify(current || {}, null, 2))))
 }
 function speechGate(account) {
