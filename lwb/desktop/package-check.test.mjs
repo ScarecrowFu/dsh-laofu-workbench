@@ -70,7 +70,10 @@ test('the Windows preflight runs to completion on a host that is not Windows', a
   assert.equal(result.code, 0, result.output)
   // The toolchain is printed with its cache path: the one build input that
   // differs between a terminal account and the account a runner service uses.
+  // The path is not asserted as POSIX: on the release runner it is `C:\Users\…`,
+  // and a test that only passed on the machine it was written on would have
+  // failed exactly where it is supposed to help.
   assert.match(result.output, /Launcher toolchain go version go\d+\.\d+/u)
-  assert.match(result.output, /build cache\s+\//u)
+  assert.match(result.output, /build cache\s+\S+ \(must be writable/u)
   assert.match(result.output, /packaging environment passed/u)
 })
