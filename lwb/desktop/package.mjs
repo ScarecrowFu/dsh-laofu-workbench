@@ -14,6 +14,15 @@ import { relinkDarwinLibraries } from './darwin-library-paths.mjs'
 import { artifactDirectory, payloadInstallArguments, resolveHostTarget, resolveTargetArch, unsignedPackagingEnvironment } from './package-inputs.mjs'
 import { assembleLaunchPackage } from './launch-package.mjs'
 
+/**
+ * Go release the launcher source needs: `min`/`max` builtins and 1.22 language
+ * features.
+ *
+ * Declared here, above everything that can fail, because the toolchain check
+ * runs before the rest of this file has evaluated.
+ */
+const LAUNCHER_GO_VERSION = Object.freeze({ major: 1, minor: 22 })
+
 assertUpstream()
 const { values } = parseArgs({
   options: {
@@ -79,7 +88,13 @@ assertRosetta(arch)
 // requirement of that package is therefore checked here, before the payload
 // install and the Electron preparation, instead of after them.
 const launchPackaged = process.platform === 'win32' && values.dir !== true
-if (launchPackaged) {
+// This branch is the one a host that is not Windows never executes, which is
+// exactly how an ordering mistake inside it reached a twenty-minute build: every
+// test on a macOS host passed. `--check` may claim the Windows target so the
+// branch can be exercised anywhere; packaging itself still follows the real one.
+const checksWindowsLauncher = launchPackaged
+  || (values.check === true && process.env.LWB_CHECK_WINDOWS_LAUNCHER === '1')
+if (checksWindowsLauncher) {
   if (values.portable !== true) {
     throw new Error('A Windows package is a launch package: add --portable (npm run package:win already does), or --dir for a bare unpacked directory.')
   }
@@ -247,9 +262,6 @@ async function packageForLauncher({ directory, arch, buildVersion, edition, unsi
     unsigned,
   })
 }
-
-/** Go release the launcher source needs: `min`/`max` builtins and 1.22 language features. */
-const LAUNCHER_GO_VERSION = Object.freeze({ major: 1, minor: 22 })
 
 /**
  * Prove this host can compile the launcher before the build spends minutes
