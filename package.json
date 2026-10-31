@@ -23,6 +23,7 @@
     "package:mac:arm64": "node scripts/package-desktop.mjs --host mac --arch arm64",
     "package:mac:x64": "node scripts/package-desktop.mjs --host mac --arch x64",
     "package:win": "node scripts/package-desktop.mjs --host win",
+    "release:desktop": "node scripts/release-desktop.mjs",
     "snapshot:product": "node scripts/pack-product-source.mjs",
     "setup": "node scripts/setup-upstream.mjs",
     "pack:list": "node lwb/pack-manager.mjs list",
@@ -30,13 +31,14 @@
     "pack:remove": "node lwb/pack-manager.mjs remove",
     "arena:build": "node lwb/packs/ai-arena/build-model-art.mjs && node lwb/packs/ai-arena/build-werewolf-art.mjs && node lwb/packs/ai-arena/build-client.mjs && node lwb/packs/ai-arena/build-replay.mjs",
     "arena:test": "node --test lwb/packs/ai-arena/test/*.test.mjs",
+    "model-review:preview": "node lwb/packs/model-review/test/preview.mjs",
     "check": "node scripts/check-syntax.mjs",
     "dsh:dump": "node lwb/dsh-launcher.mjs --dump-config",
     "profile:check": "node lwb/profile-smoke.mjs",
     "pack:profile-check": "node lwb/pack-profile-smoke.mjs",
     "test": "npm run check && npm run profile:check && npm run pack:profile-check && npm run unit:test && npm run arena:test",
     "upstream:check": "node lwb/upgrade/verify.mjs",
-    "unit:test": "node --test lwb/test/*.test.mjs lwb/pack-sdk/test/*.test.mjs lwb/desktop/*.test.mjs lwb/dsh-bundle/test/pack-*.test.mjs lwb/dsh-bundle/test/browser-shim.test.mjs lwb/dsh-bundle/test/ats-client.test.mjs lwb/dsh-bundle/test/task-model.test.mjs lwb/dsh-bundle/test/lwb-model.test.mjs lwb/dsh-bundle/test/web-router.test.mjs lwb/dsh-bundle/test/client-*.test.mjs lwb/dsh-bundle/test/runtime-config.test.mjs lwb/packs/spoken-video/test/*.test.mjs",
+    "unit:test": "node --test lwb/test/*.test.mjs lwb/pack-sdk/test/*.test.mjs lwb/desktop/*.test.mjs lwb/dsh-bundle/test/pack-*.test.mjs lwb/dsh-bundle/test/browser-shim.test.mjs lwb/dsh-bundle/test/ats-client.test.mjs lwb/dsh-bundle/test/task-model.test.mjs lwb/dsh-bundle/test/lwb-model.test.mjs lwb/dsh-bundle/test/web-router.test.mjs lwb/dsh-bundle/test/client-*.test.mjs lwb/dsh-bundle/test/runtime-config.test.mjs lwb/dsh-bundle/test/update-manifest.test.mjs lwb/packs/spoken-video/test/*.test.mjs lwb/packs/model-review/test/*.test.mjs",
     "upstream:refs": "sh lwb/upgrade/check-upstream.sh",
     "test:integration": "node lwb/upgrade/smoke.mjs"
   },
@@ -55,6 +57,7 @@
     "ws": "8.18.3"
   },
   "devDependencies": {
+    "ali-oss": "^6.23.0",
     "esbuild": "0.28.1"
   }
 }

@@ -25,7 +25,11 @@ if (!/^\d+$/u.test(buildNumber)) throw new Error('Desktop test build number must
 const release = process.env.LWB_DESKTOP_RELEASE === '1'
 const report = {
   edition: values.edition, target: values.target, version: release ? product.version : `${product.version}-test.${buildNumber}`,
-  unsigned: true, portable: true, notarized: false, autoUpdate: false,
+  // Every build ships the updater; whether it ever looks for a release is
+  // decided by the build record, and that is `release` itself. A `-test.N`
+  // build reports false because it genuinely will not consult the channel —
+  // reporting false for a release would be the opposite mistake.
+  unsigned: true, portable: true, notarized: false, autoUpdate: release,
   workflowCommit: process.env.GITHUB_SHA ?? null, upstream, artifacts: records,
   runner: process.env.RUNNER_NAME ?? null,
   packagedPackAcceptance: true,

@@ -119,6 +119,80 @@ npm run package:mac:x64 -- --dry-run      # 只看解析结果，不执行
 node scripts/collect-desktop-artifacts.mjs --edition commercial --target mac-x64
 ```
 
+### 发布到更新通道
+
+`npm run release:desktop` 把一条已经打好并经校验的产物同时送到三个地方：阿里云 OSS（客户端实际下载的地址）、GitHub Draft Release（存档与公开可见）、ATS 的桌面发布记录（客户端检查更新时读的那一行）。版本号从 `build-report.json` 读取而不是手填，因为运行时 `app.getVersion()` 返回的正是 electron-builder 写进那个包的值。
+
+每条腿单独执行，因为三个平台本来就出自不同机器：
+
+```bash
+npm run release:desktop -- --target mac-arm64 --notes notes/0.1.9.md
+npm run release:desktop -- --target mac-x64
+npm run release:desktop -- --target win-x64          # 在私有仓库的 Windows runner 上
+npm run release:desktop -- --publish-all --version 0.1.9   # 三条腿齐了再统一上线
+```
+
+上传阶段一律写成**未发布**：ATS 的 `latest` 接口按 `platform` + `arch` 独立应答，若边传边发，某一刻不同平台会停在不同版本。`--publish-all` 才把同一版本的三条记录一起置为已发布，并逐条用公开接口反查，确认版本与 sha256 与本次构建一致。
+
+两条硬性拒绝规则写在脚本里：`x.y.z` 之外的版本（例如 `0.1.9-test.20261030`）不允许进入更新通道——semver 把它排在它所基于的正式版之下，发上去等于给用户推送一次降级；产物与 `build-report.json` 的 sha256 或体积不符时直接失败。
+
+凭证只从环境或未跟踪的 `.env.local` / `.env.release` 读取：`ATS_ADMIN_EMAIL` / `ATS_ADMIN_PASSWORD`（或 `ATS_ADMIN_TOKEN`）、`LWB_RELEASE_OSS_*`、`LWB_RELEASE_REPOSITORY` / `GH_TOKEN`。`--dry-run` 不需要任何凭证，只打印解析出的产物、对象键、公开地址与将要执行的请求。
+
+## 自动更新
+
+客户端自己检查、自己下载、自己替换，不依赖安装器、不依赖 electron-updater（LWB 打包 `unsigned`，产物里没有 `app-update.yml`，官方那条链路在本产品里恒为关闭）。
+
+### 组成
+
+| 文件 | 职责 |
+| --- | --- |
+| `lwb/dsh-bundle/updater/manifest.mjs` | 解析 ATS 的发布清单，按签名顺序重建后做 Ed25519 验签，再校验产品/平台/架构/通道/版本/文件名/大小 |
+| `lwb/dsh-bundle/updater/manager.mjs` | 检查 → 下载（边下边算 sha256）→ 暂存；持久化状态、忽略某版本、读取上一轮更新结果 |
+| `lwb/dsh-bundle/updater/installer.mjs` | 解析本机可替换的目标，写 job、把更新器脚本复制到数据目录并 detached 拉起 |
+| `lwb/dsh-bundle/updater/scripts/lwb-update.sh` | macOS：`ditto` 解压 → 换名替换 `.app` → 去 quarantine → `open` 重开 |
+| `lwb/dsh-bundle/updater/scripts/lwb-update.{cmd,ps1}` | Windows：`Move-Item` 换名替换便携 exe → `Start-Process` 重开 |
+| `lwb/dsh-bundle/updater-gateway.mjs` | 对浏览器暴露 `state/check/install/ignore/dismiss` |
+| 左下角提示 | `client.js` 的 `.lwb-update-pill`（折叠态只剩圆点）+ 更新面板 |
+
+### 为什么必须是外部更新器
+
+Windows 上正在运行的 exe 被占用，macOS 上应用自己就住在要被替换的那个包里——主程序无法替换自己。所以真正做替换的是脚本，而脚本**不能住在应用里**：Windows 便携外壳在主进程退出后会清空临时解压目录，macOS 被替换的正是脚本所在的那个 bundle。因此 `installer.mjs` 先把脚本复制到 `productHome/updates/jobs/<version>-<sha8>/`，再从那里拉起。
+
+替换方式是**同卷换名**：新包先解压到目标旁边（`<target 所在目录>/.lwb-update.XXXX`），再 `mv` 过去。同卷 rename 是原子的，所以应用要么是旧包、要么是新包，不存在拷到一半的树。旧包保留到新包就位并重启成功之后，任何一步失败都换回去。
+
+### 等待与停进程
+
+脚本拿到的 `LWB_UPDATE_WAIT_PID` 是 Electron 主进程，`LWB_UPDATE_HOST_PID` 是 DSH Host。macOS 先 `SIGTERM`（走正常的窗口关闭），8 拍后 `SIGKILL`；Windows 直接 `Stop-Process`，然后**重试换名**——便携外壳在主程序退出后还要几秒钟才释放 exe，一次失败就放弃会让更新永远卡在最后一步。
+
+替换成功这件事本身就证明旧进程已经退出：Windows 上正在运行的 exe 根本换不掉，macOS 上脚本会先等到 pid 结束。因此重开时不会撞上 `bootstrap.mjs` 的 `requestSingleInstanceLock` 把新窗口挡回去——那条分支只会在旧应用还活着时触发。
+
+### 版本号的唯一来源
+
+同一台机器上的版本号只能有一个来源，否则设置页显示的和更新比较用的会悄悄分叉：
+
+- 打包版读 `build.json` 的 `version`（`-test.N` 构建要如实带上后缀，因为它确实不是那个版本）；
+- 源码检出没有 `build.json`，读 `package.json`——也就是发布时真正被抬升的那一个字段；
+- `cordis.patch.yml` **不再写版本**。它曾经写着 `0.1.0`，而发布流程只改 `package.json`，于是界面上那个数字从来没跟发布对齐过。
+
+`readProductVersion()` 按这个顺序解析，`runtime-config.test.mjs` 会比对它和 `package.json`，并检查组合文件里没有重新长出版本字段。
+
+### 只在正式构建里生效
+
+`build.json` 现在带 `version / release / product / channel / platform / arch`：
+
+- 源码检出没有 `build.json` → `enabled=false`；
+- `-test.N` 构建 `release=false` → 不检查更新。测试包即使手动发到 ATS 也不会被自己当成正式版；
+- 版本号同时被折进 build id，所以换版本一定换运行时目录（否则 `runtime/<id>` 复用会让新包读到旧版本号）。
+
+`bootstrap.mjs` 负责把 `LWB_DESKTOP_EXECUTABLE` / `LWB_DESKTOP_APP_BUNDLE` / `LWB_DESKTOP_PORTABLE_FILE` 传下去：Host 是 `ELECTRON_RUN_AS_NODE` 子进程，它看到的 `process.execPath` 是 Electron 本体，Windows 上更是便携外壳临时目录里的那份，直接拿它替换等于替换了个临时文件。
+
+### 已知边界
+
+- macOS 未签名包首次启动仍会被 Gatekeeper 拦一次（更新器会清 quarantine，但签名本身没有）；
+- 从磁盘映像（DMG）里直接运行的应用所在目录不可写，`canInstall=false`，面板只说明原因、不给按钮；
+- 安装版（非便携）Windows 构建不支持自动替换，同样只说明原因。
+
+
 ### Windows 构建输入（产品源码快照）
 
 Windows 的 `Desktop portable test builds` **不克隆本仓库**：它解压私有商业仓库里签入的 `.build/product-source.tar.gz` 作为产品源码，插件的 `pack-source` 则来自该仓库自身的 HEAD。因此公开仓库推送之后，还必须刷新这份快照，否则 Windows 包仍是上一次快照的内容：
@@ -152,7 +226,7 @@ Windows 产物是可直接运行的 portable `.exe`，macOS 产物是包含 `.ap
 
 macOS payload 的原生依赖在签名之前会重写加载路径。`@remotion/compositor-darwin-*` 的 `ffmpeg` / `ffprobe` / `remotion` 与七个 `libav*` dylib 用的是裸相对名（`libavdevice.dylib`），dyld 只在未硬化的进程里才肯按工作目录解析这些名字；而产物给整个 payload（含 `lwb-product/node_modules`）做的是 hardened runtime 签名，于是这些引用会被直接拒绝——`Library not loaded: libavdevice.dylib` / `relative path not allowed in hardened program`，打包版里所有视频导出都因此 SIGABRT，而开发态用仓库里那份未硬化的副本，永远复现不出来。打包步骤把它们改成 `@loader_path/<name>`：保留 hardened runtime（上游强制、公证预期），也不再有工作目录依赖。重写后的字节计入构建 id（否则同一 id 的旧 runtime 副本会继续被沿用），`lwb/desktop/darwin-library-paths.test.mjs` 会在硬化签名下真的把二进制跑一遍；打包时若仍有裸名残留则直接失败。
 
-官方便携版关闭自动更新与强制更新服务，使用 LWB 根版本号；构建编号仅用于 Windows 构建目录和两端构建关联。文件名明确带 `-portable-unsigned`，官方发行版统一使用 `LaofuWorkbench` 的应用身份和数据目录。
+官方便携版不再经过 electron-updater：那条链路要求 `app-update.yml`，而未签名产物里没有，所以它恒为关闭。替换由本产品自带的更新器完成，见上节「自动更新」。发行版使用 LWB 根版本号；构建编号仅用于 Windows 构建目录和两端构建关联。文件名明确带 `-portable-unsigned`，官方发行版统一使用 `LaofuWorkbench` 的应用身份和数据目录。
 
 Windows 官方发行版在商业私有仓库的自托管 Windows x64 Runner 上构建，通过 Actions 的 `Desktop portable test builds` 手动触发，填写构建编号。macOS 官方发行版在本机构建：Apple Silicon 出 arm64 包，Intel 包在 Intel Mac 上原生构建，或在 Apple Silicon 上经 Rosetta 构建：
 
@@ -176,8 +250,8 @@ node scripts/collect-desktop-artifacts.mjs --edition commercial --target mac-x64
 
 | 构建输入 | 产品名 | 数据根 | 协议 | 随带能力包 |
 | --- | --- | --- | --- | --- |
-| `community` | Laofu Workbench | `LaofuWorkbench` | `lwb://` | 本仓库自有的 `spoken-video`、`ai-arena` |
-| `commercial`（官方发行） | Laofu Workbench | `LaofuWorkbench` | `lwb://` | 公开包加上 `model-review` 和 `yuchi`，源码由 `LWB_COMMERCIAL_PACK_DIR` 及其 `packs/yuchi` 指定 |
+| `community` | Laofu Workbench | `LaofuWorkbench` | `lwb://` | 本仓库自有的 `spoken-video`、`ai-arena`、`model-review` |
+| `commercial`（官方发行） | Laofu Workbench | `LaofuWorkbench` | `lwb://` | 公开包加上 `yuchi`，源码由 `LWB_COMMERCIAL_PACK_DIR/packs/yuchi` 指定 |
 
 ```bash
 LWB_COMMERCIAL_PACK_DIR=/absolute/path/to/commercial-pack npm run package:plan -- --edition commercial
@@ -188,10 +262,22 @@ LWB_COMMERCIAL_PACK_DIR=/absolute/path/to/commercial-pack npm run package:deskto
 
 - 未声明 `source` 的能力包必须由本仓库拥有：目录在 `lwb/packs/<id>`，且 `lwb-pack.json` 已被 Git 跟踪。`lwb/packs/` 下出现非本仓库的目录时打包直接失败，提示改用 `npm run pack:install` 登记。
 - 声明了 `source` 的能力包是构建方给出的绝对目录，用 `${VARIABLE}` 固定到具体 checkout。会员包源码因此不必进入本仓库：官方发行版是**同一个内核加额外的会员能力包**，不需要第二份工作台内核。
+- 商业 checkout（`LWB_COMMERCIAL_PACK_DIR`，未设置时取本仓库旁边的 `dsh-laofu-workbench-commercial`）本身不是能力包，每个商业包放在它的 `packs/<id>` 下；识别依据只是 `packs/` 目录存在。哪些包属于商业版只由 `editions.json` 决定，宿主代码不写死任何商业包 id。
 - 只有清单列出的能力包会被复制进产物。版本解析在打包环境校验之前完成，所以包集合写错时不需要签名资料就会失败。
 - 每个能力包在打包时用宿主加载能力包时的同一套规则校验（`inspectLwbPack`），运行时会被拒绝的包无法进入产物。
 - 构建 id 只由上游 commit、版本名、清单内能力包内容和依赖锁决定。能力包按 id 计入，因此同一份商业包换一个 checkout 目录不会改变构建 id。
 - 依赖、能力包测试目录和仓库元数据（`.git`）一律不进产物。
 - 官方发行版使用统一的数据根与协议；产品身份写进 `build.json`，由 bootstrap 在运行时读取。首次升级商业版时会承接到统一的 `LaofuWorkbench` 数据目录。
+
+### 调整能力包的公开 / 商业归属
+
+一个包属于公开还是商业，由三处一起决定：源码所在仓库（决定许可证）、`editions.json`（决定随带范围）、`lwb-pack.json` 的 `access`（决定是否要求会员）。商业包一律要求会员。调整归属不需要改宿主代码：
+
+| 方向 | 操作 |
+|---|---|
+| 公开 → 商业 | 目录从 `lwb/packs/<id>` 移到商业 checkout 的 `packs/<id>`，`package.json` 的 `license` 改为 `UNLICENSED`；`editions.json` 里从 `community` 移除，`commercial` 中该项加上 `"source": "${LWB_COMMERCIAL_PACK_DIR}/packs/<id>"`；清单加上 `"access": {"account": "lwb", "membershipRequired": true}` |
+| 商业 → 公开 | 反向操作：目录移入 `lwb/packs/<id>` 并由 Git 跟踪，`license` 改为本仓库许可证，`editions.json` 两个构建输入都列出且不写 `source`，清单删除 `access`；同步本文、README 与[许可证说明](licensing-and-commercial-use.md)的能力包表格 |
+
+包数据按 id 存放在 `pack-state/workspaces/<id>/`，归属调整不影响已有数据。开发机上若 `lwb/local/current/packs.json` 还登记着旧的源码路径，用 `npm run pack:remove -- <id>` 清掉，让市场重新发现。
 
 当前仓库未配置 macOS 签名环境，因此已验证开发入口、打包预检报错路径和公开源码/官方完整构建输入的包集合解析；尚未生成、安装或验收签名发行包。Windows 打包也需在目标环境验收。详细边界与升级门禁见 [总体架构](01-architecture.md#扩展边界)和[升级门禁](08-base-lock.md)。
