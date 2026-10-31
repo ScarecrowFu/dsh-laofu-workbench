@@ -96,6 +96,12 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go -C lwb/desktop/launcher build -trimpa
   -ldflags "-H windowsgui -s -w" -o /tmp/laofu-workbench-launcher.exe .
 ```
 
+打包在动手之前会先执行 `go version` 校验版本，并把结果打进日志（`Launcher toolchain go version go1.22.x …`）。缺工具链或版本太旧会在**第一秒**失败，而不是等 payload 安装、Electron 准备都跑完之后。三个 Windows 构建机上的常见坑：
+
+- **自托管 runner 装完 Go 要重启**。runner 服务持有的是它启动时的环境变量，装完新 PATH 对它不生效——`go` 在交互式终端里能跑，在打包里却报 `ENOENT`。
+- 服务账号若是 `LocalSystem`，默认构建缓存目录落在不可写的位置，`go build` 会报 `failed to initialize build cache`；给该账号设一个可写的 `GOCACHE`（例如 `D:\ci\gocache`）即可，`go.mod` 没有外部依赖，构建不需要网络。
+- 版本低于 1.22 时 Go 会自动尝试下载新工具链，锁网的机器上表现为超时。校验会先一步拦下这种主机。
+
 macOS 的 arm64 包需要 Apple Silicon 构建机；x64 包可以在 Intel Mac 上原生构建，也可以在 Apple Silicon 上经 Rosetta 构建——准备阶段会用目标 Electron（x64）跑运行时冒烟，缺少 Rosetta 时打包在任何耗时步骤之前就报错。
 
 ### macOS 双架构（Apple Silicon / Intel）

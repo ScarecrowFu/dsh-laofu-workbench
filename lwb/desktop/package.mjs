@@ -1,6 +1,6 @@
 /** Package LWB around the unmodified official shell and verified runtime. */
 import { execFile, execFileSync, spawn } from 'node:child_process'
-import { cp, mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -74,6 +74,11 @@ if (values.plan) {
 }
 // Only a real package preparation executes the target Electron; a plan does not.
 assertRosetta(arch)
+// The Windows launcher is compiled from Go source during this run, so the
+// toolchain is a build input like any other. Checking it here means a host that
+// cannot produce a launch package says so in the first second, instead of after
+// the payload install and the Electron preparation.
+if (values.portable === true && process.platform === 'win32' && values.dir !== true) await assertLauncherToolchain()
 const appRoot = join(DSH_ROOT, 'apps/desktop')
 const { loadDesktopPackageEnvironment, validateDesktopPackageEnvironment } = await import(pathToFileURL(join(appRoot, 'scripts/desktop-package-environment.mjs')))
 const unsigned = values.unsigned === true
@@ -234,6 +239,44 @@ async function packageForLauncher({ directory, arch, buildVersion, edition, unsi
   })
 }
 
+/** Go release the launcher source needs: `min`/`max` builtins and 1.22 language features. */
+const LAUNCHER_GO_VERSION = Object.freeze({ major: 1, minor: 22 })
+
+/**
+ * Prove this host can compile the launcher before the build spends minutes
+ * producing something it cannot package.
+ *
+ * The launcher is compiled from source on every packaging run, so the Go
+ * toolchain is a build input. The two ways it goes wrong on a Windows build host
+ * both look like "the build failed late": no `go` on PATH, or a self-hosted
+ * runner service that still holds the environment it was started with.
+ * @returns the toolchain version, as reported by `go version`.
+ */
+async function assertLauncherToolchain() {
+  const cwd = join(LWB_RUNTIME.projectRoot, 'lwb', 'desktop', 'launcher')
+  let reported
+  try {
+    reported = (await execFileAsync('go', ['version'], { cwd })).stdout.trim()
+  } catch (error) {
+    throw new Error([
+      `The Windows launch package is compiled from Go source, and this build host has no usable Go toolchain (${error.code ?? error.message}).`,
+      `Install Go ${LAUNCHER_GO_VERSION.major}.${LAUNCHER_GO_VERSION.minor}+ and make sure it is on the PATH the build actually runs with.`,
+      'A self-hosted runner keeps the environment it started with: restart the runner service (or the machine) after installing Go.',
+      'To package without a toolchain, set LWB_LAUNCHER_BINARY to a prebuilt launcher.',
+    ].join(' '))
+  }
+  const match = /go version go(\d+)\.(\d+)/u.exec(reported)
+  if (match === null) throw new Error(`Could not read a Go version out of "${reported}".`)
+  const major = Number(match[1])
+  const minor = Number(match[2])
+  const current = major * 1000 + minor
+  if (current < LAUNCHER_GO_VERSION.major * 1000 + LAUNCHER_GO_VERSION.minor) {
+    throw new Error(`The launcher needs Go ${LAUNCHER_GO_VERSION.major}.${LAUNCHER_GO_VERSION.minor}+ but this host reports "${reported}". An older toolchain would try to fetch a newer one first, which a build host without network cannot do.`)
+  }
+  console.log(`Launcher toolchain ${reported}`)
+  return reported
+}
+
 /**
  * The launcher binary, built from `lwb/desktop/launcher` with the version this
  * build reports.
@@ -247,11 +290,14 @@ async function packageForLauncher({ directory, arch, buildVersion, edition, unsi
 async function buildLauncher(version) {
   const prebuilt = process.env.LWB_LAUNCHER_BINARY
   if (prebuilt) {
-    console.log(`Using the launcher at ${prebuilt} (LWB_LAUNCHER_BINARY)`)
+    const info = await stat(prebuilt).catch(() => undefined)
+    if (!info?.isFile()) throw new Error(`LWB_LAUNCHER_BINARY points at ${prebuilt}, which is not a file.`)
+    console.log(`Using the launcher at ${prebuilt} (LWB_LAUNCHER_BINARY, ${info.size} bytes) — it is not rebuilt by this run.`)
     return prebuilt
   }
   const output = join(LWB_RUNTIME.projectRoot, '.tooling', 'launcher', 'laofu-workbench-launcher.exe')
   await mkdir(dirname(output), { recursive: true })
+  const started = Date.now()
   try {
     await run('go', [
       'build', '-trimpath',
@@ -270,7 +316,9 @@ async function buildLauncher(version) {
       CGO_ENABLED: '0',
     })
   } catch (error) {
-    throw new Error(`Could not build the Windows launcher (${error.message}). Install Go on the build host, or set LWB_LAUNCHER_BINARY to a prebuilt launcher.`)
+    throw new Error(`Could not build the Windows launcher (${error.message}). See the "Windows 启动器包" section of docs/37-desktop-parity.md for what this host needs.`)
   }
+  const { size } = await stat(output)
+  console.log(`  launcher ${version} built in ${Date.now() - started} ms (${size} bytes)`)
   return output
 }
