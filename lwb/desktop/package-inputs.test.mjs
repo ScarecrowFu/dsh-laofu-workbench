@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 import test from 'node:test'
 import {
-  COMMERCIAL_PACK_ID, ELECTRON_MIRROR_FALLBACK, artifactDirectory, artifactExtensions, commercialPackCandidates,
+  COMMERCIAL_PACKS_DIR, ELECTRON_MIRROR_FALLBACK, artifactDirectory, artifactExtensions, commercialPackCandidates,
   payloadInstallArguments, releaseChecksumUrl, resolveBuildNumber, resolveCommercialPackDir, resolveEditionName,
   resolveElectronMirror, resolveHostTarget, resolveTargetArch, unpackedApp, unsignedPackagingEnvironment,
 } from './package-inputs.mjs'
@@ -11,20 +11,10 @@ const ROOT = '/repo'
 const SIBLING = join(ROOT, '..', 'dsh-laofu-workbench-commercial')
 const EXPLICIT = join(ROOT, '..', 'pack-checkout')
 
-/** Manifests every candidate pack directory is probed for. */
-const PACK_FILES = ['lwb-pack.json', 'package.json']
-
-/** Existence check over the files of the given pack directories and nothing else. */
-function packExists(...directories) {
-  const files = new Set(directories.flatMap(directory => PACK_FILES.map(name => join(directory, name))))
-  return path => files.has(path)
-}
-
-/** Manifest reader for those pack directories. */
-function readPackJson(path) {
-  const name = basename(path)
-  if (!PACK_FILES.includes(name)) throw new Error(`unexpected read: ${path}`)
-  return name === 'lwb-pack.json' ? { id: COMMERCIAL_PACK_ID } : { name: '@scitiger-ai/lwb-model-review' }
+/** Existence check over the `packs/` directories of the given checkouts and nothing else. */
+function checkoutExists(...directories) {
+  const folders = new Set(directories.map(directory => join(directory, COMMERCIAL_PACKS_DIR)))
+  return path => folders.has(path)
 }
 
 test('the edition is validated before any build work', () => {
@@ -102,42 +92,32 @@ test('the build number prefers an explicit request, then CI, then the local date
   assert.throws(() => resolveBuildNumber(undefined, { LWB_DESKTOP_BUILD_NUMBER: '2026-10-06' }, now), /must be numeric/u)
 })
 
-test('an explicit commercial pack directory is authoritative and validated', () => {
+test('an explicit commercial pack checkout is authoritative and validated', () => {
   assert.deepEqual(resolveCommercialPackDir({
     env: { LWB_COMMERCIAL_PACK_DIR: EXPLICIT },
     projectRoot: ROOT,
-    exists: packExists(EXPLICIT, SIBLING),
-    readJson: readPackJson,
+    exists: checkoutExists(EXPLICIT, SIBLING),
   }), { directory: EXPLICIT, source: 'LWB_COMMERCIAL_PACK_DIR' })
 
   assert.throws(() => resolveCommercialPackDir({
     env: { LWB_COMMERCIAL_PACK_DIR: join(ROOT, '..', 'missing') },
     projectRoot: ROOT,
-    exists: packExists(SIBLING),
-    readJson: readPackJson,
-  }), /is not a capability pack/u, 'a wrong explicit path never falls back to a sibling checkout')
+    exists: checkoutExists(SIBLING),
+  }), /is not a commercial pack checkout/u, 'a wrong explicit path never falls back to a sibling checkout')
 })
 
-test('a sibling checkout is discovered, and its pack identity is enforced', () => {
+test('a sibling checkout is discovered by its packs directory', () => {
   assert.deepEqual(resolveCommercialPackDir({
     env: {},
     projectRoot: ROOT,
-    exists: packExists(SIBLING),
-    readJson: readPackJson,
+    exists: checkoutExists(SIBLING),
   }), { directory: SIBLING, source: 'sibling checkout' })
 
+  // A checkout that is itself a pack, with no packs/ directory, is not a commercial checkout.
   assert.throws(() => resolveCommercialPackDir({
     env: {},
     projectRoot: ROOT,
-    exists: packExists(SIBLING),
-    readJson: () => ({ id: 'spoken-video' }),
-  }), /declares pack "spoken-video"/u, 'a directory that holds a different pack fails loudly')
-
-  assert.throws(() => resolveCommercialPackDir({
-    env: {},
-    projectRoot: ROOT,
-    exists: () => false,
-    readJson: readPackJson,
+    exists: path => path === join(SIBLING, 'lwb-pack.json'),
   }), /LWB_COMMERCIAL_PACK_DIR/u)
 })
 

@@ -114,7 +114,6 @@ async function resolveInputs(values, manifest) {
       env: process.env,
       projectRoot: PROJECT_ROOT,
       exists: existsSync,
-      readJson: path => JSON.parse(readFileSync(path, 'utf8')),
     })
     : undefined
   const buildNumber = resolveBuildNumber(values['build-number'], process.env)

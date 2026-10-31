@@ -230,17 +230,15 @@ async function workspacePackSources() {
 }
 
 /**
- * Sources from the private pack checkout. That checkout keeps one pack at its
- * root (`model-review`) and the rest under `packs/`, so both shapes are scanned.
- * A missing directory is normal: packaged builds ship no checkout.
+ * Sources from the private pack checkout, which keeps every pack under
+ * `packs/<id>`. A missing directory is normal: packaged builds ship no checkout.
  */
 async function commercialPackSources() {
   const directory = LWB_RUNTIME.commercialPacksDir
-  if (!directory || !existsSync(directory)) return []
-  const sources = []
-  if (existsSync(join(directory, 'lwb-pack.json'))) sources.push(directory)
+  if (!directory) return []
   const nested = join(directory, 'packs')
-  if (!existsSync(nested)) return sources
+  if (!existsSync(nested)) return []
+  const sources = []
   for (const entry of await readdir(nested, { withFileTypes: true })) {
     if (!entry.isDirectory() || entry.isSymbolicLink()) continue
     const source = join(nested, entry.name)

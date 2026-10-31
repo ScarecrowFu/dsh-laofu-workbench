@@ -3,8 +3,8 @@
  * manifest: the build host's target, the private commercial pack checkout, the
  * test build number, and the Electron download source.
  *
- * Everything here is a pure decision over injected facts (`exists`, `readJson`,
- * `probe`, the clock), so the packaging runner can fail loudly before an
+ * Everything here is a pure decision over injected facts (`exists`, `probe`,
+ * the clock), so the packaging runner can fail loudly before an
  * expensive build starts, and the decisions are unit-testable without a build.
  */
 import { join } from 'node:path'
@@ -12,8 +12,12 @@ import { join } from 'node:path'
 /** Edition names the Desktop manifest accepts. */
 export const EDITION_NAMES = ['community', 'commercial']
 
-/** Capability-pack id the commercial edition declares its private source for. */
-export const COMMERCIAL_PACK_ID = 'model-review'
+/**
+ * Directory of a commercial checkout that holds its packs, one per `packs/<id>`.
+ * The checkout itself is not a pack, so which packs are commercial is decided by
+ * the edition manifest alone, never by the checkout's layout.
+ */
+export const COMMERCIAL_PACKS_DIR = 'packs'
 
 /**
  * Electron release host, used only as a fallback. Corporate proxies commonly
@@ -207,7 +211,7 @@ export function resolveBuildNumber(requested, env, now = new Date()) {
 }
 
 /**
- * Sibling checkouts a commercial pack source is expected at, in probe order.
+ * Sibling checkouts the commercial pack checkout is expected at, in probe order.
  * @param projectRoot - repository root.
  * @returns absolute candidate directories.
  */
@@ -219,46 +223,36 @@ export function commercialPackCandidates(projectRoot) {
 }
 
 /**
- * Read one candidate commercial pack directory.
+ * Whether a candidate directory is a commercial checkout.
  * @param directory - candidate directory.
  * @param exists - path-existence check.
- * @param readJson - JSON reader.
- * @returns the pack directory, or undefined when the candidate is not a pack.
+ * @returns true when the directory holds a `packs/` directory.
  */
-function readCommercialPack(directory, exists, readJson) {
-  const manifestPath = join(directory, 'lwb-pack.json')
-  if (!exists(manifestPath) || !exists(join(directory, 'package.json'))) return undefined
-  const manifest = readJson(manifestPath)
-  if (manifest?.id !== COMMERCIAL_PACK_ID) {
-    throw new Error(`${manifestPath} declares pack "${manifest?.id}"; the commercial edition needs "${COMMERCIAL_PACK_ID}".`)
-  }
-  return directory
+function isCommercialCheckout(directory, exists) {
+  return exists(join(directory, COMMERCIAL_PACKS_DIR))
 }
 
 /**
  * Resolve the private commercial pack source. An explicit `LWB_COMMERCIAL_PACK_DIR`
  * is authoritative and never falls back: a wrong path must fail, not silently
- * ship a build without the member pack.
+ * ship a build without the commercial packs.
  * @param options - resolution inputs.
  * @returns the resolved directory and how it was found.
  */
-export function resolveCommercialPackDir({ env, projectRoot, exists, readJson }) {
+export function resolveCommercialPackDir({ env, projectRoot, exists }) {
   const configured = env.LWB_COMMERCIAL_PACK_DIR?.trim()
   if (configured) {
-    const directory = readCommercialPack(configured, exists, readJson)
-    if (directory === undefined) {
-      throw new Error(`LWB_COMMERCIAL_PACK_DIR=${configured} is not a capability pack (needs lwb-pack.json and package.json).`)
+    if (!isCommercialCheckout(configured, exists)) {
+      throw new Error(`LWB_COMMERCIAL_PACK_DIR=${configured} is not a commercial pack checkout (needs ${COMMERCIAL_PACKS_DIR}/).`)
     }
-    return { directory, source: 'LWB_COMMERCIAL_PACK_DIR' }
+    return { directory: configured, source: 'LWB_COMMERCIAL_PACK_DIR' }
   }
   const candidates = commercialPackCandidates(projectRoot)
-  for (const candidate of candidates) {
-    const directory = readCommercialPack(candidate, exists, readJson)
-    if (directory !== undefined) return { directory, source: 'sibling checkout' }
-  }
+  const directory = candidates.find(candidate => isCommercialCheckout(candidate, exists))
+  if (directory !== undefined) return { directory, source: 'sibling checkout' }
   throw new Error(
-    `The commercial edition needs the private pack source. Set LWB_COMMERCIAL_PACK_DIR to the `
-    + `${COMMERCIAL_PACK_ID} checkout, or place it beside this repository. Tried: ${candidates.join(', ')}.`,
+    `The commercial edition needs the private pack checkout. Set LWB_COMMERCIAL_PACK_DIR to it, `
+    + `or place it beside this repository. Tried: ${candidates.join(', ')}.`,
   )
 }
 

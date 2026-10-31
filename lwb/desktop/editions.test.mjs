@@ -67,9 +67,9 @@ test('the community edition resolves only repository-owned packs', async () => {
   const manifest = await loadEditionManifest(PROJECT_ROOT)
   const edition = await resolveEdition(manifest, 'community', {
     projectRoot: PROJECT_ROOT,
-    ownedPacks: new Set(['spoken-video', 'ai-arena']),
+    ownedPacks: new Set(['spoken-video', 'ai-arena', 'model-review']),
   })
-  assert.deepEqual(edition.packs.map(pack => pack.id), ['spoken-video', 'ai-arena'])
+  assert.deepEqual(edition.packs.map(pack => pack.id), ['spoken-video', 'ai-arena', 'model-review'])
   assert.equal(edition.packs[0].packageName, '@scitiger-ai/lwb-spoken-video')
   assert.equal(edition.productHome, 'LaofuWorkbench')
   assert.equal(edition.protocolScheme, 'lwb')
@@ -80,7 +80,7 @@ test('the commercial edition does not resolve without its pack source', async ()
   await assert.rejects(
     resolveEdition(manifest, 'commercial', {
       projectRoot: PROJECT_ROOT,
-      ownedPacks: new Set(['spoken-video', 'ai-arena']),
+      ownedPacks: new Set(['spoken-video', 'ai-arena', 'model-review']),
       env: {},
     }),
     (error) => error instanceof LwbEditionError && /LWB_COMMERCIAL_PACK_DIR/u.test(error.message),
@@ -89,16 +89,16 @@ test('the commercial edition does not resolve without its pack source', async ()
 
 test('the commercial edition resolves a private pack from its pinned source', async (t) => {
   const root = await temporaryRoot(t)
-  const commercial = await writePack(root, { id: 'model-review', packageName: '@acme/model-review', directory: 'commercial-checkout' })
-  await writePack(root, { id: 'yuchi', packageName: '@acme/yuchi', directory: 'commercial-checkout/packs/yuchi' })
+  const commercial = join(root, 'commercial-checkout')
+  const yuchi = await writePack(root, { id: 'yuchi', packageName: '@acme/yuchi', directory: 'commercial-checkout/packs/yuchi' })
   const manifest = await loadEditionManifest(PROJECT_ROOT)
   const edition = await resolveEdition(manifest, 'commercial', {
     projectRoot: PROJECT_ROOT,
-    ownedPacks: new Set(['spoken-video', 'ai-arena']),
+    ownedPacks: new Set(['spoken-video', 'ai-arena', 'model-review']),
     env: { LWB_COMMERCIAL_PACK_DIR: commercial },
   })
   assert.deepEqual(edition.packs.map(pack => pack.id), ['spoken-video', 'ai-arena', 'model-review', 'yuchi'])
-  assert.equal(edition.packs[2].source, await realpath(commercial))
+  assert.equal(edition.packs[3].source, await realpath(yuchi))
   assert.equal(edition.productHome, 'LaofuWorkbench')
   assert.equal(edition.protocolScheme, 'lwb')
 })

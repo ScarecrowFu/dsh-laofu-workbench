@@ -1,0 +1,28 @@
+{
+  "name": "@scitiger-ai/lwb-model-review",
+  "version": "0.2.1",
+  "private": true,
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "description": "Model blogger evaluation capability pack for Laofu Workbench",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./client.js",
+    "./lwb-pack.json": "./lwb-pack.json",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.2",
+    "@scitiger-ai/lwb-pack-sdk": "0.1.0"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@scitiger-ai/lwb-dsh-bundle"
+      ]
+    }
+  }
+}
