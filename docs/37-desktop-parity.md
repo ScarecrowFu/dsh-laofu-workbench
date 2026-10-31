@@ -232,7 +232,9 @@ payload/win32-x64/app.zip           整个 Electron 应用
 
 第三段在应用侧，启动器无法加速，但可以**知道它什么时候结束**：应用在窗口 `show` 的那一刻写 `LWB_STARTUP_READY_FILE`（`bootstrap.mjs` 的 `announceWhenVisible`），启动器等到这个文件才把进度条收掉。所以进度条不是装饰，它到 100% 就意味着窗口真的在了。
 
-**复用与回收。** `active.json` 记录当前该用哪个目录；安装目录名带 artifact 的 sha16，所以同一版本重新打包也一定会换目录，不会两个构建共用一份文件。每次启动保留"当前 + 上一个"，更早的清掉，异常中断留下的 `.installing-*` 一律清掉——没有回收的话 `runtime` 与 `program` 会按版本数线性长。
+**复用与回收。** `active.json` 记录当前该用哪个目录；安装目录名带 artifact 的 sha16，所以同一版本重新打包也一定会换目录，不会两个构建共用一份文件。每次启动保留"当前 + 上一个"，更早的清掉，异常中断留下的 `.installing-*` 一律清掉——没有回收的话 `program` 会按版本数线性长。
+
+**`program` 之外，应用自己还有一份 `runtime`。** 启动器只管 `%LOCALAPPDATA%\LaofuWorkbench\program`；`bootstrap.mjs` 还会把 `resources/lwb-product` 复制到 `%APPDATA%\LaofuWorkbench\runtime\<build id>`（build id 是 payload 的内容摘要，换个构建就换目录）。这份**不能跟着 `program` 一起回收**：`runtime/<id>/lwb/packs/` 就是用户通过 `pack:install` 装的能力包实际落盘的位置，`packs.json` 用绝对路径指向它，删掉一个仍被引用的目录等于让用户装过的包失效。代价是每次升级后首启多一次 355 MB / 1.8 万文件的复制，旧目录也会一直留着——见下面的已知边界。
 
 **回滚。** 更新装到了新目录、`active.json` 也切过去了，但新版本 60 秒内没写 ready 文件，启动器会杀掉它、把 `active.json` 写回上一个目录、重新拉起，并在进度条上说明"已回到上一个版本"。这条路径只在"更新"时存在；首次安装没有可回退的版本，超时就只是超时，不再打扰用户。
 
@@ -242,6 +244,11 @@ payload/win32-x64/app.zip           整个 Electron 应用
 
 **`out` 与命名。** electron-builder 的 Windows target 现在是 `dir`，产物目录里出现的是 `win-unpacked/` 与最终的 `laofu-workbench-<版本>-win-x64-unsigned.zip`。`collect-desktop-artifacts.mjs` 只汇总这个 `.zip`，`release-desktop.mjs` 把它作为 `win-x64` 那条腿发布。macOS 完全不同：仍然是 `.zip` 里的 `.app`，仍然原地替换，启动器与 `program/` 目录在 macOS 上不存在。
 
+**Windows 启动器的已知边界。** 这些是刻意留着的，不是没想到：
+
+- 旧 `runtime/<build id>` 不回收。要回收必须先判定"没有任何 `packs.json` 记录指向它"，否则等于静默弄坏用户装过的能力包；这一版没有做，代价是 `%APPDATA%` 会按构建数增长。
+- 启动器不验签、也不读 `rolloutPercent`：Ed25519 验签只发生在应用里（`validateRelease`），启动器复核的只是"这个文件是不是我收到的那一份"——大小与 sha256。
+- Windows 才能双击交付：`lwb/desktop/package.mjs` 在没有 `--portable`（且不是 `--dir`）时直接报错，因为 `dir` target 出来的目录不是一个可以发给用户的东西。
 
 ### Windows 构建输入（产品源码快照）
 

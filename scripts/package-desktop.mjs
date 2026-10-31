@@ -49,6 +49,8 @@ Options:
   --signed               use the official signing environment instead of an unsigned test build
   --release              name the artifact as a release build (no -test.<n> suffix)
   --dir                  produce the unpacked app only
+  --check                validate the packaging inputs, including the Windows launcher's
+                         Go toolchain, then stop without building anything
   --plan                 resolve the edition and shipped packs, then stop
   --npm-registry <url>   npm registry for the runtime dependencies; default is the
                          release registry (registry.npmjs.org). Point it at a mirror
@@ -159,6 +161,7 @@ function packagingCommand(values, inputs) {
   forward.push('--portable')
   if (values.release) forward.push('--release')
   if (values.dir) forward.push('--dir')
+  if (values.check) forward.push('--check')
   if (values.plan) forward.push('--plan')
   const env = {
     ...process.env,
@@ -191,6 +194,7 @@ async function main() {
       signed: { type: 'boolean' },
       release: { type: 'boolean' },
       dir: { type: 'boolean' },
+      check: { type: 'boolean' },
       plan: { type: 'boolean' },
       'dry-run': { type: 'boolean' },
       'no-mirror-fallback': { type: 'boolean' },
@@ -240,7 +244,9 @@ async function main() {
     process.exitCode = result.status ?? 1
     return
   }
-  if (values.plan) return
+  // Neither a plan nor a check produces artifacts, so there is nothing to
+  // report: the run stopped once the inputs were proven.
+  if (values.plan || values.check) return
   const editions = JSON.parse(await readFile(join(PROJECT_ROOT, 'lwb', 'desktop', 'editions.json'), 'utf8'))
   const productName = editions.editions[inputs.edition]?.productName ?? manifest.name
   await reportArtifacts({ directory, target: inputs.target, productName, before })

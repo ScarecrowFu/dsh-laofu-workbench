@@ -74,11 +74,25 @@ if (values.plan) {
 }
 // Only a real package preparation executes the target Electron; a plan does not.
 assertRosetta(arch)
-// The Windows launcher is compiled from Go source during this run, so the
-// toolchain is a build input like any other. Checking it here means a host that
-// cannot produce a launch package says so in the first second, instead of after
-// the payload install and the Electron preparation.
-if (values.portable === true && process.platform === 'win32' && values.dir !== true) await assertLauncherToolchain()
+// On Windows the launch package is the only distributable: the Electron target
+// is a plain directory and the launcher is what a user actually opens. Every
+// requirement of that package is therefore checked here, before the payload
+// install and the Electron preparation, instead of after them.
+const launchPackaged = process.platform === 'win32' && values.dir !== true
+if (launchPackaged) {
+  if (values.portable !== true) {
+    throw new Error('A Windows package is a launch package: add --portable (npm run package:win already does), or --dir for a bare unpacked directory.')
+  }
+  if (values.unsigned !== true) {
+    // The package is assembled around the unpacked output, and only the unsigned
+    // flow says where that is; a signed build writes wherever upstream decided.
+    throw new Error('A Windows launch package needs --unsigned: it is built around the unpacked output, which only the unsigned flow names.')
+  }
+  // The launcher is compiled from Go source during this run, so the toolchain is
+  // a build input like any other: a host that cannot produce one should say so in
+  // the first second.
+  await assertLauncherToolchain()
+}
 const appRoot = join(DSH_ROOT, 'apps/desktop')
 const { loadDesktopPackageEnvironment, validateDesktopPackageEnvironment } = await import(pathToFileURL(join(appRoot, 'scripts/desktop-package-environment.mjs')))
 const unsigned = values.unsigned === true
@@ -198,12 +212,7 @@ await writeFile(config, `export default await (await import(${JSON.stringify(new
 // The target architecture is explicit: the builder otherwise follows the
 // process architecture, which is the build host rather than the package.
 await pnpm(['exec', 'electron-builder', '--config', config, '--publish', 'never', `--${arch}`, ...(values.dir ? ['--dir'] : [])])
-if (portable && process.platform === 'win32' && !values.dir) {
-  // The launch package is assembled around the unpacked output, which only the
-  // unsigned flow publishes: a signed build writes wherever upstream decided.
-  if (!identity.output) throw new Error('The Windows launch package needs the unsigned flow, which is the only one that names its output directory.')
-  await packageForLauncher({ directory: identity.output, arch, buildVersion, edition, unsigned })
-}
+if (launchPackaged) await packageForLauncher({ directory: identity.output, arch, buildVersion, edition, unsigned })
 assertUpstream()
 console.log(`LWB Desktop package created for edition "${edition.name}" through the official builder; no artifacts were published.`)
 
