@@ -273,7 +273,13 @@ async function assertLauncherToolchain() {
   if (current < LAUNCHER_GO_VERSION.major * 1000 + LAUNCHER_GO_VERSION.minor) {
     throw new Error(`The launcher needs Go ${LAUNCHER_GO_VERSION.major}.${LAUNCHER_GO_VERSION.minor}+ but this host reports "${reported}". An older toolchain would try to fetch a newer one first, which a build host without network cannot do.`)
   }
+  // The cache path is the one build input that differs between the account a
+  // human checks in a terminal and the account a self-hosted runner service
+  // actually runs as. Printing it turns "failed to initialize build cache" into
+  // a path someone can act on.
+  const cache = (await execFileAsync('go', ['env', 'GOCACHE'], { cwd }).catch(() => ({ stdout: '' }))).stdout.trim()
   console.log(`Launcher toolchain ${reported}`)
+  console.log(`  build cache      ${cache === '' ? 'unknown' : cache} (must be writable by the account running this build)`)
   return reported
 }
 
