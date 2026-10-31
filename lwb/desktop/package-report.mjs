@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, readFileSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { artifactExtensions, unpackedApp } from './package-inputs.mjs'
+import { artifactExtensions, resolveHostTarget, unpackedApp } from './package-inputs.mjs'
 
 /**
  * Snapshot of the artifact files in one directory, keyed by name.
@@ -37,6 +37,33 @@ export async function artifactSnapshot(directory) {
  */
 export function changedArtifacts(before, after) {
   return [...after.keys()].filter(name => after.get(name) !== before.get(name))
+}
+
+/**
+ * The build record the packager wrote into one target's unpacked app.
+ *
+ * It is the only place that knows what this build *is*: its version, including
+ * a `-test.N` suffix, and whether it is a release. Anything that describes the
+ * artifact afterwards reads it from here instead of re-deriving it from the
+ * environment, which is how a report once claimed a release build was
+ * `0.1.9-test.1` because one variable was missing from a manual run.
+ * @param options - record location.
+ * @param options.directory - artifact directory of the edition and target.
+ * @param options.target - resolved target name.
+ * @param options.productName - product name of the edition.
+ * @returns the parsed build record.
+ * @throws Error when the record is missing, incomplete, or for another target.
+ */
+export function readBuildRecord({ directory, target, productName }) {
+  const { manifest } = unpackedApp(directory, target, productName)
+  if (!existsSync(manifest)) throw new Error(`No build record at ${manifest}; package ${target} before collecting its artifacts.`)
+  const build = JSON.parse(readFileSync(manifest, 'utf8'))
+  if (typeof build.version !== 'string' || build.version === '') throw new Error(`${manifest} records no version.`)
+  if (typeof build.release !== 'boolean') throw new Error(`${manifest} does not record whether it is a release.`)
+  if (typeof build.platform !== 'string' || typeof build.arch !== 'string' || resolveHostTarget(build.platform, build.arch) !== target) {
+    throw new Error(`${manifest} was built for ${build.platform}-${build.arch}, not ${target}.`)
+  }
+  return build
 }
 
 /** Byte size in a short human unit. */

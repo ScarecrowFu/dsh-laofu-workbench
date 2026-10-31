@@ -204,7 +204,7 @@ npm run snapshot:product -- --worktree        # 归档当前工作区（含未�
 npm run snapshot:product -- --dry-run         # 只报告将写入什么
 ```
 
-默认写入 `../dsh-laofu-workbench-commercial/.build/`：新的 `product-source.tar.gz` 与更新后的 `inputs.json`。`inputs.json` 只刷新本次能确定的三项（`productSnapshotCommit`、`productArchiveSha256`、`includesLocalTrackedChanges`），`productBaseCommit`、`commercialBaseCommit`、`mode`、`buildHosts`、`targets`、`editions` 等发布输入保持不变。该文件没有任何工具读取，只作溯源记录。刷新后需在私有仓库提交推送 `.build/`，再触发 workflow。构建结束后脚本打印本次新增的产物、大小与 SHA256，并给出可复现的命令行。`--signed` 改用官方签名环境文件，`--release` 使用正式版本号，`--dir` 只出未打包 App。发行用的 `SHA256SUMS.txt` 与构建报告仍由 `node scripts/collect-desktop-artifacts.mjs --edition <edition> --target <target>` 汇总；该命令哈希目录内的全部产物，只适合干净的产物目录。
+默认写入 `../dsh-laofu-workbench-commercial/.build/`：新的 `product-source.tar.gz` 与更新后的 `inputs.json`。`inputs.json` 只刷新本次能确定的三项（`productSnapshotCommit`、`productArchiveSha256`、`includesLocalTrackedChanges`），`productBaseCommit`、`commercialBaseCommit`、`mode`、`buildHosts`、`targets`、`editions` 等发布输入保持不变。该文件没有任何工具读取，只作溯源记录。刷新后需在私有仓库提交推送 `.build/`，再触发 workflow。构建结束后脚本打印本次新增的产物、大小与 SHA256，并给出可复现的命令行。`--signed` 改用官方签名环境文件，`--release` 使用正式版本号，`--dir` 只出未打包 App。发行用的 `SHA256SUMS.txt` 与构建报告仍由 `node scripts/collect-desktop-artifacts.mjs --edition <edition> --target <target>` 汇总。版本号和是否正式版都从产物里的 `build.json` 读取，不依赖运行时的环境变量；只汇总文件名带本次版本号的产物，目录里残留的旧版本文件不会被算进去。
 
 ### 统一官方便携版构建
 

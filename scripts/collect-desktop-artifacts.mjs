@@ -3,13 +3,22 @@ import { createReadStream } from 'node:fs'
 import { readFile, readdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
+import { readBuildRecord } from '../lwb/desktop/package-report.mjs'
 
 const { values } = parseArgs({ options: { edition: { type: 'string' }, target: { type: 'string' } } })
 if (!['community', 'commercial'].includes(values.edition) || !['mac-arm64', 'mac-x64', 'win-x64'].includes(values.target)) throw new Error('Specify a Desktop edition and supported test target')
 const directory = resolve('.tooling', 'artifacts', values.edition, values.target)
+const editions = JSON.parse(await readFile('lwb/desktop/editions.json', 'utf8'))
+// The build describes itself: version (with any `-test.N` suffix) and whether
+// it is a release come from the record inside the unpacked app, never from
+// the environment of whoever runs this script.
+const build = readBuildRecord({ directory, target: values.target, productName: editions.editions[values.edition].productName })
 const extensions = values.target.startsWith('mac-') ? ['.zip'] : ['.exe']
-const files = (await readdir(directory)).filter(file => extensions.some(ext => file.endsWith(ext))).sort()
-for (const ext of extensions) if (!files.some(file => file.endsWith(ext))) throw new Error(`Missing ${ext} Desktop artifact`)
+// Only this build's artifacts: the directory keeps earlier versions' files
+// until someone moves them, and hashing those would describe the wrong build.
+const marker = `-${build.version}-${values.target}-`
+const files = (await readdir(directory)).filter(file => file.includes(marker) && extensions.some(ext => file.endsWith(ext))).sort()
+for (const ext of extensions) if (!files.some(file => file.endsWith(ext))) throw new Error(`Missing ${ext} Desktop artifact for ${build.version}`)
 const records = []
 for (const file of files) {
   if (!file.includes('-portable-unsigned.')) throw new Error(`Expected an explicitly unsigned portable artifact: ${file}`)
@@ -19,17 +28,13 @@ for (const file of files) {
   records.push({ file, bytes, sha256: hash.digest('hex') })
 }
 const upstream = JSON.parse(await readFile('lwb/UPSTREAM.lock.json', 'utf8'))
-const product = JSON.parse(await readFile('package.json', 'utf8'))
-const buildNumber = process.env.LWB_DESKTOP_BUILD_NUMBER ?? process.env.GITHUB_RUN_NUMBER ?? '1'
-if (!/^\d+$/u.test(buildNumber)) throw new Error('Desktop test build number must be numeric')
-const release = process.env.LWB_DESKTOP_RELEASE === '1'
 const report = {
-  edition: values.edition, target: values.target, version: release ? product.version : `${product.version}-test.${buildNumber}`,
+  edition: values.edition, target: values.target, version: build.version,
   // Every build ships the updater; whether it ever looks for a release is
   // decided by the build record, and that is `release` itself. A `-test.N`
   // build reports false because it genuinely will not consult the channel —
   // reporting false for a release would be the opposite mistake.
-  unsigned: true, portable: true, notarized: false, autoUpdate: release,
+  unsigned: true, portable: true, notarized: false, autoUpdate: build.release,
   workflowCommit: process.env.GITHUB_SHA ?? null, upstream, artifacts: records,
   runner: process.env.RUNNER_NAME ?? null,
   packagedPackAcceptance: true,

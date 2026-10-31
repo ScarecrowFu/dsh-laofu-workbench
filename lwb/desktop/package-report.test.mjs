@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { artifactSnapshot, changedArtifacts, reportArtifacts } from './package-report.mjs'
+import { artifactSnapshot, changedArtifacts, readBuildRecord, reportArtifacts } from './package-report.mjs'
 
 const PRODUCT = 'Laofu Workbench'
 
@@ -97,4 +97,41 @@ test('a missing unpacked app is reported instead of guessed', async () => {
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+/** Write one build record into a scratch mac-arm64 unpacked app. */
+async function withRecord(record) {
+  const { root, directory } = await scratch()
+  const manifest = join(directory, 'mac-arm64', `${PRODUCT}.app`, 'Contents', 'Resources', 'lwb-product', 'build.json')
+  await writeFile(manifest, JSON.stringify(record))
+  return { root, directory }
+}
+
+test('the build record says what the build is, whatever the environment says', async () => {
+  const { root, directory } = await withRecord({ id: 'abc', version: '0.1.9', release: true, platform: 'darwin', arch: 'arm64' })
+  try {
+    const previous = process.env.LWB_DESKTOP_RELEASE
+    delete process.env.LWB_DESKTOP_RELEASE
+    try {
+      const build = readBuildRecord({ directory, target: 'mac-arm64', productName: PRODUCT })
+      assert.equal(build.version, '0.1.9')
+      assert.equal(build.release, true)
+    } finally { if (previous !== undefined) process.env.LWB_DESKTOP_RELEASE = previous }
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('a build record for another target, or without its facts, is refused', async () => {
+  for (const [record, pattern] of [
+    [{ version: '0.1.9', release: true, platform: 'darwin', arch: 'x64' }, /built for darwin-x64, not mac-arm64/u],
+    [{ release: true, platform: 'darwin', arch: 'arm64' }, /records no version/u],
+    [{ version: '0.1.9', platform: 'darwin', arch: 'arm64' }, /whether it is a release/u],
+  ]) {
+    const { root, directory } = await withRecord(record)
+    try {
+      assert.throws(() => readBuildRecord({ directory, target: 'mac-arm64', productName: PRODUCT }), pattern)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  }
+  const root = await mkdtemp(join(tmpdir(), 'lwb-report-'))
+  try {
+    assert.throws(() => readBuildRecord({ directory: root, target: 'mac-arm64', productName: PRODUCT }), /No build record/u)
+  } finally { await rm(root, { recursive: true, force: true }) }
 })
