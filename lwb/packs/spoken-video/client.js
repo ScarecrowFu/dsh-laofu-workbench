@@ -11,6 +11,15 @@ window.__ModuleLoader__.load({
     let publishHandoff = null;
     const STAGES = ['signals', 'topic', 'script', 'voiceover', 'subtitles', 'video', 'qc', 'packaging'];
     const LABEL = { signals: '信号', topic: '选题', script: '写稿', voiceover: '配音', subtitles: '字幕', video: '视频制作', qc: '质检', packaging: '发布资料' };
+    // Stages that make up a finished cut. A new voiceover invalidates all of them.
+    const FINISHED_CUT_STAGES = ['video', 'qc', 'packaging'];
+    // Whether syncing a new voiceover into the source project would discard a
+    // finished cut, which then silently leaves the publish shelf.
+    function replacesFinishedCut(projects, source) {
+      if (!source?.projectId) return false;
+      const project = projects.find((candidate) => candidate.id === source.projectId);
+      return Boolean(project?.completedStages?.some((stage) => FINISHED_CUT_STAGES.includes(stage)));
+    }
     const DEFAULT_VIDEO_VISUAL_BRIEF = '由 AI 视觉导演根据稿件语义完成主题化 Remotion 画面。';
     // Bailian system voices usable as a preset choice. Names are the official
     // voice IDs from the Qwen-Audio-TTS voice list, which is what the
@@ -3853,6 +3862,7 @@ window.__ModuleLoader__.load({
       const referenceVoiceReady = voiceSource === 'upload' ? Boolean(voiceReference) : selectedProvider?.referenceVoiceConfigured;
       const presetVoiceReady = voiceSource !== 'preset' || (providerId === 'bailian' && Boolean(voicePresetId));
       const canGenerate = Boolean(providerId && selectedProvider?.credential?.configured && selectedProvider?.configured && referenceVoiceReady && presetVoiceReady);
+      const discardsCut = replacesFinishedCut(projects, source);
       const inActiveTab = (project) => activeTab === GENERAL_TAB ? !project.account : project.account?.id === activeTab;
       const tabProjects = projects.filter(inActiveTab);
       const visibleTasks = taskFeed.items;
@@ -3986,7 +3996,7 @@ window.__ModuleLoader__.load({
         ) : null,
         h('div', { className: 'sv-audio-parameters' }, h('label', { className: 'sv-media-field' }, h('span', null, '语速'), h('input', { className: 'sv-input', type: 'number', min: '0.5', max: '2', step: '0.05', value: rate, onChange: (event) => setRate(event.target.value) })), h('label', { className: 'sv-media-field' }, h('span', null, '音量'), h('input', { className: 'sv-input', type: 'number', min: '0', max: '2', step: '0.05', value: volume, onChange: (event) => setVolume(event.target.value) }))),
         h('label', { className: 'sv-audio-subtitle-option' }, h('input', { type: 'checkbox', checked: subtitleEnabled, onChange: (event) => setSubtitleEnabled(event.target.checked) }), h('span', null, h('strong', null, '同时生成字幕'), h('small', null, '配音完成后自动对齐字幕；字幕失败不影响音频，可单独重试。'))),
-        h('div', { className: 'sv-actions' }, h('button', { type: 'button', className: 'lwb-primary-button', disabled: Boolean(submitting) || voiceUploading || !canGenerate || !text.trim(), onClick: () => ask({ title: '生成配音', copy: `将使用${providerName}和${voiceSource === 'upload' ? `参考音频「${voiceReference?.name || ''}」` : voiceSource === 'preset' ? `预置音色「${BAILIAN_PRESET_VOICES.find((voice) => voice.id === voicePresetId)?.label || voicePresetId}」` : '系统默认音色'}为「${source?.title || '手动输入文稿'}」创建新的配音任务${subtitleEnabled ? '，并在配音完成后自动生成字幕' : ''}，提交后会调用远端服务。`, confirm: '确认生成', onConfirm: () => { void createAudioTask(); } }) }, submitting === 'voiceover' ? '正在提交…' : subtitleEnabled ? '生成配音和字幕' : '生成配音')),
+        h('div', { className: 'sv-actions' }, h('button', { type: 'button', className: 'lwb-primary-button', disabled: Boolean(submitting) || voiceUploading || !canGenerate || !text.trim(), onClick: () => ask({ title: '生成配音', copy: `将使用${providerName}和${voiceSource === 'upload' ? `参考音频「${voiceReference?.name || ''}」` : voiceSource === 'preset' ? `预置音色「${BAILIAN_PRESET_VOICES.find((voice) => voice.id === voicePresetId)?.label || voicePresetId}」` : '系统默认音色'}为「${source?.title || '手动输入文稿'}」创建新的配音任务${subtitleEnabled ? '，并在配音完成后自动生成字幕' : ''}，提交后会调用远端服务。${discardsCut ? '该项目已有成片：新配音同步到项目后，视频、质检和发布资料都会作废，成片会从「发布」中移除，需要重新制作视频并通过质检。' : ''}`, confirm: discardsCut ? '仍然生成' : '确认生成', danger: discardsCut, onConfirm: () => { void createAudioTask(); } }) }, submitting === 'voiceover' ? '正在提交…' : subtitleEnabled ? '生成配音和字幕' : '生成配音')),
       );
       const taskCard = (task) => {
         const subtitle = task.subtitle || { status: 'idle' };
