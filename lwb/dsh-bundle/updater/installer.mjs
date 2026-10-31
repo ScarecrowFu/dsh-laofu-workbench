@@ -84,7 +84,10 @@ export async function resolveInstallTarget({ platform, env = process.env }) {
     // it only has to exist, because the launcher itself starts the new build.
     const launcher = env.LWB_DESKTOP_LAUNCHER
     if (!launcher) {
-      return { ok: false, reason: '当前不是启动器安装的版本，无法自动更新。请重新下载安装包。' }
+      // Reaching this means the app was started from somewhere other than the
+      // launch package — typically the unpacked directory a build leaves behind,
+      // which cannot update itself because it does not own an install directory.
+      return { ok: false, reason: '当前不是从启动器打开的，无法自动更新。请用下载包里的「Laofu Workbench.exe」打开后重试。' }
     }
     const info = await stat(launcher).catch(() => undefined)
     if (!info?.isFile()) return { ok: false, reason: '未找到启动器，无法自动更新。请重新下载安装包。' }

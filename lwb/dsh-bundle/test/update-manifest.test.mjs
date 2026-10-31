@@ -214,7 +214,10 @@ test('an installation that cannot replace itself says so instead of failing late
   )
   assert.deepEqual(
     await resolveInstallTarget({ platform: 'win32', env: {} }),
-    { ok: false, reason: '当前不是启动器安装的版本，无法自动更新。请重新下载安装包。' },
+    // No launcher means the app was started from an unpacked directory, which
+    // owns no install directory to switch. The message names the fix, because
+    // "not installed by the launcher" is not something a user can act on.
+    { ok: false, reason: '当前不是从启动器打开的，无法自动更新。请用下载包里的「Laofu Workbench.exe」打开后重试。' },
   )
   assert.equal((await resolveInstallTarget({ platform: 'linux', env: {} })).ok, false)
 })
