@@ -459,7 +459,7 @@ window.__ModuleLoader__.load({
         disable: '停用', reload: '重新加载', load: '加载', unload: '卸载', openMenu: '打开菜单', details: '详情', migrate: '迁移', accept: '验收',
         packFeatures: '包含哪些能力', packGettingStarted: '开始使用前', packJourney: '创作路径', packDataManagement: '数据管理', packLoadAction: '加载能力包', packStartAction: '开始使用', packLoadHint: '加载后，功能入口将出现在左侧导航。', packReadyHint: '能力包已加载，可以开始创作。', packManageHint: '卸载能力包后可管理业务数据与工作区。',
         packType: '场景能力包', noLoadedPacks: '暂无已加载能力包', noInstalledPacks: '尚未安装场景能力包',
-        packsEmptyCopy: '尚未发现可加载的场景能力包。可通过通用安装命令注册任意独立能力包。', loadingPacks: '正在读取能力包市场…', packCatalogFailed: '无法读取能力包市场。',
+        packsEmptyCopy: '尚未发现可加载的场景能力包。可通过通用安装命令注册任意独立能力包。', loadingPacks: '正在读取能力包市场…', packCatalogFailed: '无法读取能力包市场。', packCatalogFailedHint: '如果还开着其他工作台标签页（包括其他浏览器里的），请关闭后重试。',
         packDetails: (name) => `${name} 详情`, currentStatus: '当前状态', menuCount: '菜单数量', packDescription: '能力包说明', registeredMenus: '加载后菜单', firstPhaseEmpty: '第一期空态',
         marketSearch: '搜索能力包、标签或功能…', filterAll: '全部', filterLoaded: '已加载', filterAvailable: '可加载', filterCategory: '分类', noMatchingPacks: '没有匹配的能力包。', packWorkflow: '功能流程', packTags: '标签', packOrigin: '来源', loadingPack: '正在加载…', unloadingPack: '正在卸载…', packLoaded: '能力包已加载。', packUnloaded: '能力包已卸载。', workspacePack: '工作区包', localPack: '本地包', unavailablePack: '能力包源不可用，无法加载。',
         noCapability: '能力包尚未加载', noCapabilityCopy: '请在“场景能力包”中安装并加载领域能力包。', goToPacks: '前往能力包',
@@ -502,7 +502,7 @@ window.__ModuleLoader__.load({
         disable: 'Disable', reload: 'Reload', load: 'Load', unload: 'Unload', openMenu: 'Open menu', details: 'Details', migrate: 'Migrate', accept: 'Accept',
         packFeatures: 'Included capabilities', packGettingStarted: 'Before you start', packJourney: 'Workflow', packDataManagement: 'Data management', packLoadAction: 'Load capability pack', packStartAction: 'Start using', packLoadHint: 'Loading adds these features to the sidebar.', packReadyHint: 'The pack is loaded and ready to open.', packManageHint: 'Unload the pack to manage its data and workspace.',
         packType: 'Capability pack', noLoadedPacks: 'No capability packs loaded', noInstalledPacks: 'No capability packs installed',
-        packsEmptyCopy: 'No loadable scenario capability pack was discovered. Register any standalone pack with the generic installer.', loadingPacks: 'Loading capability marketplace...', packCatalogFailed: 'Unable to load capability marketplace.',
+        packsEmptyCopy: 'No loadable scenario capability pack was discovered. Register any standalone pack with the generic installer.', loadingPacks: 'Loading capability marketplace...', packCatalogFailed: 'Unable to load capability marketplace.', packCatalogFailedHint: 'If other workbench tabs are open, including in another browser, close them and retry.',
         packDetails: (name) => `${name} details`, currentStatus: 'Current status', menuCount: 'Menu items', packDescription: 'Capability pack description', registeredMenus: 'Menus after loading', firstPhaseEmpty: 'First-release placeholder',
         marketSearch: 'Search packs, tags, or functions...', filterAll: 'All', filterLoaded: 'Loaded', filterAvailable: 'Available', filterCategory: 'Category', noMatchingPacks: 'No matching capability packs.', packWorkflow: 'Workflow', packTags: 'Tags', packOrigin: 'Source', loadingPack: 'Loading...', unloadingPack: 'Unloading...', packLoaded: 'Capability pack loaded.', packUnloaded: 'Capability pack unloaded.', workspacePack: 'Workspace pack', localPack: 'Local pack', unavailablePack: 'The package source is unavailable and cannot be loaded.',
         noCapability: 'No capability pack loaded', noCapabilityCopy: 'Install and load a domain capability pack from Capability Packs.', goToPacks: 'Go to capability packs',
@@ -2834,7 +2834,11 @@ window.__ModuleLoader__.load({
         h('div', { className: 'lwb-row-actions', style: { justifyContent: 'center' } },
           button('lwb-plain-button', copy.retry, retry),
           button('lwb-primary-button', copy.goToPacks, () => navTo('packs')))));
-      if (catalog.phase === 'error') return card('⚠', copy.packCatalogFailed, catalog.error || copy.capabilityPageFailedCopy);
+      // A timed-out read usually means the browser had no free connection to the
+      // Host. Sibling tabs park themselves, but tabs opened before this build or
+      // in another browser do not.
+      if (catalog.phase === 'error') return card('⚠', copy.packCatalogFailed, catalog.error || copy.capabilityPageFailedCopy,
+        h('p', null, copy.packCatalogFailedHint));
       if (failed.length > 0) return card('⚠', copy.packStartupFailed, copy.packStartupFailedCopy,
         h('ul', { className: 'lwb-startup-failures' }, failed.map((row) => h('li', { key: row.id }, h('b', null, row.id), `（${row.message}）`))));
       if (loading) return card('◌', copy.loadingCapability, copy.loadingCapabilityCopy);
@@ -2927,6 +2931,44 @@ window.__ModuleLoader__.load({
       ));
     }
 
+    /**
+     * One workbench tab per browser.
+     *
+     * In a plain browser every workbench tab holds the HMR EventSource open for
+     * its whole life, and Chromium allows six HTTP/1.1 connections per host
+     * across all tabs. Six forgotten tabs leave nothing for `/api`: the catalog
+     * read times out and every pack page waits forever. The newest tab takes the
+     * workbench; older ones move to a static Host page that holds no connection
+     * and links back. The Desktop shell carries HMR on its own transport, so it
+     * is left alone.
+     */
+    const TAB_CHANNEL = 'lwb.workbench.tabs';
+    const PARKED_TAB_PATH = '/lwb/tab-parked';
+    function startSingleTabGuard() {
+      if (globalThis.__DSH_TRANSPORT__?.fetch !== undefined) return () => {};
+      if (typeof BroadcastChannel !== 'function' || typeof window.location?.replace !== 'function') return () => {};
+      // Kept on the window, not in this module: a hot reload of the shell must
+      // not make this tab look newer than itself and park it.
+      const tab = window.__lwbWorkbenchTab || (window.__lwbWorkbenchTab = { id: crypto.randomUUID(), claimedAt: Date.now() });
+      const claim = { type: 'claim', id: tab.id, claimedAt: tab.claimedAt };
+      const channel = new BroadcastChannel(TAB_CHANNEL);
+      channel.onmessage = (event) => {
+        const other = event.data;
+        if (other?.type !== 'claim' || typeof other.id !== 'string' || other.id === tab.id || !Number.isFinite(other.claimedAt)) return;
+        const newer = other.claimedAt > tab.claimedAt || (other.claimedAt === tab.claimedAt && other.id > tab.id);
+        if (newer) {
+          channel.close();
+          window.location.replace(PARKED_TAB_PATH);
+        } else {
+          // An older tab is still claiming, e.g. after its own hot reload; answer
+          // so it learns this one is newer and parks itself.
+          channel.postMessage(claim);
+        }
+      };
+      channel.postMessage(claim);
+      return () => channel.close();
+    }
+
     function apply(ctx) {
       lwbPackClient = new LwbPackClientRegistry();
       ctx.provide('lwbPackClient', lwbPackClient);
@@ -2977,6 +3019,7 @@ window.__ModuleLoader__.load({
       const disposePackCatalogReset = ctx.on('connection/reset', () => {
         void refreshPackCatalog();
         });
+      ctx.effect(() => startSingleTabGuard(), 'lwb: one workbench tab per browser');
       ctx.effect(() => {
         // The Desktop serves its initial HTML directly; update its favicon too.
         const oldIcons = Array.from(document.querySelectorAll('link[rel="icon"]'));

@@ -22,6 +22,7 @@ import { LwbUpdateManager } from './updater/manager.mjs'
 import { openTaskModel } from './task-model.mjs'
 import { registerLwbModels } from './dsh-adapter/lwb-model.mjs'
 import { registerLwbBranding } from './branding.mjs'
+import { registerLwbParkedTab } from './parked-tab.mjs'
 import { registerLwbWebRouter } from './web-router.mjs'
 
 /**
@@ -43,6 +44,7 @@ export async function apply(ctx, config = {}) {
   const stage = (message) => ctx.logger?.info?.(`lwb: ${message} (${Date.now() - startedAt} ms)`)
   stage('bundle activated')
   await registerLwbBranding(ctx)
+  registerLwbParkedTab(ctx)
   const identity = Object.freeze({
     id: PROFILE_ID,
     name: String(config.name || '老傅工作台'),
