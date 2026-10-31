@@ -782,3 +782,18 @@ test('a pack names its dedicated browser by a directory it owns, never an absolu
   await assert.rejects(first.browser.dedicated('/etc'), /workspace-relative/u)
   await assert.rejects(first.browser.dedicated('../other'), /Invalid workspace-relative/u)
 })
+
+test('预设已经注册过时，会话照样打得开', async (t) => {
+  const { ctx, workspaces, calls } = await setup(t)
+  // The preset registry spans the whole process and outlives any one service,
+  // so a second instance finds the id already there. That duplicate used to
+  // surface as the raw register error inside the chat drawer and, because the
+  // rejected promise stayed cached, kept every conversation in every pack shut
+  // until the process restarted.
+  ctx.agentPresets.register = async () => { throw new Error('Duplicate agent preset: lwb-pack-no-tools') }
+  const again = new LwbPackServices(ctx, workspaces)
+  const facade = await again.mount(manifest('another-pack'))
+  const session = await facade.sessions.create({ provider: 'ordinary', model: 'qwen', tools: 'none' })
+  assert.ok(session.id)
+  assert.equal(calls.find(([kind]) => kind === 'session.create')[1].agentPreset, 'lwb-pack-no-tools')
+})

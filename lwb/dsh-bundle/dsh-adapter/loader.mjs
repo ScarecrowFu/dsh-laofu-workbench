@@ -15,18 +15,42 @@ export function restoreEnabledPacks(ctx, packRuntime) {
     const restore = ctx.inject(['subagents', 'tools'], async () => { await packRuntime.restore() })
     packRuntime.setStartupRestore(restore.await())
   }, { global: true })
+  // From here on an empty catalog means "not finished yet", not "nothing
+  // installed" — the browser needs that distinction to render anything useful.
+  packRuntime.arm?.()
 }
 
-export async function createPackGroup(ctx) {
+/**
+ * How long the pack group may take to activate before the bundle stops waiting.
+ *
+ * The group is only a container for pack entries; the RPC gateways above it are
+ * what the browser actually talks to. A composition where the group waits on a
+ * service that never arrives must still answer `lwbPacks/list` and
+ * `lwbAccount/status` — those requests stay open forever otherwise, and the
+ * workbench shows an empty capability page with no error anywhere.
+ */
+const GROUP_ACTIVATION_TIMEOUT_MS = 8_000
+
+export async function createPackGroup(ctx, { timeoutMs = GROUP_ACTIVATION_TIMEOUT_MS } = {}) {
   const Group = ctx.loader?.builtins?.group
   if (typeof Group !== 'function') {
     throw new Error('LWB capability pack loader group is unavailable.')
   }
   const fiber = ctx.plugin(Group, [])
-  await fiber.await()
+  let timer
+  const activated = await Promise.race([
+    fiber.await().then(() => true),
+    // Not unref'd: this race is awaited, so the timeout has to be able to fire
+    // even when the group's activation is the only thing left pending.
+    new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs) }),
+  ]).finally(() => { clearTimeout(timer) })
   const group = ctx.fiber.entry?.subgroup
-  if (!group || typeof group.create !== 'function') {
-    throw new Error('LWB capability pack loader group failed to initialize.')
+  if (!activated || !group || typeof group.create !== 'function') {
+    // Loading through the root loader keeps packs working in the cases where the
+    // group is merely late; a group that is genuinely unavailable is reported
+    // through the pack failures instead of holding up the whole bundle.
+    ctx.logger?.warn?.(`lwb: pack group did not activate within ${timeoutMs} ms; packs load through the root loader instead.`)
+    return undefined
   }
   return group
 }

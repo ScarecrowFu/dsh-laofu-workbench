@@ -23,8 +23,11 @@ export class LwbPackGateway extends TypertRemoteService {
   }
 
   async list() {
-    await this.ctx.lwbPackRuntime.ready()
-    return { schemaVersion: 1, packs: this.ctx.lwbPackRegistry.list() }
+    // Bounded, not unbounded: a stuck start-up must still produce an answer the
+    // page can render ("still loading" plus the failure list) instead of leaving
+    // the request — and the capability page — open forever.
+    await this.ctx.lwbPackRuntime.settle()
+    return { schemaVersion: 1, packs: this.ctx.lwbPackRegistry.list(), startup: this.ctx.lwbPackRuntime.status() }
   }
 
   async clientGraph() {
@@ -33,7 +36,7 @@ export class LwbPackGateway extends TypertRemoteService {
   }
 
   async market() {
-    await this.ctx.lwbPackRuntime.ready()
+    await this.ctx.lwbPackRuntime.settle()
     return this.ctx.lwbPackRuntime.market()
   }
 

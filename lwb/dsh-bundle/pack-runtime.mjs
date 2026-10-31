@@ -17,6 +17,24 @@ function clientOnly(entry) {
   return entry.options.config?.clientOnly === true
 }
 
+/**
+ * Settle `promise` within `ms`, or fail with a sentence a person can act on.
+ *
+ * Pack mounting runs inside the workbench's own start-up. An entry that waits
+ * on a service that never arrives would otherwise hold the whole restoration
+ * queue — and every `lwbPacks/list` waiting behind it — open forever.
+ */
+function withinTimeout(promise, ms, message) {
+  if (!Number.isFinite(ms) || ms <= 0) return promise
+  let timer
+  const timeout = new Promise((_, reject) => {
+    // Deliberately not unref'd: the caller is awaiting this race, so when the
+    // operation is stuck the timeout is the only thing left to answer with.
+    timer = setTimeout(() => reject(new Error(message)), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => { clearTimeout(timer) })
+}
+
 export { projectClientBundle } from './dsh-adapter/loader.mjs'
 
 /**
@@ -34,6 +52,33 @@ export class LwbPackRuntime {
     this.tail = Promise.resolve()
     this.restoreFailures = new Map()
     this.startupRestore = Promise.resolve()
+    // The browser asks `lwbPacks/list` as soon as it boots. It has to be able to
+    // tell "still restoring" from "nothing is installed" — an empty registry
+    // means either one, and the page used to render both as "尚未加载".
+    //
+    // A runtime that exists has not finished restoring, so this starts `true`:
+    // the web server answers before the bundle finishes applying, and a read in
+    // that window used to report `armed:false`, which the page could only read
+    // as "nothing installed" — permanently, because nothing re-read it.
+    this.armed = true
+    this.started = false
+    this.restoring = false
+    this.mountTimeoutMs = Number.isFinite(options.mountTimeoutMs) ? options.mountTimeoutMs : 20_000
+  }
+
+  /** Record that restoration is about to wait for its activation conditions. */
+  arm() {
+    this.armed = true
+  }
+
+  /** What the browser needs to explain an empty catalog. */
+  status() {
+    return {
+      armed: this.armed,
+      started: this.started,
+      restoring: this.restoring,
+      failed: [...this.restoreFailures].map(([id, message]) => ({ id, message })),
+    }
   }
 
   serial(operation) {
@@ -106,14 +151,28 @@ export class LwbPackRuntime {
   removeEntry(entry) { return this.driver.removeEntry(entry) }
 
   setStartupRestore(task) {
+    this.armed = true
+    this.started = true
+    this.restoring = true
     this.startupRestore = Promise.resolve(task).catch((error) => {
       this.ctx.logger.error(error)
       return { loaded: [], failed: [{ id: 'startup', error: error instanceof Error ? error.message : String(error) }] }
-    })
+    }).finally(() => { this.restoring = false })
   }
 
   ready() {
     return this.startupRestore
+  }
+
+  /**
+   * Wait for restoration, but never longer than `ms`.
+   *
+   * Read paths (`list`, `market`) use this: a caller that only needs today's
+   * shape must not inherit a stuck start-up. The report is dropped on timeout —
+   * `status()` already carries the failures.
+   */
+  async settle(ms = 2_000) {
+    await withinTimeout(this.startupRestore, ms, '能力包正在恢复。').catch(() => {})
   }
 
   async restore() {
@@ -122,23 +181,43 @@ export class LwbPackRuntime {
       try {
         packs = await marketplaceLwbPacks()
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        // Recorded, not just returned: `status()` is what the page renders, and
+        // a read that failed here is exactly the case where the catalog is empty
+        // for a reason the user has to see.
+        this.restoreFailures.set('marketplace', message)
         this.ctx.logger.error(error)
-        return { loaded: [], failed: [{ id: 'marketplace', error: error instanceof Error ? error.message : String(error) }] }
+        return { loaded: [], failed: [{ id: 'marketplace', error: message }] }
       }
 
       const loaded = []
       const failed = []
-      for (const pack of packs.filter((candidate) => candidate.enabled === true)) {
+      const enabled = packs.filter((candidate) => candidate.enabled === true)
+      this.ctx.logger.info?.(`lwb: restoring ${enabled.length} enabled capability pack(s)`)
+      const budget = this.mountTimeoutMs >= 1_000
+        ? `${Math.round(this.mountTimeoutMs / 1_000)} 秒`
+        : `${Math.round(this.mountTimeoutMs)} 毫秒`
+      for (const pack of enabled) {
+        const id = pack.manifest.id
+        const startedAt = Date.now()
         try {
-          loaded.push(await this.mount(pack))
-          this.restoreFailures.delete(pack.manifest.id)
+          // The timeout reports the stall; it does not cancel the mount, which
+          // may still finish later and register the pack on its own.
+          loaded.push(await withinTimeout(
+            this.mount(pack),
+            this.mountTimeoutMs,
+            `能力包 ${JSON.stringify(id)} 在 ${budget}内没有完成加载。`,
+          ))
+          this.restoreFailures.delete(id)
+          this.ctx.logger.info?.(`lwb: restored ${JSON.stringify(id)} in ${Date.now() - startedAt} ms`)
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
-          this.restoreFailures.set(pack.manifest.id, message)
-          this.ctx.logger.error(`LWB capability pack ${JSON.stringify(pack.manifest.id)} was not restored: ${message}`)
-          failed.push({ id: pack.manifest.id, error: message })
+          this.restoreFailures.set(id, message)
+          this.ctx.logger.error(`LWB capability pack ${JSON.stringify(id)} was not restored: ${message}`)
+          failed.push({ id, error: message })
         }
       }
+      this.ctx.logger.info?.(`lwb: capability pack restoration finished — ${loaded.length} loaded, ${failed.length} failed`)
       return { loaded, failed }
     })
   }

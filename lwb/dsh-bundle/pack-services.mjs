@@ -647,6 +647,19 @@ export class LwbPackServices {
         isolate: { compaction: true },
         config: [COMPACTION_ROW],
       }],
+    }).catch((error) => {
+      /*
+       * "Duplicate agent preset" is not this Session's problem: the registry is
+       * process-wide and outlives this service, so a second instance (a
+       * remounted pack, a reloaded bundle) finds the id already there. Treating
+       * that as a failure used to take every conversation in every pack down
+       * with it — the drawer showed the raw error and would not open — and
+       * because the rejected promise stayed in the cache the outage lasted
+       * until the process restarted. The id is what the caller needs, and it
+       * exists either way.
+       */
+      if (!/duplicate/iu.test(String(error?.message ?? error))) throw error
+      return this.ctx.agentPresets.resolve('lwb-pack-no-tools')
     })
     await this.noToolsPreset
     return 'lwb-pack-no-tools'
