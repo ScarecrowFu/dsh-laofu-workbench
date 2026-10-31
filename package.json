@@ -46,6 +46,7 @@
   "dependencies": {
     "@algorithm.ts/gomoku": "4.0.5",
     "@babel/parser": "7.24.1",
+    "@larksuiteoapi/node-sdk": "1.76.0",
     "@remotion/bundler": "4.0.522",
     "@remotion/cli": "4.0.522",
     "@remotion/renderer": "4.0.522",
