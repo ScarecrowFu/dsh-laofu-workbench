@@ -274,12 +274,12 @@ func extractZip(archive, destination string, rep report) (int, error) {
 			return 0, fmt.Errorf("安装包里含有越界路径：%s", entry.Name)
 		}
 		if strings.HasSuffix(entry.Name, "/") {
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := os.MkdirAll(nativePath(target), 0o755); err != nil {
 				return 0, err
 			}
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		if err := os.MkdirAll(nativePath(filepath.Dir(target)), 0o755); err != nil {
 			return 0, err
 		}
 		if err := writeEntry(entry, target); err != nil {
@@ -301,7 +301,7 @@ func writeEntry(entry *zip.File, target string) error {
 		return err
 	}
 	defer source.Close()
-	file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	file, err := os.OpenFile(nativePath(target), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
