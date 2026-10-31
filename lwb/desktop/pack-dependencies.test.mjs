@@ -6,7 +6,11 @@ import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 
 const PROJECT_ROOT = fileURLToPath(new URL('../..', import.meta.url))
-const COMMERCIAL_ROOT = join(PROJECT_ROOT, '..', 'dsh-laofu-workbench-commercial')
+// The release runner extracts the commercial checkout to its own directory and
+// names it in LWB_COMMERCIAL_PACK_DIR; a developer machine keeps it beside this
+// repository. Either way the commercial packs are checked when present.
+const COMMERCIAL_ROOT = process.env.LWB_COMMERCIAL_PACK_DIR?.trim()
+  || join(PROJECT_ROOT, '..', 'dsh-laofu-workbench-commercial')
 
 async function packDirectories(root) {
   if (!existsSync(root)) return []
@@ -19,8 +23,8 @@ async function packDirectories(root) {
 // package.json and copies packs without their node_modules, so a dependency a
 // pack declares only for itself is missing from the build. The packaged
 // acceptance finds that only at the very end of a long packaging run; this
-// finds it in the unit suite. The commercial checkout is checked when it sits
-// beside this repository, and skipped where it does not, as in public CI.
+// finds it in the unit suite. Where no commercial checkout exists, as in
+// public CI, only the public packs are checked.
 test('every runtime dependency a pack declares is a product dependency', async () => {
   const product = JSON.parse(await readFile(join(PROJECT_ROOT, 'package.json'), 'utf8'))
   const declared = new Set(Object.keys(product.dependencies ?? {}))
