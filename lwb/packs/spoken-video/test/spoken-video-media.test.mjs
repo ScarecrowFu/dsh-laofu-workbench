@@ -960,6 +960,116 @@ test('accepts Bailian WAVs with an unbounded RIFF size, retries incomplete segme
   assert.equal(Number(probe.format.duration) > 0.45, true)
 })
 
+test('names the transport cause behind a bare Bailian fetch failure', async (t) => {
+  const cwd = await workspace(t)
+  const currentAgent = agent(cwd)
+  // undici 的形状：所有传输失败都是 `TypeError: fetch failed`，真正原因在 cause 上；
+  // Happy Eyeballs 再为每个候选地址各报一条，挂在 AggregateError.errors 上。
+  const refused = Object.assign(new Error('connect ECONNREFUSED 8.152.159.24:443'), { code: 'ECONNREFUSED', syscall: 'connect', address: '8.152.159.24', port: 443 })
+  const closed = Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' })
+  const failure = new TypeError('fetch failed', { cause: new AggregateError([refused, closed], 'all connections failed') })
+  const host = new SpokenVideoMediaHost({
+    projectsStore: new SpokenVideoProjectStore(),
+    credentials: credentialStore({ DASHSCOPE_API_KEY: 'sk-bailian-transport' }),
+    environment: { LWB_SPOKEN_VIDEO_BAILIAN_BASE_URL: 'https://workspace.test/api/v1' },
+    fetch: async () => { throw failure },
+  })
+  const task = await host.startAudioTask(currentAgent, {
+    subtitleEnabled: false,
+    title: '百炼网络诊断',
+    text: '这是用来验证传输失败原因链的口播稿。',
+    provider: 'bailian',
+    voiceSource: 'preset',
+    voiceId: 'test-voice',
+  })
+  const finished = await waitForAudioTask(host, currentAgent, task.id)
+  assert.equal(finished.status, 'failed')
+  // 段位与耗时仍要在，且原因链要一路读到 socket 级错误：只写 `fetch failed` 等于没诊断。
+  assert.match(finished.error, /^百炼 TTS 第 1\/1 段不可访问（耗时 \d+(?:ms|s)；原因 TypeError: fetch failed/u)
+  assert.match(finished.error, /AggregateError: all connections failed/u)
+  assert.match(finished.error, /\[ECONNREFUSED\]: connect ECONNREFUSED 8\.152\.159\.24:443/u)
+  assert.match(finished.error, /\[UND_ERR_SOCKET\]: other side closed/u)
+})
+
+test('retries a segment whose synthesis request never reached a response', async (t) => {
+  if (!mediaBinariesAvailable()) { t.skip('ffmpeg or ffprobe is unavailable in this environment'); return }
+  const cwd = await workspace(t)
+  const currentAgent = agent(cwd)
+  const audioFile = join(cwd, 'retry.wav')
+  execFileSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=520:duration=0.3', '-ac', '1', '-ar', '16000', audioFile], { stdio: 'ignore' })
+  const audio = await readFile(audioFile)
+  let ttsAttempts = 0
+  const host = new SpokenVideoMediaHost({
+    projectsStore: new SpokenVideoProjectStore(),
+    credentials: credentialStore({ DASHSCOPE_API_KEY: 'sk-bailian-retry' }),
+    environment: { LWB_SPOKEN_VIDEO_BAILIAN_BASE_URL: 'https://workspace.test/api/v1' },
+    fetch: async (url) => {
+      const parsed = new URL(String(url))
+      if (parsed.pathname === '/api/v1/services/audio/tts/SpeechSynthesizer') {
+        ttsAttempts += 1
+        // 前两次是链路抖动：一个字节的响应都没拿到，第三次才通。
+        if (ttsAttempts <= 2) throw new TypeError('fetch failed', { cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }) })
+        return new Response(JSON.stringify({ request_id: 'tts_after_retry', output: { audio: { url: 'https://media.test/retry.wav' } } }))
+      }
+      if (parsed.hostname === 'media.test') return new Response(audio, { headers: { 'content-length': String(audio.length), 'content-type': 'audio/wav' } })
+      throw new Error(`unexpected request: ${url}`)
+    },
+  })
+  const task = await host.startAudioTask(currentAgent, {
+    subtitleEnabled: false, title: '传输重试', text: '这是一段用来验证传输失败重试的稿子。', provider: 'bailian', voiceSource: 'preset', voiceId: 'test-voice',
+  })
+  const finished = await waitForAudioTask(host, currentAgent, task.id, 30_000)
+  assert.equal(finished.status, 'succeeded', finished.error)
+  assert.equal(ttsAttempts, 3)
+})
+
+test('resumes a multi-segment Bailian voiceover from the segments already synthesised', async (t) => {
+  if (!mediaBinariesAvailable()) { t.skip('ffmpeg or ffprobe is unavailable in this environment'); return }
+  const cwd = await workspace(t)
+  const store = new SpokenVideoProjectStore()
+  const currentAgent = agent(cwd)
+  const audioFile = join(cwd, 'segment.wav')
+  execFileSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=430:duration=0.3', '-ac', '1', '-ar', '16000', audioFile], { stdio: 'ignore' })
+  const audio = await readFile(audioFile)
+  // 401 个无标点字符会被切成 400 + 1 两段。
+  const text = '甲'.repeat(401)
+  const observed = { longSegments: 0, shortSegments: 0 }
+  let failShortSegment = true
+  const host = new SpokenVideoMediaHost({
+    projectsStore: store,
+    credentials: credentialStore({ DASHSCOPE_API_KEY: 'sk-bailian-resume' }),
+    environment: { LWB_SPOKEN_VIDEO_BAILIAN_BASE_URL: 'https://workspace.test/api/v1' },
+    fetch: async (url, init = {}) => {
+      const parsed = new URL(String(url))
+      if (parsed.pathname === '/api/v1/services/audio/tts/SpeechSynthesizer') {
+        const long = Array.from(JSON.parse(init.body).input.text).length > 1
+        if (long) observed.longSegments += 1
+        else {
+          observed.shortSegments += 1
+          if (failShortSegment) throw new TypeError('fetch failed', { cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }) })
+        }
+        const name = long ? 'long' : 'short'
+        return new Response(JSON.stringify({ request_id: `tts_${name}`, output: { audio: { url: `https://media.test/${name}.wav` } } }))
+      }
+      if (parsed.hostname === 'media.test') return new Response(audio, { headers: { 'content-length': String(audio.length), 'content-type': 'audio/wav' } })
+      throw new Error(`unexpected request: ${url}`)
+    },
+  })
+  const request = { subtitleEnabled: false, title: '断点续做', text, provider: 'bailian', voiceSource: 'preset', voiceId: 'test-voice' }
+  const first = await waitForAudioTask(host, currentAgent, (await host.startAudioTask(currentAgent, request)).id, 30_000)
+  assert.equal(first.status, 'failed')
+  assert.match(first.error, /第 2\/2 段不可访问/u)
+  assert.equal(observed.longSegments, 1)
+  assert.equal(observed.shortSegments, 3, '传输失败要按次重试，而不是一次就放弃')
+
+  // 同一个稿子重跑：第 1 段已在缓存里，不该再花一次合成。
+  failShortSegment = false
+  const finished = await waitForAudioTask(host, currentAgent, (await host.startAudioTask(currentAgent, request)).id, 30_000)
+  assert.equal(finished.status, 'succeeded', finished.error)
+  assert.equal(observed.longSegments, 1, '第 1 段必须来自缓存')
+  assert.equal(observed.shortSegments, 4, '只有失败的那一段重新合成')
+})
+
 test('uses the documented Bailian realtime ASR event flow to produce timestamped subtitles', async (t) => {
   if (!mediaBinariesAvailable()) { t.skip('ffmpeg or ffprobe is unavailable in this environment'); return }
   const server = new WebSocketServer({ port: 0 })

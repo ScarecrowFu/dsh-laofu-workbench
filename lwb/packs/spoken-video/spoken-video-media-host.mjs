@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { execFile, spawn } from 'node:child_process'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -68,7 +68,15 @@ const LWB_VOICE_ASSET_MARGIN_MS = 10 * 60 * 1000
 /** 上传应答没声明过期时间时的保守有效期。 */
 const LWB_VOICE_ASSET_FALLBACK_MS = 60 * 60 * 1000
 const BAILIAN_WAV_DOWNLOAD_ATTEMPTS = 2
-const BAILIAN_TTS_SEGMENT_ATTEMPTS = 2
+/** 一段合成遇到传输失败时的总尝试次数。一次链路抖动不该让整单作废；
+    重试可能让服务端再算一笔，但一段的字数成本远小于整单重跑。 */
+const BAILIAN_TTS_TRANSPORT_ATTEMPTS = 3
+/** 合成成功但音频不可用时重新合成的次数：那是确定的另一笔账单，只再来一次。 */
+const BAILIAN_TTS_RESYNTHESIS_ATTEMPTS = 2
+/** 传输重试的退避基数：第 n 次失败后等 n × 这个数。 */
+const BAILIAN_TTS_RETRY_DELAY_MS = 800
+/** 分段缓存的保留时间：失败任务留下的段只在这段时间内可复用，之后由下次运行清掉。 */
+const VOICEOVER_SEGMENT_TTL_MS = 24 * 60 * 60 * 1000
 const BAILIAN_ASR_SAMPLE_RATE = 16_000
 const BAILIAN_ASR_CHUNK_MS = 100
 const BAILIAN_ASR_CHUNK_BYTES = BAILIAN_ASR_SAMPLE_RATE * 2 * BAILIAN_ASR_CHUNK_MS / 1_000
@@ -85,6 +93,69 @@ function fail(code, message) {
 
 function mediaErrorMessage(error) {
   return String(error instanceof Error ? error.message : error).replace(/^Error \[[A-Z0-9_]+\]\s*/u, '')
+}
+
+/** 传输失败向下追溯的层数：`fetch failed` → 聚合错误 → 具体 socket 错误，通常 3 层到底。 */
+const TRANSPORT_CAUSE_DEPTH = 4
+/** 聚合错误里最多展开的候选地址数：Happy Eyeballs 会为每个候选地址各报一条。 */
+const TRANSPORT_CAUSE_BRANCHES = 4
+
+/** 耗时写成人读得懂的一小段：小于一秒给毫秒，否则给一位小数的秒。 */
+function elapsedText(milliseconds) {
+  return milliseconds < 1_000 ? `${milliseconds}ms` : `${(milliseconds / 1_000).toFixed(1)}s`
+}
+
+/** 一个错误节点读成 `Name [CODE]: message (syscall address:port)`；读不出内容时返回空串。 */
+function transportCauseLabel(value) {
+  const name = typeof value.name === 'string' ? value.name.trim() : ''
+  const code = typeof value.code === 'string' ? value.code.trim() : ''
+  const message = typeof value.message === 'string' ? value.message.trim() : ''
+  // 地址只在 message 没提到时补上，避免 `connect ECONNREFUSED 1.2.3.4:443 (connect 1.2.3.4:443)`。
+  const named = typeof value.address === 'string' && value.address && !message.includes(value.address)
+    ? [value.syscall, value.address].filter(part => typeof part === 'string' && part).join(' ')
+      + (Number.isInteger(value.port) ? `:${value.port}` : '')
+    : ''
+  const head = name && name !== 'Error' ? `${name}${code ? ` [${code}]` : ''}` : code ? `[${code}]` : ''
+  return [head, [message, named].filter(Boolean).join(' ')].filter(Boolean).join(': ')
+}
+
+/**
+ * A `fetch` rejection, flattened onto one line.
+ *
+ * undici reduces every DNS, connect, TLS, timeout and peer-close failure to a bare
+ * `TypeError: fetch failed`; the actionable part — `ENOTFOUND`, `ECONNRESET`,
+ * `UND_ERR_HEADERS_TIMEOUT`, the address that refused — lives only on `cause`.
+ * Happy Eyeballs reports one error per candidate address through
+ * `AggregateError.errors`, so the branches are walked as well. Without this the
+ * only thing an operator can see is "fetch failed", which names no failure at all.
+ */
+function transportFailureDetail(error) {
+  const seen = new Set()
+  const labels = []
+  const visit = (value, depth) => {
+    if (value === null || value === undefined || depth > TRANSPORT_CAUSE_DEPTH) return
+    if (typeof value !== 'object') { labels.push(String(value)); return }
+    if (seen.has(value)) return
+    seen.add(value)
+    const label = transportCauseLabel(value)
+    if (label) labels.push(label)
+    visit(value.cause, depth + 1)
+    if (Array.isArray(value.errors)) for (const nested of value.errors.slice(0, TRANSPORT_CAUSE_BRANCHES)) visit(nested, depth + 1)
+  }
+  visit(error, 0)
+  return labels.length ? labels.join(' → ') : mediaErrorMessage(error)
+}
+
+/**
+ * 一次没拿到任何响应的请求。错误码保持 `SPOKEN_VIDEO_MEDIA_SERVICE_UNREACHABLE`，
+ * 只是把「等了多久」和整条原因链写进文案：连接被拒是立刻失败，超时是几十秒后失败，
+ * 两者只有耗时能分开，而具体原因只有 `cause` 知道。
+ */
+function unreachable(label, error, startedAt) {
+  return new SpokenVideoMediaError(
+    'SPOKEN_VIDEO_MEDIA_SERVICE_UNREACHABLE',
+    `${label}不可访问（耗时 ${elapsedText(Date.now() - startedAt)}；原因 ${transportFailureDetail(error)}）`,
+  )
 }
 
 function providerFailure(label, detail) {
@@ -1756,11 +1827,12 @@ export class SpokenVideoMediaHost {
   }
 
   async #externalJson(url, init, label) {
+    const startedAt = Date.now()
     let response
     try {
       response = await this.fetch(url, init)
     } catch (error) {
-      throw new SpokenVideoMediaError('SPOKEN_VIDEO_MEDIA_SERVICE_UNREACHABLE', `${label}不可访问：${error instanceof Error ? error.message : String(error)}`)
+      throw unreachable(label, error, startedAt)
     }
     let body
     try {
@@ -1776,11 +1848,12 @@ export class SpokenVideoMediaHost {
   }
 
   async #downloadData(url, label, headers = {}) {
+    const startedAt = Date.now()
     let response
     try {
       response = await this.fetch(boundedHttpUrl(url, label), { method: 'GET', headers })
     } catch (error) {
-      throw new SpokenVideoMediaError('SPOKEN_VIDEO_MEDIA_SERVICE_UNREACHABLE', `${label}下载失败：${error instanceof Error ? error.message : String(error)}`)
+      throw unreachable(label, error, startedAt)
     }
     if (!response.ok) fail('SPOKEN_VIDEO_MEDIA_SERVICE_FAILED', `${label}下载失败（HTTP ${response.status}）。`)
     const contentLengthHeader = response.headers.get('content-length')
@@ -1851,33 +1924,47 @@ export class SpokenVideoMediaHost {
     )
   }
 
+  /**
+   * 一段合成。两类失败分开处理：**传输失败**（一个字节的响应都没拿到）按次退避重试，
+   * 一次抖动不该让跑了几分钟的整单作废；**音频不可用**则必须重新合成，那是确定的另一笔
+   * 账单，所以只再来一次。其余错误（供应商 4xx、额度、凭据）本来就是确定结论，直接抛。
+   */
   async #bailianTtsSegment(config, apiKey, model, voice, segment, details, source, output) {
-    let lastError = null
-    for (let attempt = 1; attempt <= BAILIAN_TTS_SEGMENT_ATTEMPTS; attempt += 1) {
-      const body = await this.#externalJson(`${config.bailianBaseUrl}/services/audio/tts/SpeechSynthesizer`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, input: { text: segment, voice, format: 'wav', sample_rate: 24000 } }),
-        signal: AbortSignal.timeout(MAX_POLL_MS),
-      }, `百炼 TTS 第 ${details.index}/${details.total} 段`)
-      const audioUrl = stringAt(body, ['output', 'audio', 'url'])
-      if (!audioUrl) fail('SPOKEN_VIDEO_MEDIA_SERVICE_FAILED', `百炼 TTS 第 ${details.index}/${details.total} 段没有返回完整音频地址。`)
-      const requestId = stringAt(body, ['request_id'])
+    const label = `百炼 TTS 第 ${details.index}/${details.total} 段`
+    let transportFailures = 0
+    let resyntheses = 0
+    for (;;) {
       try {
-        const downloaded = await this.#downloadBailianWav(audioUrl, source, output, { ...details, requestId })
-        return { ...downloaded, requestId }
+        const body = await this.#externalJson(`${config.bailianBaseUrl}/services/audio/tts/SpeechSynthesizer`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model, input: { text: segment, voice, format: 'wav', sample_rate: 24000 } }),
+          signal: AbortSignal.timeout(MAX_POLL_MS),
+        }, label)
+        const audioUrl = stringAt(body, ['output', 'audio', 'url'])
+        if (!audioUrl) fail('SPOKEN_VIDEO_MEDIA_SERVICE_FAILED', `${label}没有返回完整音频地址。`)
+        const requestId = stringAt(body, ['request_id'])
+        return { ...(await this.#downloadBailianWav(audioUrl, source, output, { ...details, requestId })), requestId }
       } catch (error) {
-        if (error?.code && error.code !== 'SPOKEN_VIDEO_MEDIA_FILE_INVALID') throw error
-        lastError = error
-        if (attempt < BAILIAN_TTS_SEGMENT_ATTEMPTS) await delay(500 * attempt)
+        if (error?.code === 'SPOKEN_VIDEO_MEDIA_SERVICE_UNREACHABLE') {
+          transportFailures += 1
+          await unlink(source).catch(() => {})
+          await unlink(output).catch(() => {})
+          if (transportFailures >= BAILIAN_TTS_TRANSPORT_ATTEMPTS) throw error
+          await delay(BAILIAN_TTS_RETRY_DELAY_MS * transportFailures)
+          continue
+        }
+        if (error?.code !== 'SPOKEN_VIDEO_MEDIA_FILE_INVALID') throw error
+        resyntheses += 1
+        if (resyntheses >= BAILIAN_TTS_RESYNTHESIS_ATTEMPTS) {
+          throw new SpokenVideoMediaError(
+            'SPOKEN_VIDEO_MEDIA_FILE_INVALID',
+            `${label}在重新合成后仍无有效 WAV：${mediaErrorMessage(error)}`,
+          )
+        }
+        await delay(500 * resyntheses)
       }
     }
-    if (lastError?.code && lastError.code !== 'SPOKEN_VIDEO_MEDIA_FILE_INVALID') throw lastError
-    const reason = lastError instanceof Error ? lastError.message : String(lastError)
-    throw new SpokenVideoMediaError(
-      'SPOKEN_VIDEO_MEDIA_FILE_INVALID',
-      `百炼 TTS 第 ${details.index}/${details.total} 段在重新合成后仍无有效 WAV：${reason}`,
-    )
   }
 
   /** 把多段 WAV 首尾相接成一个。只有 WAV 能这样拼，所以调用方必须先说明自己拿到的是 WAV。 */
@@ -1914,22 +2001,81 @@ export class SpokenVideoMediaHost {
         : config.bailianDefaultVoice
     const model = reference ? config.bailianVoiceCloneModel : config.bailianModel
     const segments = splitTtsText(script)
-    const directory = await mkdtemp(join(tmpdir(), 'lwb-spoken-video-bailian-'))
+    // 多段落在数据目录里（按 模型 + 音色 + 文本 命名），失败后重跑能接着用已合成的段；
+    // 单段没有可复用的部分，仍旧用临时目录，跑完即弃。
+    const resumable = segments.length > 1
+    const directory = resumable
+      ? await this.#voiceoverSegmentDirectory(root, model, voice, script)
+      : await mkdtemp(join(tmpdir(), 'lwb-spoken-video-bailian-'))
     const chunks = []
     const taskIds = []
+    // 临时名带上任务 id：同一个稿子被同时点两次时，两次运行不会互相踩对方的半成品。
+    const runTag = String(run?.id ?? '').replace(/[^A-Za-z0-9-]/gu, '').slice(0, 40) || randomUUID().slice(0, 8)
     try {
       for (const [offset, segment] of segments.entries()) {
         const index = offset + 1
         const file = join(directory, `segment-${String(index).padStart(3, '0')}.wav`)
-        const source = join(directory, `segment-${String(index).padStart(3, '0')}.source.wav`)
-        const chunk = await this.#bailianTtsSegment(config, apiKey, model, voice, segment, { index, total: segments.length }, source, file)
+        const cached = resumable ? await this.#reusableSegment(file) : null
+        if (cached) { chunks.push({ ...cached, file }); continue }
+        const source = `${file}.${runTag}.source.wav`
+        // 段先写进临时名，校验通过才占用正式名：中断留下的半截文件不会被下次运行当成已合成。
+        const target = resumable ? `${file}.${runTag}.part.wav` : file
+        const chunk = await this.#bailianTtsSegment(config, apiKey, model, voice, segment, { index, total: segments.length }, source, target)
+        if (resumable) await rename(target, file)
+        await unlink(source).catch(() => {})
         chunks.push({ ...chunk, file })
         if (chunk.requestId) taskIds.push(chunk.requestId)
       }
-      return { provider: 'bailian', taskId: taskIds.at(-1) || null, voiceId: voice, audio: await this.#concatWavSegments(directory, chunks) }
+      const audio = resumable
+        ? await this.#mergeSegments(directory, chunks)
+        : await this.#concatWavSegments(directory, chunks)
+      return { provider: 'bailian', taskId: taskIds.at(-1) || null, voiceId: voice, audio }
     } finally {
+      if (!resumable) await rm(directory, { recursive: true, force: true }).catch(() => {})
+    }
+  }
+
+  /** 合并放在本次运行自己的子目录里：同一个稿子的两次并发运行不会互相覆盖 manifest 与 merged.wav。 */
+  async #mergeSegments(directory, chunks) {
+    const scratch = await mkdtemp(join(directory, 'merge-'))
+    try { return await this.#concatWavSegments(scratch, chunks) }
+    finally { await rm(scratch, { recursive: true, force: true }).catch(() => {}) }
+  }
+
+  /**
+   * 分段缓存的目录：`模型 + 音色 + 全文` 的哈希，因此改稿、换音色、换模型都不会误用旧段。
+   * 顺带清掉过期的缓存目录——只有中断/失败的任务会留下东西，保留到 TTL 足够让重跑接上。
+   */
+  async #voiceoverSegmentDirectory(root, model, voice, script) {
+    await this.#sweepVoiceoverSegments(root)
+    const key = createHash('sha256').update(`${model}\u0000${voice}\u0000${script}`).digest('hex').slice(0, 32)
+    // 借 safeMediaTarget 建目录：它逐段拒绝符号链接，并保证结果留在项目数据目录内。
+    const marker = await safeMediaTarget(root, `audio-media/voiceover-segments/${key}/segment-001.wav`, '配音分段缓存', true)
+    return dirname(marker)
+  }
+
+  async #sweepVoiceoverSegments(root) {
+    const base = join(root, 'audio-media', 'voiceover-segments')
+    const entries = await readdir(base, { withFileTypes: true }).catch(() => [])
+    const cutoff = Date.now() - VOICEOVER_SEGMENT_TTL_MS
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !/^[a-f0-9]{32}$/u.test(entry.name)) continue
+      const directory = join(base, entry.name)
+      const info = await lstat(directory).catch(() => null)
+      if (!info || info.isSymbolicLink() || info.mtimeMs > cutoff) continue
       await rm(directory, { recursive: true, force: true }).catch(() => {})
     }
+  }
+
+  /** 已经合成好且仍然可用的一段；坏文件当作没有，让它重新合成。 */
+  async #reusableSegment(file) {
+    const info = await lstat(file).catch(() => null)
+    if (!info?.isFile() || info.isSymbolicLink() || info.size < 44) return null
+    const audio = await readFile(file).catch(() => null)
+    if (!audio || wavContainerError(audio)) return null
+    const probe = await this.#probe(file).catch(() => null)
+    if (!probe?.hasAudio || !probe.durationSeconds) return null
+    return { bytes: audio.length, probe }
   }
 
   #storedBailianReferenceVoices() {
@@ -2276,11 +2422,12 @@ export class SpokenVideoMediaHost {
   }
 
   async #json(config, path, init) {
+    const startedAt = Date.now()
     let response
     try {
       response = await this.fetch(`${config.baseUrl}${path}`, { ...init, headers: { ...serviceHeaders(config), ...(init?.headers || {}) } })
     } catch (error) {
-      throw new SpokenVideoMediaError('SPOKEN_VIDEO_MEDIA_SERVICE_UNREACHABLE', `无法连接媒体服务：${error instanceof Error ? error.message : String(error)}`)
+      throw unreachable('媒体服务', error, startedAt)
     }
     let body
     try {
