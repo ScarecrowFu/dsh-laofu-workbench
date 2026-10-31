@@ -148,6 +148,23 @@ export async function verifyPackagedPacks({ executable, resources, target }) {
       return result.value
     }
   }
+  // `lwbPacks/list` answers within about two seconds whether or not start-up
+  // restoration has finished, and reports which one through `startup`. A read
+  // straight after a start can therefore predate the restore — on a Rosetta
+  // build it routinely does — so lifecycle assertions wait for the Host to say
+  // restoration is over, within the same deadline as host readiness.
+  async function restoredCatalog(rpc) {
+    const deadline = performance.now() + budget.ready
+    for (;;) {
+      const catalog = await rpc('lwbPacks/list')
+      const startup = catalog.startup ?? {}
+      if (startup.started === true && startup.restoring !== true) return catalog
+      if (performance.now() > deadline) {
+        throw new Error(`Packaged acceptance: pack restoration did not finish within ${budget.ready}ms (${JSON.stringify(startup)})`)
+      }
+      await new Promise(resolve => setTimeout(resolve, 500))
+    }
+  }
   async function prepareProfile() {
     await execFileAsync(executable, ['--expose-internals', '--input-type=module', '--eval', `
       import { pathToFileURL } from 'node:url'
@@ -192,11 +209,11 @@ export async function verifyPackagedPacks({ executable, resources, target }) {
     assert.ok(free.length, 'the edition must ship a keyless pack for lifecycle acceptance')
     await prepareProfile()
     let rpc = await start()
-    assert.equal((await rpc('lwbPacks/list')).packs.length, 0)
+    assert.equal((await restoredCatalog(rpc)).packs.length, 0)
     await stop()
     await seedUpgrade(free, false)
     rpc = await start()
-    assert.equal((await rpc('lwbPacks/list')).packs.length, 0)
+    assert.equal((await restoredCatalog(rpc)).packs.length, 0)
     for (const pack of free) {
       const loaded = await rpc('lwbPacks/load', { request: { id: pack.id } })
       assert.equal(loaded.status, 'loaded')
@@ -215,7 +232,10 @@ export async function verifyPackagedPacks({ executable, resources, target }) {
     await stop()
     await seedUpgrade(free, true)
     rpc = await start()
-    for (const pack of free) assert.ok((await rpc('lwbPacks/list')).packs.some(row => row.id === pack.id))
+    const restored = await restoredCatalog(rpc)
+    for (const pack of free) {
+      assert.ok(restored.packs.some(row => row.id === pack.id), `${pack.id} was not restored: ${JSON.stringify(restored.startup)}`)
+    }
     assert.equal((await rpc('spokenVideo/listAccounts')).accounts[0].name, 'Packaged acceptance account')
     for (const pack of free) await rpc('lwbPacks/unload', { request: { id: pack.id } })
     await stop()
