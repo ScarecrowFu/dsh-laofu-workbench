@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { randomBytes } from 'node:crypto'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -137,4 +138,35 @@ test('an empty directory is refused instead of producing an empty archive', asyn
   const root = await mkdtemp(join(tmpdir(), 'lwb-zip-empty-'))
   const output = join(await mkdtemp(join(tmpdir(), 'lwb-zip-empty-out-')), 'package.zip')
   await assert.rejects(() => writeZip({ source: root, output }), /Nothing to archive/u)
+})
+
+test('a large archive does not collect an error listener per backpressure wait', async () => {
+  // Waiting for the disk to catch up is the normal case for a 1.3 GB tree, and a
+  // listener per wait both leaks and leaves stale handlers behind: the next
+  // write failure lands on handlers whose promises are long settled. Enough
+  // incompressible data to back the output stream up more than ten times.
+  const root = await mkdtemp(join(tmpdir(), 'lwb-zip-pressure-'))
+  const warnings = []
+  const record = warning => warnings.push(warning.name)
+  process.on('warning', record)
+  try {
+    const blob = randomBytes(4 * 1024 * 1024)
+    for (let index = 0; index < 60; index += 1) await writeFile(join(root, `blob${index}.bin`), blob)
+    const output = join(await mkdtemp(join(tmpdir(), 'lwb-zip-pressure-out-')), 'package.zip')
+    const result = await writeZip({ source: root, output, level: 1 })
+    assert.equal(result.entries, 60)
+    assert.ok(!warnings.includes('MaxListenersExceededWarning'), `warnings: ${warnings.join(', ')}`)
+  } finally {
+    process.off('warning', record)
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('an output that cannot be opened is reported instead of crashing the process', async () => {
+  // Before the writer kept its own error listener this was an unhandled `error`
+  // event: the packaging step died with a stack trace instead of saying the
+  // archive could not be written.
+  const root = await tree({ 'a.txt': 'hello' })
+  const output = join(root, 'missing-directory', 'package.zip')
+  await assert.rejects(() => writeZip({ source: root, output }), /ENOENT/u)
 })

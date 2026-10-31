@@ -75,14 +75,32 @@ class Writer {
   constructor(stream) {
     this.stream = stream
     this.offset = 0
+    // `error` is registered once for the archive's whole life, because there is
+    // no moment when the output can fail without something listening: attaching
+    // a listener per backpressure wait leaks one for every time the disk is
+    // slower than the compressor (a 1.3 GB tree does that thousands of times),
+    // and leaves nothing listening between waits — an early failure then arrives
+    // as an unhandled event, a late one is absorbed by stale handlers and the
+    // build reports a package it never finished writing.
+    this.failure = undefined
+    stream.on('error', error => { this.failure ??= error })
   }
 
   async write(buffer) {
+    if (this.failure !== undefined) throw this.failure
     this.offset += buffer.length
     if (this.stream.write(buffer)) return
     await new Promise((resolve, reject) => {
-      this.stream.once('drain', resolve)
-      this.stream.once('error', reject)
+      const settle = (error) => {
+        this.stream.off('drain', onDrain)
+        this.stream.off('error', onError)
+        if (error === undefined) resolve()
+        else reject(error)
+      }
+      const onDrain = () => settle(undefined)
+      const onError = error => settle(error)
+      this.stream.once('drain', onDrain)
+      this.stream.once('error', onError)
     })
   }
 }
@@ -192,6 +210,9 @@ export async function writeZip({ source, output, level = 1, store = () => false,
       stream.once('error', reject)
       stream.end()
     })
+    // `close` also follows a failure, so the recorded error decides: a package
+    // that ends with a short write must never look like a finished one.
+    if (writer.failure !== undefined) throw writer.failure
     onProgress(files.length)
     const written = await stat(output)
     return { entries: entries.length, bytes: written.size }
