@@ -44,7 +44,10 @@ const RELEASE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u
 const TARGETS = {
   'mac-arm64': { platform: 'darwin', arch: 'arm64', artifactType: 'mac-app-zip' },
   'mac-x64': { platform: 'darwin', arch: 'x64', artifactType: 'mac-app-zip' },
-  'win-x64': { platform: 'win32', arch: 'x64', artifactType: 'portable-exe' },
+  // Windows ships a launch package: the launcher plus an archive of the
+  // unpacked application. The launcher installs it into a versioned directory
+  // and switches to it, so the shipped app is the same file a first install is.
+  'win-x64': { platform: 'win32', arch: 'x64', artifactType: 'launch-package-zip' },
 }
 
 const HELP = `Usage: npm run release:desktop -- <options>

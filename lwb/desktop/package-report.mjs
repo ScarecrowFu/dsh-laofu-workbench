@@ -12,6 +12,7 @@ import { createReadStream, existsSync, readFileSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { artifactExtensions, resolveHostTarget, unpackedApp } from './package-inputs.mjs'
+import { LAUNCHER_FILE_NAME } from './launch-package.mjs'
 
 /**
  * Snapshot of the artifact files in one directory, keyed by name.
@@ -119,6 +120,12 @@ export async function reportArtifacts({ directory, target, productName, before, 
     log(`  build id  ${build.id}  (first launch copies it to runtime/${build.id})`)
   }
   log(`Launch with: ${launch}`)
+  if (!target.startsWith('mac-')) {
+    // The unpacked executable is for development; what users run is the launcher
+    // in the package beside it, which installs once and then reuses the result.
+    const packaged = join(directory, 'launch-package', LAUNCHER_FILE_NAME)
+    if (existsSync(packaged)) log(`Ship and launch the packaged build with: "${packaged}"`)
+  }
 
   const extensions = artifactExtensions(target)
   const produced = changedArtifacts(before, await artifactSnapshot(directory)).filter(name => isArtifactFile(name, target))

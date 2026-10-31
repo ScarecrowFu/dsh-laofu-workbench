@@ -2,7 +2,7 @@
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { cp, mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs, promisify } from 'node:util'
 import { assertUpstream, DSH_ROOT, UPSTREAM } from '../upstream.mjs'
@@ -11,7 +11,8 @@ import { desktopPnpmInvocation } from './toolchain.mjs'
 import { loadEditionManifest, resolveEdition } from './editions.mjs'
 import { assembleProductPayload } from './payload.mjs'
 import { relinkDarwinLibraries } from './darwin-library-paths.mjs'
-import { payloadInstallArguments, resolveHostTarget, resolveTargetArch, unsignedPackagingEnvironment } from './package-inputs.mjs'
+import { artifactDirectory, payloadInstallArguments, resolveHostTarget, resolveTargetArch, unsignedPackagingEnvironment } from './package-inputs.mjs'
+import { assembleLaunchPackage } from './launch-package.mjs'
 
 assertUpstream()
 const { values } = parseArgs({
@@ -185,12 +186,91 @@ const identity = {
   portable,
   targetPlatform: process.platform,
   targetArch: arch,
-  ...(unsigned ? { unsigned: true, version: buildVersion, output: join(LWB_RUNTIME.projectRoot, '.tooling', 'artifacts', edition.name, `${process.platform === 'darwin' ? 'mac' : 'win'}-${arch}`) } : {}),
+  ...(unsigned ? { unsigned: true, version: buildVersion, output: artifactDirectory(LWB_RUNTIME.projectRoot, edition.name, resolveHostTarget(process.platform, arch)) } : {}),
 }
 const config = join(stage, 'electron-builder.config.mjs')
 await writeFile(config, `export default await (await import(${JSON.stringify(new URL('./package-config.mjs', import.meta.url).href)})).createLwbPackageConfig(${JSON.stringify(payload)}, ${JSON.stringify(identity)})\n`)
 // The target architecture is explicit: the builder otherwise follows the
 // process architecture, which is the build host rather than the package.
 await pnpm(['exec', 'electron-builder', '--config', config, '--publish', 'never', `--${arch}`, ...(values.dir ? ['--dir'] : [])])
+if (portable && process.platform === 'win32' && !values.dir) {
+  // The launch package is assembled around the unpacked output, which only the
+  // unsigned flow publishes: a signed build writes wherever upstream decided.
+  if (!identity.output) throw new Error('The Windows launch package needs the unsigned flow, which is the only one that names its output directory.')
+  await packageForLauncher({ directory: identity.output, arch, buildVersion, edition, unsigned })
+}
 assertUpstream()
 console.log(`LWB Desktop package created for edition "${edition.name}" through the official builder; no artifacts were published.`)
+
+/**
+ * Wrap the unpacked Windows build in the launch package.
+ *
+ * electron-builder leaves an unpacked directory because the Windows target is
+ * `dir`; this turns it into what users download: a launcher plus one archive of
+ * that directory. The launcher unpacks once into `%LOCALAPPDATA%` and reuses it
+ * afterwards, which is the whole point of not shipping the `portable` target.
+ * @param options - packaging inputs.
+ * @param options.directory - artifact directory of the edition and target.
+ * @param options.arch - target architecture.
+ * @param options.buildVersion - version this build reports, including any `-test.N`.
+ * @param options.edition - resolved edition.
+ * @param options.unsigned - whether this is an unsigned build.
+ */
+async function packageForLauncher({ directory, arch, buildVersion, edition, unsigned }) {
+  const app = join(directory, 'win-unpacked')
+  const launcher = await buildLauncher(buildVersion)
+  console.log(`\nWrapping ${app} in a launch package (launcher ${launcher})`)
+  await assembleLaunchPackage({
+    appDirectory: app,
+    directory,
+    launcherBinary: launcher,
+    artifactName: edition.artifactName,
+    product: 'laofu-workbench',
+    productName: edition.productName,
+    version: buildVersion,
+    platform: 'win32',
+    arch,
+    unsigned,
+  })
+}
+
+/**
+ * The launcher binary, built from `lwb/desktop/launcher` with the version this
+ * build reports.
+ *
+ * `LWB_LAUNCHER_BINARY` skips the compile on a host without a Go toolchain, but
+ * a release build must not fall back to a stale artifact: the launcher ships
+ * inside the package, so the wrong one is a wrong download.
+ * @param version - version to stamp into the binary.
+ * @returns absolute path of the executable to package.
+ */
+async function buildLauncher(version) {
+  const prebuilt = process.env.LWB_LAUNCHER_BINARY
+  if (prebuilt) {
+    console.log(`Using the launcher at ${prebuilt} (LWB_LAUNCHER_BINARY)`)
+    return prebuilt
+  }
+  const output = join(LWB_RUNTIME.projectRoot, '.tooling', 'launcher', 'laofu-workbench-launcher.exe')
+  await mkdir(dirname(output), { recursive: true })
+  try {
+    await run('go', [
+      'build', '-trimpath',
+      // `windowsgui` keeps a console window from flashing up; `-s -w` drops the
+      // debug tables the launcher has no use for. The version is stamped in
+      // because the package records which launcher it carries.
+      '-ldflags', `-H windowsgui -s -w -X main.launcherVersion=${version}`,
+      '-o', output, '.',
+    ], join(LWB_RUNTIME.projectRoot, 'lwb', 'desktop', 'launcher'), {
+      // The target is this package's, not the host's: a Windows-on-ARM build
+      // host or a Go default would otherwise produce a binary the package
+      // claims is x64 but is not.
+      ...env,
+      GOOS: 'windows',
+      GOARCH: arch === 'arm64' ? 'arm64' : 'amd64',
+      CGO_ENABLED: '0',
+    })
+  } catch (error) {
+    throw new Error(`Could not build the Windows launcher (${error.message}). Install Go on the build host, or set LWB_LAUNCHER_BINARY to a prebuilt launcher.`)
+  }
+  return output
+}

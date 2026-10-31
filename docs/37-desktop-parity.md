@@ -89,6 +89,13 @@ npm run package:oneclick -- --community --release
 
 目标平台由构建机决定，目标架构由 `--arch`（或 `LWB_DESKTOP_TARGET_ARCH`）决定，未指定时跟随构建机。Windows 包在 Windows x64 上构建：本机或发行 runner；`--host win --dry-run` 可以在 macOS 上查看 Windows 那条命令的确切内容。
 
+Windows 那条腿额外需要 **Go 1.22+**：产物不再是自解压 exe，而是一个启动器加一份应用压缩包（见下文「Windows 启动器包」）。`package.mjs` 自己在构建机上跑 `go build`（并且显式指定 `GOOS=windows GOARCH=amd64`，否则 Go 会跟着构建机架构走），也可以用 `LWB_LAUNCHER_BINARY=<path>` 复用预先编好的启动器。启动器本身的测试是 Go 用例，不在 `npm test` 里（避免给所有开发机加一条硬依赖）：`npm run launcher:test`。在 macOS 上想单独编一个来检查时，必须显式给目标，否则 `-o *.exe` 会让 Go 按宿主机架构出包：
+
+```bash
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go -C lwb/desktop/launcher build -trimpath \
+  -ldflags "-H windowsgui -s -w" -o /tmp/laofu-workbench-launcher.exe .
+```
+
 macOS 的 arm64 包需要 Apple Silicon 构建机；x64 包可以在 Intel Mac 上原生构建，也可以在 Apple Silicon 上经 Rosetta 构建——准备阶段会用目标 Electron（x64）跑运行时冒烟，缺少 Rosetta 时打包在任何耗时步骤之前就报错。
 
 ### macOS 双架构（Apple Silicon / Intel）
@@ -148,23 +155,25 @@ npm run release:desktop -- --publish-all --version 0.1.9   # 三条腿齐了再�
 | --- | --- |
 | `lwb/dsh-bundle/updater/manifest.mjs` | 解析 ATS 的发布清单，按签名顺序重建后做 Ed25519 验签，再校验产品/平台/架构/通道/版本/文件名/大小 |
 | `lwb/dsh-bundle/updater/manager.mjs` | 检查 → 下载（边下边算 sha256）→ 暂存；持久化状态、忽略某版本、读取上一轮更新结果 |
-| `lwb/dsh-bundle/updater/installer.mjs` | 解析本机可替换的目标，写 job、把更新器脚本复制到数据目录并 detached 拉起 |
+| `lwb/dsh-bundle/updater/installer.mjs` | 解析本机可替换的目标，写 job，再拉起能完成替换的那个程序 |
 | `lwb/dsh-bundle/updater/scripts/lwb-update.sh` | macOS：`ditto` 解压 → 换名替换 `.app` → 去 quarantine → `open` 重开 |
-| `lwb/dsh-bundle/updater/scripts/lwb-update.{cmd,ps1}` | Windows：`Move-Item` 换名替换便携 exe → `Start-Process` 重开 |
+| `lwb/desktop/launcher`（Go，随包分发） | Windows：解包到新的版本目录 → 校验 → 切 `active.json` → 拉起；新版本起不来就回滚 |
 | `lwb/dsh-bundle/updater-gateway.mjs` | 对浏览器暴露 `state/check/install/ignore/dismiss` |
 | 左下角提示 | `client.js` 的 `.lwb-update-pill`（折叠态只剩圆点）+ 更新面板 |
 
 ### 为什么必须是外部更新器
 
-Windows 上正在运行的 exe 被占用，macOS 上应用自己就住在要被替换的那个包里——主程序无法替换自己。所以真正做替换的是脚本，而脚本**不能住在应用里**：Windows 便携外壳在主进程退出后会清空临时解压目录，macOS 被替换的正是脚本所在的那个 bundle。因此 `installer.mjs` 先把脚本复制到 `productHome/updates/jobs/<version>-<sha8>/`，再从那里拉起。
+macOS 上应用自己就住在要被替换的那个包里，主程序无法替换自己。所以真正做替换的是 `lwb-update.sh`，而它**不能住在应用里**：被替换的正是脚本所在的那个 bundle。因此 `installer.mjs` 先把脚本复制到 `productHome/updates/jobs/<version>-<sha8>/`，再从那里拉起。
 
 替换方式是**同卷换名**：新包先解压到目标旁边（`<target 所在目录>/.lwb-update.XXXX`），再 `mv` 过去。同卷 rename 是原子的，所以应用要么是旧包、要么是新包，不存在拷到一半的树。旧包保留到新包就位并重启成功之后，任何一步失败都换回去。
 
+Windows 不需要这套：应用从来不装到用户双击的那个文件旁边，而在 `%LOCALAPPDATA%\LaofuWorkbench\program\win32-x64\<channel>\<版本>-<sha16>`。`installer.mjs` 把下载好的包留在暂存目录并写一份 `staged.json`，再拉起启动器的 `--apply-staged`：启动器解包到**新的版本目录**、校验、改写 `active.json`、拉起新版本。旧目录原地不动，所以回滚就是把它再写回 `active.json`。用户文件夹里的启动器和 `payload/` 全程只读。
+
 ### 等待与停进程
 
-脚本拿到的 `LWB_UPDATE_WAIT_PID` 是 Electron 主进程，`LWB_UPDATE_HOST_PID` 是 DSH Host。macOS 先 `SIGTERM`（走正常的窗口关闭），8 拍后 `SIGKILL`；Windows 直接 `Stop-Process`，然后**重试换名**——便携外壳在主程序退出后还要几秒钟才释放 exe，一次失败就放弃会让更新永远卡在最后一步。
+`LWB_UPDATE_WAIT_PID` 是 Electron 主进程，`LWB_UPDATE_HOST_PID` 是 DSH Host。macOS 的脚本先 `SIGTERM`（走正常的窗口关闭），8 拍后 `SIGKILL`。Windows 把这个 pid 交给启动器（`LWB_WAIT_PID`），启动器等它退出后再动安装目录——它不杀进程，也不需要杀：新版本装在新目录里，旧目录晚一点释放没有关系。
 
-替换成功这件事本身就证明旧进程已经退出：Windows 上正在运行的 exe 根本换不掉，macOS 上脚本会先等到 pid 结束。因此重开时不会撞上 `bootstrap.mjs` 的 `requestSingleInstanceLock` 把新窗口挡回去——那条分支只会在旧应用还活着时触发。
+macOS 上替换成功这件事本身就证明旧进程已经退出（正在运行的 bundle 换不掉），因此重开时不会撞上 `bootstrap.mjs` 的 `requestSingleInstanceLock`。Windows 上同理：启动器先等旧进程退出，再启动新版本。
 
 ### 版本号的唯一来源
 
@@ -184,13 +193,48 @@ Windows 上正在运行的 exe 被占用，macOS 上应用自己就住在要被�
 - `-test.N` 构建 `release=false` → 不检查更新。测试包即使手动发到 ATS 也不会被自己当成正式版；
 - 版本号同时被折进 build id，所以换版本一定换运行时目录（否则 `runtime/<id>` 复用会让新包读到旧版本号）。
 
-`bootstrap.mjs` 负责把 `LWB_DESKTOP_EXECUTABLE` / `LWB_DESKTOP_APP_BUNDLE` / `LWB_DESKTOP_PORTABLE_FILE` 传下去：Host 是 `ELECTRON_RUN_AS_NODE` 子进程，它看到的 `process.execPath` 是 Electron 本体，Windows 上更是便携外壳临时目录里的那份，直接拿它替换等于替换了个临时文件。
+`bootstrap.mjs` 负责把 `LWB_DESKTOP_EXECUTABLE` / `LWB_DESKTOP_APP_BUNDLE` / `LWB_DESKTOP_LAUNCHER` 传下去：Host 是 `ELECTRON_RUN_AS_NODE` 子进程，它看到的 `process.execPath` 是 Electron 本体（Windows 上是 `%LOCALAPPDATA%` 里那份安装副本），直接拿它当"应用在哪"会答错题。`LWB_DESKTOP_LAUNCHER` 来自启动器自己写进环境的 `LWB_LAUNCHER_PATH`——更新要交给的一直是那个启动器，不是它装出来的某个版本。
 
 ### 已知边界
 
 - macOS 未签名包首次启动仍会被 Gatekeeper 拦一次（更新器会清 quarantine，但签名本身没有）；
 - 从磁盘映像（DMG）里直接运行的应用所在目录不可写，`canInstall=false`，面板只说明原因、不给按钮；
-- 安装版（非便携）Windows 构建不支持自动替换，同样只说明原因。
+- Windows 上如果不是由启动器拉起（例如直接运行 `%LOCALAPPDATA%` 里那份安装副本），没有 `LWB_DESKTOP_LAUNCHER`，同样只说明原因、不给按钮。
+
+
+### Windows 启动器包
+
+Windows 产物是一个绿色包，解压后只有三样东西：
+
+```
+Laofu Workbench.exe                 启动器（约 2.4 MB，Go 写的，不随版本变化）
+payload/win32-x64/manifest.json     压缩包里是什么，以及它的 sha256
+payload/win32-x64/app.zip           整个 Electron 应用
+```
+
+双击启动器：第一次把 `app.zip` 解到 `%LOCALAPPDATA%\LaofuWorkbench\program\win32-x64\stable\<版本>-<sha16>`，之后每次启动只校验这个目录再拉起，不再解压。
+
+**为什么换掉了 `portable` target。** electron-builder 的 `portable` 是个自解压 NSIS 外壳，它的模板无条件执行 `RMDir /r $INSTDIR` → `File /r` → `ExecWait` → `RMDir /r $INSTDIR`，即每次双击都把 315 MB 解成 1.3 GB、跑完再删。`unpackDirName` 改的是解到哪，不是解不解。而且这段发生在任何应用代码存在之前，所以除了 `splashImage`（仅 BMP）之外没有任何办法显示进度。换成一个普通 exe 才能做到"只解一次"。
+
+**首启的等待构成。** 进度条覆盖的是原来那段黑屏：
+
+| 阶段 | 大概占比 | 说明 |
+| --- | --- | --- |
+| 解压 `app.zip` | 最长 | 只在首次或升级后发生；实测 1.3 GB / 2.5 万文件 |
+| 校验 | 短 | 文件数、可执行文件存在且 sha256 与回执一致 |
+| 应用自己启动 | 中 | `bootstrap.mjs` 复制 `resources/lwb-product` → Host 拉起 186 个插件 → web server → 首帧 |
+
+第三段在应用侧，启动器无法加速，但可以**知道它什么时候结束**：应用在窗口 `show` 的那一刻写 `LWB_STARTUP_READY_FILE`（`bootstrap.mjs` 的 `announceWhenVisible`），启动器等到这个文件才把进度条收掉。所以进度条不是装饰，它到 100% 就意味着窗口真的在了。
+
+**复用与回收。** `active.json` 记录当前该用哪个目录；安装目录名带 artifact 的 sha16，所以同一版本重新打包也一定会换目录，不会两个构建共用一份文件。每次启动保留"当前 + 上一个"，更早的清掉，异常中断留下的 `.installing-*` 一律清掉——没有回收的话 `runtime` 与 `program` 会按版本数线性长。
+
+**回滚。** 更新装到了新目录、`active.json` 也切过去了，但新版本 60 秒内没写 ready 文件，启动器会杀掉它、把 `active.json` 写回上一个目录、重新拉起，并在进度条上说明"已回到上一个版本"。这条路径只在"更新"时存在；首次安装没有可回退的版本，超时就只是超时，不再打扰用户。
+
+**自检。** 打包最后一步会用**包里的启动器**装一遍（`--verify-bootstrap`，装到临时目录再删），所以"清单路径写错""清单和压缩包对不上""解压器拒收某个条目"这类问题会在发布之前暴露，而不是在用户下载 300 MB 之后。`LWB_LAUNCHER_SELFCHECK=0` 可跳过（仅用于调试）。
+
+**包内清单与发布清单是两份。** `payload/win32-x64/manifest.json` 描述的是 `app.zip`（`artifactType: unpacked-zip`），启动器只信这一份；ATS 那一行描述的是整个绿色包（`artifactType: launch-package-zip`），校验的是外层 sha256。更新时启动器打开外层包、取出内层压缩包、再按内层清单校验并安装——所以同一版本无论来自首次安装还是来自更新，落在同一个目录、走同一段代码。启动器只复核大小与 sha256，Ed25519 验签始终在应用里完成（`manifest.mjs` 的 `validateRelease`）。
+
+**`out` 与命名。** electron-builder 的 Windows target 现在是 `dir`，产物目录里出现的是 `win-unpacked/` 与最终的 `laofu-workbench-<版本>-win-x64-unsigned.zip`。`collect-desktop-artifacts.mjs` 只汇总这个 `.zip`，`release-desktop.mjs` 把它作为 `win-x64` 那条腿发布。macOS 完全不同：仍然是 `.zip` 里的 `.app`，仍然原地替换，启动器与 `program/` 目录在 macOS 上不存在。
 
 
 ### Windows 构建输入（产品源码快照）
@@ -222,11 +266,11 @@ npm run package:desktop:portable                 # 公开源码开发包
 LWB_COMMERCIAL_PACK_DIR=/absolute/path/to/commercial-pack npm run package:desktop:official -- --portable
 ```
 
-Windows 产物是可直接运行的 portable `.exe`，macOS 产物是包含 `.app` 的 `.zip`，不生成 NSIS 安装器或 DMG。程序数据写入用户数据目录，不要求把压缩包目录作为可写目录。未签名模式不读取签名环境文件，不调用 Apple 公证或 Windows 签名硬件。macOS 原生组件使用临时 ad-hoc 签名满足对应架构的加载要求，不代表 Developer ID 签名或公证；首次打开仍可能受到 Gatekeeper 或 SmartScreen 提示。
+Windows 产物是启动器 + 应用压缩包组成的绿色 `.zip`（解压后双击 `Laofu Workbench.exe`），macOS 产物是包含 `.app` 的 `.zip`，不生成 NSIS 安装器或 DMG。程序数据写入用户数据目录，不要求把压缩包目录作为可写目录。未签名模式不读取签名环境文件，不调用 Apple 公证或 Windows 签名硬件。macOS 原生组件使用临时 ad-hoc 签名满足对应架构的加载要求，不代表 Developer ID 签名或公证；首次打开仍可能受到 Gatekeeper 或 SmartScreen 提示。
 
 macOS payload 的原生依赖在签名之前会重写加载路径。`@remotion/compositor-darwin-*` 的 `ffmpeg` / `ffprobe` / `remotion` 与七个 `libav*` dylib 用的是裸相对名（`libavdevice.dylib`），dyld 只在未硬化的进程里才肯按工作目录解析这些名字；而产物给整个 payload（含 `lwb-product/node_modules`）做的是 hardened runtime 签名，于是这些引用会被直接拒绝——`Library not loaded: libavdevice.dylib` / `relative path not allowed in hardened program`，打包版里所有视频导出都因此 SIGABRT，而开发态用仓库里那份未硬化的副本，永远复现不出来。打包步骤把它们改成 `@loader_path/<name>`：保留 hardened runtime（上游强制、公证预期），也不再有工作目录依赖。重写后的字节计入构建 id（否则同一 id 的旧 runtime 副本会继续被沿用），`lwb/desktop/darwin-library-paths.test.mjs` 会在硬化签名下真的把二进制跑一遍；打包时若仍有裸名残留则直接失败。
 
-官方便携版不再经过 electron-updater：那条链路要求 `app-update.yml`，而未签名产物里没有，所以它恒为关闭。替换由本产品自带的更新器完成，见上节「自动更新」。发行版使用 LWB 根版本号；构建编号仅用于 Windows 构建目录和两端构建关联。文件名明确带 `-portable-unsigned`，官方发行版统一使用 `LaofuWorkbench` 的应用身份和数据目录。
+官方便携版不再经过 electron-updater：那条链路要求 `app-update.yml`，而未签名产物里没有，所以它恒为关闭。替换由本产品自带的更新器完成，见上节「自动更新」。发行版使用 LWB 根版本号；构建编号仅用于 Windows 构建目录和两端构建关联。文件名明确带 `-unsigned`（macOS 仍带 `-portable-unsigned`，Windows 的启动器包不带 `-portable`，因为它已经不是"每次自解压"的那个东西），官方发行版统一使用 `LaofuWorkbench` 的应用身份和数据目录。
 
 Windows 官方发行版在商业私有仓库的自托管 Windows x64 Runner 上构建，通过 Actions 的 `Desktop portable test builds` 手动触发，填写构建编号。macOS 官方发行版在本机构建：Apple Silicon 出 arm64 包，Intel 包在 Intel Mac 上原生构建，或在 Apple Silicon 上经 Rosetta 构建：
 

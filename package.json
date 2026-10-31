@@ -40,7 +40,8 @@
     "upstream:check": "node lwb/upgrade/verify.mjs",
     "unit:test": "node --test lwb/test/*.test.mjs lwb/pack-sdk/test/*.test.mjs lwb/desktop/*.test.mjs lwb/dsh-bundle/test/pack-*.test.mjs lwb/dsh-bundle/test/browser-shim.test.mjs lwb/dsh-bundle/test/ats-client.test.mjs lwb/dsh-bundle/test/task-model.test.mjs lwb/dsh-bundle/test/lwb-model.test.mjs lwb/dsh-bundle/test/web-router.test.mjs lwb/dsh-bundle/test/client-*.test.mjs lwb/dsh-bundle/test/runtime-config.test.mjs lwb/dsh-bundle/test/update-manifest.test.mjs lwb/packs/spoken-video/test/*.test.mjs lwb/packs/model-review/test/*.test.mjs",
     "upstream:refs": "sh lwb/upgrade/check-upstream.sh",
-    "test:integration": "node lwb/upgrade/smoke.mjs"
+    "test:integration": "node lwb/upgrade/smoke.mjs",
+    "launcher:test": "go -C lwb/desktop/launcher test ./..."
   },
   "packageManager": "pnpm@11.23.0+sha512.f00082e5b283a199b74e079da28d155c008fe232f44c8a06ea7ddfa014ecf719fc362f790ecc67b28106ddac2afb24c49a9a079159da560b2ce7d1e98efd11af",
   "dependencies": {

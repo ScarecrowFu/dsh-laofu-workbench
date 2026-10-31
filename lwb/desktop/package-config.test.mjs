@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile, access } from 'node:fs/promises'
-import { applyLwbPortableTargets, applyLwbProductResources } from './package-config.mjs'
+import { applyLwbDistributionTargets, applyLwbProductResources } from './package-config.mjs'
 import { join } from 'node:path'
 
 test('product resources explicitly include installed production dependencies', () => {
@@ -14,10 +14,10 @@ test('Desktop branding replaces upstream application and tray resources', async 
   const config = applyLwbProductResources({
     extraResources: [runtime, { from: '/upstream/icon.png', to: 'icon.png' }, { from: '/upstream/tray.ico', to: 'tray.ico' }],
     mac: { icon: '/upstream/icon.png', target: ['zip'] },
-    win: { icon: '/upstream/icon.png', target: ['portable'] },
+    win: { icon: '/upstream/icon.png', target: ['dir'] },
   }, '/product')
   assert.deepEqual(config.mac.target, ['zip'])
-  assert.deepEqual(config.win.target, ['portable'])
+  assert.deepEqual(config.win.target, ['dir'])
   assert.equal(config.extraResources[0], runtime)
   assert.ok(config.mac.icon.endsWith(join('lwb', 'desktop', 'resources', 'icon-macos.icns')))
   assert.ok(config.win.icon.endsWith(join('lwb', 'desktop', 'resources', 'icon-windows.ico')))
@@ -36,11 +36,14 @@ test('the packaged Desktop entry includes runtime registry migration', async () 
   assert.match(source, /registry-migration\.mjs/u)
 })
 
-test('portable targets emit a macOS app zip and a Windows portable executable', () => {
-  const config = applyLwbPortableTargets({
+test('distributable targets emit a macOS app zip and an unpacked Windows directory', () => {
+  const config = applyLwbDistributionTargets({
     mac: { target: ['dmg', 'zip'], hardenedRuntime: true },
     win: { target: ['nsis'], forceCodeSigning: false },
   })
   assert.deepEqual(config.mac, { target: ['zip'], hardenedRuntime: true })
-  assert.deepEqual(config.win, { target: ['portable'], forceCodeSigning: false })
+  // Windows is built to a directory and wrapped by the launch package; asking
+  // electron-builder for a `portable` artifact would bring back the per-launch
+  // self-extraction this whole design removes.
+  assert.deepEqual(config.win, { target: ['dir'], forceCodeSigning: false })
 })

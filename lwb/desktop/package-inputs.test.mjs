@@ -62,7 +62,7 @@ test('artifact paths and extensions follow the resolved target', () => {
   assert.equal(artifactDirectory(ROOT, 'commercial', 'mac-arm64'), join(ROOT, '.tooling', 'artifacts', 'commercial', 'mac-arm64'))
   assert.deepEqual(artifactExtensions('mac-arm64'), ['.zip', '.dmg'])
   assert.deepEqual(artifactExtensions('mac-x64'), ['.zip', '.dmg'])
-  assert.deepEqual(artifactExtensions('win-x64'), ['.exe'])
+  assert.deepEqual(artifactExtensions('win-x64'), ['.zip'], 'Windows ships a launch package, not a bare executable')
 })
 
 test('the unpacked app path follows the target layout', () => {

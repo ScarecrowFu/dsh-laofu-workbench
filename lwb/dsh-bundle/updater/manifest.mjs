@@ -21,15 +21,21 @@ export const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024 * 1024
 export const SIGNATURE_ALGORITHM = 'ed25519'
 
 /**
- * Artifact shapes this product installs in place.
+ * Artifact shapes this product can install.
  *
- * ATS also serves `launch-package-zip` and `unpacked-zip` for launcher-based
- * products; LWB replaces its own bundle, so only these two are meaningful and
- * anything else must be refused rather than handed to a script.
+ * The extension is not the whole story any more: macOS and Windows both ship a
+ * `.zip`, but they are different artifacts and only one of them belongs on a
+ * given machine. `installer.mjs` therefore pairs each installation *method*
+ * with the one type it accepts, and the extension check below only keeps a
+ * mismatched file name from being staged.
+ *
+ * - `mac-app-zip`       the `.app` bundle, replaced in place.
+ * - `launch-package-zip` launcher plus an archive of the unpacked Windows app;
+ *   the launcher installs it into a versioned directory and switches to it.
  */
 export const UPDATE_ARTIFACT_TYPES = Object.freeze({
   'mac-app-zip': '.zip',
-  'portable-exe': '.exe',
+  'launch-package-zip': '.zip',
 })
 
 /** Text field that must be a non-empty string, or the empty string. */

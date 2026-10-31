@@ -151,11 +151,15 @@ export function payloadInstallArguments(platform, arch, hostPlatform = process.p
 
 /**
  * File extensions one target's distributable artifacts use.
+ *
+ * Windows ships a launch package: a launcher plus one archive of the unpacked
+ * application, so the distributable is a `.zip` even though the thing inside it
+ * starts a native executable.
  * @param target - resolved target name.
  * @returns the extensions to report and checksum.
  */
 export function artifactExtensions(target) {
-  return target.startsWith('mac-') ? ['.zip', '.dmg'] : ['.exe']
+  return target.startsWith('mac-') ? ['.zip', '.dmg'] : ['.zip']
 }
 
 /**

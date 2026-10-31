@@ -9,7 +9,7 @@
  */
 import assert from 'node:assert/strict'
 import { generateKeyPairSync, sign } from 'node:crypto'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -23,7 +23,7 @@ import {
   parseSignature,
   validateRelease,
 } from '../updater/manifest.mjs'
-import { acknowledgeUpdateResult, readLastUpdateResult, resolveInstallTarget } from '../updater/installer.mjs'
+import { acknowledgeUpdateResult, readLastUpdateResult, resolveInstallTarget, writeStagedRecord } from '../updater/installer.mjs'
 
 const keyPair = generateKeyPairSync('ed25519')
 const publicKey = keyPair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
@@ -131,12 +131,21 @@ test('a downgrade or the installed version itself is refused', () => {
   rejects(release({ version: '0.1.9.1' }), /版本无效/u)
 })
 
-test('artifact types the installer cannot apply are refused', () => {
-  // ATS serves these shapes for launcher-based products. Handing one to the
-  // bundle-replacing updater would be an installer for a different product.
-  rejects(release({ artifactType: 'launch-package-zip', fileName: 'x.zip' }), /发布类型不匹配/u)
-  rejects(release({ artifactType: 'unpacked-zip', fileName: 'x.zip' }), /发布类型不匹配/u)
-  rejects(release({ artifactType: 'dmg', fileName: 'x.dmg' }), /发布类型不匹配/u)
+test('only the artifact shapes this product installs are accepted', () => {
+  // The type decides which installer runs, and the extension alone no longer
+  // distinguishes them: a macOS bundle zip and a Windows launch package are both
+  // `.zip`. A shape this build has no installer for is refused rather than
+  // guessed at.
+  for (const artifactType of ['unpacked-zip', 'portable-exe', 'dmg', '']) {
+    rejects(release({ artifactType }), /发布类型不匹配/u)
+  }
+  // A launch package is a real shape for this product, so the release check
+  // accepts it and leaves the installation method to `manager.install()`, which
+  // compares the type against what this machine can actually apply.
+  assert.equal(
+    accepts(release({ artifactType: 'launch-package-zip', fileName: 'laofu-workbench-0.1.9-mac-arm64.zip' })).artifactType,
+    'launch-package-zip',
+  )
 })
 
 test('a file name that would escape the staging directory is refused', () => {
@@ -205,28 +214,29 @@ test('an installation that cannot replace itself says so instead of failing late
   )
   assert.deepEqual(
     await resolveInstallTarget({ platform: 'win32', env: {} }),
-    { ok: false, reason: '当前不是便携版，无法自动替换。请重新下载安装包。' },
+    { ok: false, reason: '当前不是启动器安装的版本，无法自动更新。请重新下载安装包。' },
   )
   assert.equal((await resolveInstallTarget({ platform: 'linux', env: {} })).ok, false)
 })
 
-test('a writable bundle and a writable portable file are both installable', async () => {
+test('a writable bundle and a launcher installation are both installable', async () => {
   const root = await mkdtemp(join(tmpdir(), 'lwb-update-target-'))
   try {
     const bundle = join(root, 'Laofu Workbench.app')
     await mkdir(bundle)
-    const executable = join(root, 'laofu-workbench.exe')
-    await writeFile(executable, 'binary')
+    const launcher = join(root, 'Laofu Workbench.exe')
+    await writeFile(launcher, 'binary')
     assert.deepEqual(
       await resolveInstallTarget({ platform: 'darwin', env: { LWB_DESKTOP_APP_BUNDLE: bundle } }),
       { ok: true, platform: 'darwin', target: bundle, kind: 'app-bundle', artifactType: 'mac-app-zip' },
     )
     assert.deepEqual(
-      await resolveInstallTarget({ platform: 'win32', env: { LWB_DESKTOP_PORTABLE_FILE: executable } }),
-      { ok: true, platform: 'win32', target: executable, kind: 'portable-exe', artifactType: 'portable-exe' },
+      await resolveInstallTarget({ platform: 'win32', env: { LWB_DESKTOP_LAUNCHER: launcher } }),
+      { ok: true, platform: 'win32', target: launcher, kind: 'launcher-package', artifactType: 'launch-package-zip' },
     )
     // A path that no longer exists is a refusal, not a crash.
     assert.equal((await resolveInstallTarget({ platform: 'darwin', env: { LWB_DESKTOP_APP_BUNDLE: join(root, 'gone.app') } })).ok, false)
+    assert.equal((await resolveInstallTarget({ platform: 'win32', env: { LWB_DESKTOP_LAUNCHER: join(root, 'gone.exe') } })).ok, false)
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -257,6 +267,29 @@ test('what the last updater run left behind is reported honestly', async () => {
     // Reporting is once: the same run must not greet every later start.
     await acknowledgeUpdateResult(job)
     assert.equal(await readLastUpdateResult(root), undefined)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('what is staged is described to the launcher in the shape it reads', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'lwb-update-staged-'))
+  try {
+    const artifact = join(root, 'laofu-workbench-0.1.10-win-x64-unsigned.zip')
+    await writeFile(artifact, 'x'.repeat(1234))
+    const record = await writeStagedRecord({
+      artifact,
+      version: '0.1.10',
+      sha256: 'b'.repeat(64),
+      artifactType: 'launch-package-zip',
+    })
+    // The launcher re-checks these against the bytes it finds; a record that
+    // disagrees with them is refused rather than installed.
+    assert.equal(record.sizeBytes, 1234)
+    assert.equal(record.fileName, 'laofu-workbench-0.1.10-win-x64-unsigned.zip', 'a bare name, not a path')
+    assert.equal(record.artifactType, 'launch-package-zip')
+    const written = JSON.parse(await readFile(join(root, 'staged.json'), 'utf8'))
+    assert.deepEqual(written, record, 'the file beside the artifact is what the launcher reads')
   } finally {
     await rm(root, { recursive: true, force: true })
   }

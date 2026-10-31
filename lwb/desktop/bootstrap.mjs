@@ -1,7 +1,7 @@
 /** Product entry point; official files stay intact, with an in-memory entry policy. */
 import { app, BrowserWindow } from 'electron'
-import { cp, mkdir, readFile, rename, rm, stat } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { cp, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { installLwbEntryPolicy } from './lwb-entry-policy.mjs'
 import { migrateRuntimePackRegistry } from './registry-migration.mjs'
@@ -28,6 +28,38 @@ function focusExistingWindow() {
     window.show()
     window.focus()
   }
+}
+
+/**
+ * Tell the launcher that this build is actually up.
+ *
+ * The launcher keeps its progress window in front until this file appears, and
+ * treats a build that never reports as one to roll back from. It has to be
+ * written when the window is *visible*: everything before that — host startup,
+ * plugin loading, the web server, the renderer — is what the user is waiting
+ * for, and reporting earlier would hide exactly the failure worth catching.
+ */
+function announceWhenVisible() {
+  const target = process.env.LWB_STARTUP_READY_FILE
+  if (!target) return
+  let announced = false
+  const announce = async () => {
+    if (announced) return
+    announced = true
+    try {
+      await mkdir(dirname(target), { recursive: true })
+      await writeFile(target, `${new Date().toISOString()}\n`)
+    } catch {
+      // A launcher that cannot be told is a launcher that waits out its timeout;
+      // it is not a reason to interrupt a working start.
+    }
+  }
+  app.on('browser-window-created', (_event, window) => {
+    // The official entry opens the window hidden and shows it once the renderer
+    // has navigated, so `show` is the first honest signal that anything exists.
+    // `ready-to-show` would answer earlier, before the page the user asked for.
+    window.once('show', announce)
+  })
 }
 
 /** Ship this build, migrate the data root, then hand control to the official Desktop entry. */
@@ -61,15 +93,16 @@ async function boot() {
     LWB_PACK_RUNTIME_DIR: join(runtime, 'lwb', 'packs'),
     DSH_DESKTOP_USER_DATA_DIR: join(productHome, 'electron-user-data'),
     // The Host runs as a Node-mode child, so it sees the Electron binary as its
-    // own executable — and on Windows that is the copy inside the portable
-    // shell's temporary directory, not the file the user launched. Publish what
-    // an in-place update actually has to replace, while `app` is still around to
-    // name it.
+    // own executable — that is the installed build's executable, not the launcher
+    // the user double-clicked. Publish the launcher instead: it owns the versioned
+    // installation directory, and an update is "unpack the new build beside this
+    // one and switch to it", which only the launcher can do.
     LWB_DESKTOP_EXECUTABLE: process.execPath,
     ...(process.platform === 'darwin' ? { LWB_DESKTOP_APP_BUNDLE: resolve(process.resourcesPath, '..', '..') } : {}),
-    ...(process.env.PORTABLE_EXECUTABLE_FILE ? { LWB_DESKTOP_PORTABLE_FILE: process.env.PORTABLE_EXECUTABLE_FILE } : {}),
+    ...(process.env.LWB_LAUNCHER_PATH ? { LWB_DESKTOP_LAUNCHER: process.env.LWB_LAUNCHER_PATH } : {}),
   })
   app.setPath('userData', join(productHome, 'electron-user-data'))
+  announceWhenVisible()
   const { prepareLwbProfile } = await import(pathToFileURL(join(runtime, 'lwb', 'profile-setup.mjs')))
   await prepareLwbProfile()
   installLwbEntryPolicy(new URL('./lib/main.js', import.meta.url))

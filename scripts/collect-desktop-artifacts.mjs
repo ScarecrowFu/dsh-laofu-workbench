@@ -13,7 +13,9 @@ const editions = JSON.parse(await readFile('lwb/desktop/editions.json', 'utf8'))
 // it is a release come from the record inside the unpacked app, never from
 // the environment of whoever runs this script.
 const build = readBuildRecord({ directory, target: values.target, productName: editions.editions[values.edition].productName })
-const extensions = values.target.startsWith('mac-') ? ['.zip'] : ['.exe']
+// Both platforms distribute one archive: the macOS `.app`, or the Windows
+// launch package (launcher plus the unpacked application).
+const extensions = ['.zip']
 // Only this build's artifacts: the directory keeps earlier versions' files
 // until someone moves them, and hashing those would describe the wrong build.
 const marker = `-${build.version}-${values.target}-`
@@ -21,7 +23,7 @@ const files = (await readdir(directory)).filter(file => file.includes(marker) &&
 for (const ext of extensions) if (!files.some(file => file.endsWith(ext))) throw new Error(`Missing ${ext} Desktop artifact for ${build.version}`)
 const records = []
 for (const file of files) {
-  if (!file.includes('-portable-unsigned.')) throw new Error(`Expected an explicitly unsigned portable artifact: ${file}`)
+  if (!file.includes('-unsigned.zip')) throw new Error(`Expected an explicitly unsigned artifact: ${file}`)
   const hash = createHash('sha256')
   let bytes = 0
   for await (const chunk of createReadStream(join(directory, file))) { hash.update(chunk); bytes += chunk.length }

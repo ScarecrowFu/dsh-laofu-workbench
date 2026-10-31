@@ -19,7 +19,6 @@ import { dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import {
   MAX_ARTIFACT_BYTES,
-  artifactExtension,
   normalizeChannel,
   parseManifest,
   parseSignature,
@@ -405,7 +404,7 @@ export class LwbUpdateManager {
     // application directory is the common failure, and it is cheap to detect.
     const target = await this.installTarget()
     if (!target.ok) throw new Error(target.reason)
-    if (artifactExtension(staged.artifactType) !== artifactExtension(target.artifactType)) {
+    if (staged.artifactType !== target.artifactType) {
       throw new Error('更新包类型与当前安装方式不匹配，请重新下载安装包。')
     }
 
@@ -418,6 +417,7 @@ export class LwbUpdateManager {
       updatesRoot: this.updatesRoot,
       job: {
         platform: this.platform,
+        kind: target.kind,
         target: target.target,
         artifact,
         artifactType: staged.artifactType,

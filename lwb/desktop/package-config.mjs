@@ -25,7 +25,7 @@ export async function createLwbPackageConfig(payload, identity) {
   config.productName = identity.productName
   config.artifactName = identity.artifactName
   config.protocols = [{ name: identity.productName, schemes: [identity.protocolScheme] }]
-  if (identity.portable) applyLwbPortableTargets(config)
+  if (identity.portable) applyLwbDistributionTargets(config)
   config.extraMetadata = { ...config.extraMetadata, main: 'lwb-bootstrap.mjs' }
   const entry = join(payload, '..', 'desktop-entry')
   await mkdir(entry, { recursive: true })
@@ -74,8 +74,20 @@ export function applyLwbProductResources(config, payload) {
   return config
 }
 
-export function applyLwbPortableTargets(config) {
+/**
+ * Distributable shapes for a package the user installs by copying it.
+ *
+ * macOS ships the `.app` in a zip and is replaced in place, so it needs nothing
+ * beyond that. Windows produces an unpacked directory instead of an artifact:
+ * the launch package (`launch-package.mjs`) is assembled from it around a
+ * launcher that unpacks once into a reusable directory. The `portable` target
+ * this replaces was a self-extracting shell that re-created the whole tree on
+ * every double-click, which is exactly the delay the launcher removes.
+ * @param config - electron-builder configuration to adjust in place.
+ * @returns the same configuration.
+ */
+export function applyLwbDistributionTargets(config) {
   config.mac = { ...config.mac, target: ['zip'] }
-  config.win = { ...config.win, target: ['portable'] }
+  config.win = { ...config.win, target: ['dir'] }
   return config
 }
