@@ -89,3 +89,15 @@ test('LWB caps only the per-request output budget and honours an explicit caller
     ['kimi-k3', 131072],
   ])
 })
+
+test('LWB retries transient provider failures instead of ending the turn', () => {
+  const adapter = new LwbModelAdapter({}, { get() {} })
+  const policy = adapter.providerRetryPolicy()
+  // An upstream engine abort reports `SERVER`; without a retry the 500 ends the
+  // whole turn, which for a task run is minutes of work thrown away.
+  assert.equal(policy.mode, 'normal')
+  assert.ok(policy.maxRetries > 0, 'transient failures must be retried')
+  assert.ok(policy.retryableCodes.includes('SERVER'), 'an engine abort is a transient failure')
+  assert.ok(policy.retryableCodes.includes('RATE_LIMIT'))
+  assert.ok(policy.retryableCodes.includes('TIMEOUT'))
+})

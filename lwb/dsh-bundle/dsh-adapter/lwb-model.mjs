@@ -10,7 +10,14 @@ const ROUTE = 'lwb'
 // for cost: ATS freezes points against the requested cap, so omitting it would freeze
 // against the full official ceiling — for Kimi-K3 that is ~105 million points.
 const INTERACTIVE_MAX_TOKENS = 32768
-const retryPolicy = resolveRetryPolicy({ mode: 'normal', maxRetries: 0 }, 'LWB')
+// Transient provider failures are retried, the way every other DSH provider route
+// already is; the framework default is 5 attempts with 500ms→10s backoff, which is
+// too patient for a turn a person is watching, so two. `SERVER` is in the default
+// retryable set and is exactly what an upstream engine abort reports: a single one
+// ended a 163-step, 28-minute task run with nothing to show for it. ATS settles on
+// reported usage, and that attempt reported none, so retrying it costs nothing —
+// only a failure after partial output is paid for twice, which two attempts bounds.
+const retryPolicy = resolveRetryPolicy({ mode: 'normal', maxRetries: 2 }, 'LWB')
 /** The model's own output capability, as advertised by the ATS catalog. */
 const modelMaxOutputTokens = item => {
   const declared = Number.isInteger(item?.maxOutputTokens) ? item.maxOutputTokens
